@@ -816,17 +816,54 @@ function PdfBackground({ bgImage, imageDisplay, zoom, pan, viewportRef }) {
         const ix1 = Math.min(pr.right, vr.right), iy1 = Math.min(pr.bottom, vr.bottom);
         if (ix1 - ix0 < 2 || iy1 - iy0 < 2) return;        // page off-screen
         // Overdraw a margin around the viewport so ordinary panning stays
-        // inside already-drawn content instead of reaching a hard edge. The
-        // padded region is what the pixel caps below are applied to, so the
-        // margin comes out of the same budget rather than adding to it.
+        // inside already-drawn content instead of reaching a hard edge.
         //
-        // 25%, the conservative end of the useful range: area goes with the
-        // SQUARE of the padding, so 25% a side is 2.25x the pixels and 50%
-        // would be 4x. Since the caps are fixed, anything the padding pushes
-        // over them comes back as a lower render scale -- coverage bought with
-        // sharpness. Worth raising only if panning still reaches an edge.
-        const OVERDRAW = 0.25;                             // 25% beyond each edge
-        const mx = (ix1 - ix0) * OVERDRAW, my = (iy1 - iy0) * OVERDRAW;
+        // Order matters here, and it used to be the wrong way round. The old
+        // code padded by a fixed 25% a side and applied the pixel caps to the
+        // PADDED box, so the margin was paid for out of sharpness. At
+        // fit-to-screen the page is smaller than the viewport, the padding
+        // clamps away against the page edge, no cap fires, and the render
+        // lands at the full supersampled density. Zoomed in the page is larger
+        // than the viewport, the full 25% is claimed, 1.5x a side is 2.25x the
+        // area, and the caps drag the density back down -- on a 12.9in iPad
+        // from 1.6x device pixels to about 1.17x. That is exactly the reported
+        // symptom: sharp at fit, progressively softer as you magnify, on the
+        // iPad only (desktop is N = 1 at DPR 1 and never reaches a cap).
+        //
+        // So fix the density FIRST and let the margin have whatever budget is
+        // left over. Density is what the user looks at; the margin only shows
+        // if you flick faster than the 130ms settle. A soft plan is visible
+        // everywhere, a short margin is visible occasionally.
+        const SS = 2 / supersampleFactor();                // supersample factor
+        const MAX_AREA = 12_000_000;                       // ~12MP visible-window budget
+        const MAX_DIM = 4096;                              // iOS-safe per-side limit
+        const OVERDRAW_MAX = 0.25;                         // never more than 25% a side
+        // Render ABOVE device resolution (supersample) so fine text stays crisp
+        // at maximum zoom, then let the device downsample it. SS is divided by
+        // the sheet's supersample factor: with that flag on the sheet lays out N
+        // times larger, so this canvas's box grows by N too, and stacking the
+        // old SS on top multiplied the backing store by N squared -- which blew
+        // the caps and cropped a third of the plan off on an iPad. Dividing
+        // keeps the total pixel count exactly what it was before the flag.
+        const visW = ix1 - ix0, visH = iy1 - iy0;
+        let density = Math.min(window.devicePixelRatio || 1, 2) * SS;
+        // Density is only ever reduced if the BARE visible window will not fit,
+        // which no current device comes close to -- a 12.9in iPad at N = 1.25
+        // asks for about 10MP of the 12MP budget. It stays here so a future
+        // larger screen degrades gracefully instead of cropping.
+        const bareW = visW * density, bareH = visH * density;
+        let q = 1;
+        if (bareW * bareH > MAX_AREA) q = Math.min(q, Math.sqrt(MAX_AREA / (bareW * bareH)));
+        if (Math.max(bareW, bareH) > MAX_DIM) q = Math.min(q, MAX_DIM / Math.max(bareW, bareH));
+        density *= q;
+        // Whatever headroom is left buys margin. Both caps are checked because
+        // either can be the binding one: a wide shallow window hits the per-side
+        // limit long before it hits the area limit.
+        const uw = visW * density, uh = visH * density;
+        const grow = Math.max(1, Math.min(Math.sqrt(MAX_AREA / (uw * uh)),
+                                          MAX_DIM / Math.max(uw, uh)));
+        const OVERDRAW = Math.max(0, Math.min(OVERDRAW_MAX, (grow - 1) / 2));
+        const mx = visW * OVERDRAW, my = visH * OVERDRAW;
         const ox0 = Math.max(pr.left, ix0 - mx), oy0 = Math.max(pr.top, iy0 - my);
         const ox1 = Math.min(pr.right, ix1 + mx), oy1 = Math.min(pr.bottom, iy1 + my);
         const fx0 = (ox0 - pr.left) / pr.width, fy0 = (oy0 - pr.top) / pr.height;
@@ -835,32 +872,17 @@ function PdfBackground({ bgImage, imageDisplay, zoom, pan, viewportRef }) {
         const rpx = fx0 * base.width, rpy = fy0 * base.height;
         const rpw = (fx1 - fx0) * base.width, rph = (fy1 - fy0) * base.height;
         if (rpw < 1 || rph < 1) return;
-        // Render the visible window ABOVE device resolution (supersample) so fine
-        // text stays crisp at maximum zoom, then let the device downsample it.
-        // Bounded by both total area and per-side length to stay well under iOS
-        // Safari's canvas ceiling — memory stays flat and the iPad never crashes.
-        // SS is divided by the sheet's supersample factor. With that flag on the
-        // sheet lays out N times larger, so this canvas's box grows by N too --
-        // stacking the old SS on top multiplied the backing store by N squared,
-        // which blew the caps below and cropped a third of the plan off on an
-        // iPad. Dividing keeps the total pixel count exactly what it was before
-        // the flag: the layout-size gain is what sharpens, and density beyond
-        // what the layer needs is downsampled and wasted anyway.
-        const SS = 2 / supersampleFactor();                // supersample factor
-        const dpr = Math.min(window.devicePixelRatio || 1, 2) * SS;
-        let bw = (ox1 - ox0) * dpr, bh = (oy1 - oy0) * dpr;
-        const MAX_AREA = 12_000_000;                       // ~12MP visible-window budget
-        const MAX_DIM = 4096;                              // iOS-safe per-side limit
-        if (bw * bh > MAX_AREA) { const k = Math.sqrt(MAX_AREA / (bw * bh)); bw *= k; bh *= k; }
-        const big = Math.max(bw, bh);
-        if (big > MAX_DIM) { const k = MAX_DIM / big; bw *= k; bh *= k; }
-        // Derive ONE scale, from whichever axis the caps bit hardest on, and
-        // size the canvas FROM that scale. The scale used to come from the width
-        // alone while the height was set from its own clamped value, so whatever
-        // a cap trimmed got drawn past the edge of the buffer and was silently
-        // cropped. Taking the minimum and sizing from it renders the whole plan
-        // smaller instead: a crop is now impossible by construction, and losing
-        // part of a drawing is a far worse failure than softness.
+        // Clamping the padded box against the page edge above can only shrink
+        // it, so both caps still hold here by construction -- there is nothing
+        // left to clamp a second time.
+        const bw = (ox1 - ox0) * density, bh = (oy1 - oy0) * density;
+        // Derive ONE scale, from whichever axis is tighter, and size the canvas
+        // FROM that scale. The scale used to come from the width alone while the
+        // height was set from its own clamped value, so whatever a cap trimmed
+        // got drawn past the edge of the buffer and was silently cropped. Taking
+        // the minimum and sizing from it renders the whole plan smaller instead:
+        // a crop is impossible by construction, and losing part of a drawing is
+        // a far worse failure than softness.
         const renderScale = Math.min(bw / rpw, bh / rph); // page points -> bitmap px
         const vpr = page.getViewport({ scale: renderScale });
         const cw = Math.max(1, Math.round(rpw * renderScale));
