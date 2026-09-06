@@ -442,7 +442,7 @@ export function Workspace({
    * because nothing in its ancestor chain is promoted.
    *
    * So: promote for the gesture, release once the sheet holds still, and the
-   * layer re-rasterises at the new scale. Same settle idea PdfBackground uses
+   * layer re-rasterises at the new scale. Same settle idea PlanBackground uses
    * for its windowed redraw. Written straight to the node rather than through
    * state, so a gesture does not re-render the sheet on every frame.
    * --------------------------------------------------------------------- */
@@ -763,33 +763,153 @@ function sharpPlanEnabled() {
   return process.env.NEXT_PUBLIC_SHARP_PLAN === "true";
 }
 
-function PdfBackground({ bgImage, imageDisplay, zoom, pan, viewportRef }) {
+/* ----------------------------------------------------------------------------
+ * PLAN SOURCES — a PDF page and a decoded bitmap, behind one interface
+ * ----------------------------------------------------------------------------
+ * A plan source answers two questions: how big is it in its own coordinates,
+ * and draw me this rectangle of it at this scale. A pdf.js page and an <img>
+ * both can, and nothing below this line needs to know which one it is holding.
+ *
+ * That is what lets an imported image get the same treatment as a PDF. The
+ * image case used to be a plain <img> element, and that is the bug this fixes:
+ * iOS keeps the zoom wrapper on a composited layer and stretches that layer's
+ * cached raster, so an <img> went soft on zoom no matter how many pixels the
+ * file actually held -- a 4400px PNG imported on a laptop was blurry on an
+ * iPad at ordinary magnification. Redrawing the visible window into a canvas
+ * at device resolution on every settle sidesteps the cached raster entirely.
+ *
+ * What it does NOT do is make the two formats equal at extreme zoom: a PDF
+ * re-renders from vectors and has no resolution of its own, while a bitmap
+ * runs out at its native pixels. It removes the loss that was never the file's
+ * fault.
+ * ------------------------------------------------------------------------- */
+function pdfSource(page) {
+  const base = page.getViewport({ scale: 1 });
+  return {
+    w: base.width, h: base.height,
+    draw(ctx, r, scale) {
+      return page.render({
+        canvasContext: ctx,
+        viewport: page.getViewport({ scale }),
+        transform: [1, 0, 0, 1, -r.x * scale, -r.y * scale],
+      });
+    },
+  };
+}
+
+function bitmapSource(img) {
+  return {
+    w: img.naturalWidth, h: img.naturalHeight,
+    draw(ctx, r, scale, cw, ch) {
+      drawRegionSmooth(ctx, img, r, cw, ch);
+      // drawImage is synchronous, but the caller waits on a promise and may
+      // cancel, so hand back the same shape a pdf.js RenderTask has.
+      return { promise: Promise.resolve(), cancel() {} };
+    },
+  };
+}
+
+/* Draw rectangle `r` of `img` into a cw x ch canvas, stepping any large
+ * minification down in halves.
+ *
+ * A single drawImage that shrinks by more than about 3x samples the source too
+ * sparsely: the browser takes a fixed number of taps per output pixel, so most
+ * source pixels are never read and fine detail aliases into moire instead of
+ * averaging away. A floor plan is the worst possible input for that -- hatching,
+ * dashed services, hairline grid -- and the ratio is at its highest at
+ * fit-to-screen, which is the one zoom level that already looked right. So
+ * halve repeatedly until the last step is inside 2x, where the built-in
+ * filtering behaves, and only then draw.
+ *
+ * imageSmoothingQuality = "high" on top: on Safari that selects the better
+ * downsampler, and at these sizes it costs nothing worth measuring.
+ */
+function drawRegionSmooth(ctx, img, r, cw, ch) {
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  let src = img, sx = r.x, sy = r.y, sw = r.w, sh = r.h;
+  // Counted rather than while(true): a degenerate size must not spin forever.
+  for (let step = 0; sw / cw > 3 && step < 6; step++) {
+    const tw = Math.max(cw, Math.round(sw / 2));
+    const th = Math.max(ch, Math.round(sh / 2));
+    const mid = document.createElement("canvas");
+    mid.width = tw; mid.height = th;
+    const mctx = mid.getContext("2d", { alpha: false });
+    // alpha:false starts the canvas opaque BLACK, so a plan with transparency
+    // would come through on black instead of white. Same white fill the final
+    // offscreen canvas gets, for the same reason.
+    mctx.fillStyle = "#ffffff"; mctx.fillRect(0, 0, tw, th);
+    mctx.imageSmoothingEnabled = true;
+    mctx.imageSmoothingQuality = "high";
+    mctx.drawImage(src, sx, sy, sw, sh, 0, 0, tw, th);
+    if (src !== img) { src.width = src.height = 0; } // release as we go
+    src = mid; sx = 0; sy = 0; sw = tw; sh = th;
+  }
+  ctx.drawImage(src, sx, sy, sw, sh, 0, 0, cw, ch);
+  if (src !== img) { src.width = src.height = 0; }
+}
+
+function PlanBackground({ bgImage, imageDisplay, viewportRef }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
-  const pageRef = useRef(null);
+  const srcRef = useRef(null);
   const taskRef = useRef(null);
   // Monotonic render id: only the newest completed render may be swapped in.
   const seqRef = useRef(0);
   const [loaded, setLoaded] = useState(0);
 
-  // Load the PDF page once per source.
+  // Load whichever source this sheet has, once per source. A PDF wins when both
+  // are present: the raster stored alongside it is only the preview rasterised
+  // at import time, and the vector redraws sharper at any zoom.
+  const pdfSrc = bgImage?.pdfSrc || null;
+  const imgSrc = pdfSrc ? null : (bgImage?.src || null);
+  const pdfPage = bgImage?.pdfPage || 1;
   useEffect(() => {
     let dead = false;
-    pageRef.current = null;
-    const src = bgImage?.pdfSrc;
-    if (!src || typeof window === "undefined") return;
+    srcRef.current = null;
+    if (typeof window === "undefined" || (!pdfSrc && !imgSrc)) return;
     (async () => {
       try {
-        const pdfjs = await ensurePdfjs();
-        const pdf = await pdfjs.getDocument(src).promise;
-        const page = await pdf.getPage(bgImage.pdfPage || 1);
-        if (dead) return;
-        pageRef.current = page;
+        if (pdfSrc) {
+          const pdfjs = await ensurePdfjs();
+          const pdf = await pdfjs.getDocument(pdfSrc).promise;
+          const page = await pdf.getPage(pdfPage || 1);
+          if (dead) return;
+          srcRef.current = pdfSource(page);
+        } else {
+          // NO crossOrigin, deliberately. bgImage.src is usually a signed
+          // Supabase URL, so drawing it taints this canvas -- which is harmless
+          // HERE because nothing ever reads this canvas back: the PDF export
+          // photographs PrintSheet's own <img> inside #print-root, never this
+          // one. Asking for CORS would be the riskier choice, because a storage
+          // response without the header fails the load outright and leaves the
+          // plan blank. If a readback is ever added to THIS canvas -- a
+          // toDataURL, a getImageData, an html2canvas pass over the editor --
+          // that trade reverses and this needs crossOrigin plus a non-CORS
+          // retry. It will fail silently otherwise.
+          const img = new Image();
+          // Gate on load, NOT on decode(). img.decode() looks like the tidier
+          // wait -- it promises a frame-ready bitmap -- but it does not resolve
+          // at all while the tab is in the background: Chrome defers the decode
+          // and the promise simply never settles, even with the image fully
+          // fetched (complete true, naturalWidth set). Awaiting it meant a plan
+          // opened in a backgrounded tab never drew, and stayed blank after the
+          // tab came forward because nothing retriggers the load. onload always
+          // fires; the decode then happens inside the first drawImage, which is
+          // exactly what the old <img> did anyway.
+          await new Promise((res, rej) => {
+            img.onload = () => res();
+            img.onerror = () => rej(new Error("could not load the plan image"));
+            img.src = imgSrc;
+          });
+          if (dead) return;
+          srcRef.current = bitmapSource(img);
+        }
         setLoaded(n => n + 1);
-      } catch (e) { console.warn("PdfBackground load failed:", e?.message); }
+      } catch (e) { console.warn("PlanBackground load failed:", e?.message); }
     })();
     return () => { dead = true; };
-  }, [bgImage?.pdfSrc, bgImage?.pdfPage]);
+  }, [pdfSrc, imgSrc, pdfPage]);
 
   // Re-render the visible window whenever the on-screen geometry SETTLES.
   // We watch the wrapper's real screen rect rather than React zoom/pan props,
@@ -798,14 +918,14 @@ function PdfBackground({ bgImage, imageDisplay, zoom, pan, viewportRef }) {
   // redraws at the stale pre-pinch scale and looks blurry. Watching the actual
   // rect catches every case: wheel zoom, imperative pinch, pan and resize. The
   // on-screen canvas never exceeds the viewport, so memory stays flat at any
-  // zoom while the vector source keeps it perfectly sharp.
+  // zoom while redrawing from the source keeps it sharp.
   useEffect(() => {
     if (!imageDisplay) return;
 
     const renderWindow = () => {
-      const page = pageRef.current;
+      const src = srcRef.current;
       const wrap = wrapRef.current, cv = canvasRef.current;
-      if (!page || !wrap || !cv) return;
+      if (!src || !wrap || !cv) return;
       try {
         const pr = wrap.getBoundingClientRect();           // page rect on screen (post-transform)
         if (pr.width < 2 || pr.height < 2) return;
@@ -868,9 +988,11 @@ function PdfBackground({ bgImage, imageDisplay, zoom, pan, viewportRef }) {
         const ox1 = Math.min(pr.right, ix1 + mx), oy1 = Math.min(pr.bottom, iy1 + my);
         const fx0 = (ox0 - pr.left) / pr.width, fy0 = (oy0 - pr.top) / pr.height;
         const fx1 = (ox1 - pr.left) / pr.width, fy1 = (oy1 - pr.top) / pr.height;
-        const base = page.getViewport({ scale: 1 });
-        const rpx = fx0 * base.width, rpy = fy0 * base.height;
-        const rpw = (fx1 - fx0) * base.width, rph = (fy1 - fy0) * base.height;
+        // Source coordinates: PDF points for a page, pixels for a bitmap.
+        // The fractions above are what carry the position, so which one it
+        // is makes no difference from here down.
+        const rpx = fx0 * src.w, rpy = fy0 * src.h;
+        const rpw = (fx1 - fx0) * src.w, rph = (fy1 - fy0) * src.h;
         if (rpw < 1 || rph < 1) return;
         // Clamping the padded box against the page edge above can only shrink
         // it, so both caps still hold here by construction -- there is nothing
@@ -883,8 +1005,7 @@ function PdfBackground({ bgImage, imageDisplay, zoom, pan, viewportRef }) {
         // the minimum and sizing from it renders the whole plan smaller instead:
         // a crop is impossible by construction, and losing part of a drawing is
         // a far worse failure than softness.
-        const renderScale = Math.min(bw / rpw, bh / rph); // page points -> bitmap px
-        const vpr = page.getViewport({ scale: renderScale });
+        const renderScale = Math.min(bw / rpw, bh / rph); // source units -> bitmap px
         const cw = Math.max(1, Math.round(rpw * renderScale));
         const ch = Math.max(1, Math.round(rph * renderScale));
         // Draw into an OFFSCREEN canvas and swap it in only when it is
@@ -898,11 +1019,7 @@ function PdfBackground({ bgImage, imageDisplay, zoom, pan, viewportRef }) {
         octx.fillStyle = "#ffffff"; octx.fillRect(0, 0, cw, ch);
         if (taskRef.current) { try { taskRef.current.cancel(); } catch {} }
         const seq = ++seqRef.current;
-        const task = page.render({
-          canvasContext: octx,
-          viewport: vpr,
-          transform: [1, 0, 0, 1, -rpx * renderScale, -rpy * renderScale],
-        });
+        const task = src.draw(octx, { x: rpx, y: rpy, w: rpw, h: rph }, renderScale, cw, ch);
         taskRef.current = task;
         task.promise.then(() => {
           // A newer render started while this one was in flight: its result is
@@ -1020,28 +1137,11 @@ function DrawingArea({
       )}
 
       {bgImage && imageDisplay && (
-        bgImage.pdfSrc ? (
-          <PdfBackground
-            bgImage={bgImage}
-            imageDisplay={imageDisplay}
-            zoom={zoom}
-            pan={pan}
-            viewportRef={viewportRef}
-          />
-        ) : (
-          <img src={bgImage.src} alt="plan"
-               style={{
-                 position: "absolute",
-                 left: imageDisplay.x, top: imageDisplay.y,
-                 width: imageDisplay.w, height: imageDisplay.h,
-                 display: "block",
-                 pointerEvents: "none",
-                 WebkitTouchCallout: "none",
-                 WebkitUserSelect: "none",
-                 userSelect: "none",
-               }}
-               draggable={false}/>
-        )
+        <PlanBackground
+          bgImage={bgImage}
+          imageDisplay={imageDisplay}
+          viewportRef={viewportRef}
+        />
       )}
 
       {/* Grid overlay — drawn above the imported plan, below symbols, so the
