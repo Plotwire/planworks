@@ -16,7 +16,7 @@ const WorkPlanner = dynamic(() => import("@/components/WorkPlanner"), {
 function SharedInner() {
   const sp = useSearchParams();
   const token = sp.get("t") || "";
-  return <WorkPlanner shared={token} />;
+  return <WorkPlanner sharedView shared={token} />;
 }
 
 export default function SharedPlannerPage() {

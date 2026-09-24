@@ -80,11 +80,15 @@ function JobCard({ j, cdef, P, dark, onClick }) {
 
 const lbl = (P) => ({ fontFamily: COND, fontWeight: 600, fontSize: 12, letterSpacing: ".05em", textTransform: "uppercase", color: P.muted });
 
-export default function WorkPlanner({ shared = null }) {
+// `sharedView`: rendered by the public share route (/planner/view), which sits
+// outside every gate (login, terms, paywall). So it is ALWAYS read-only and
+// only ever shows the diary behind the link's token (`shared`) -- never the
+// viewer's own planner, even when they are signed in and the token is missing.
+export default function WorkPlanner({ sharedView = false, shared = null }) {
   const router = useRouter();
   const { theme } = useApp();
   const dark = theme === "dark";
-  const readOnly = Boolean(shared);
+  const readOnly = sharedView;
   const P = palette(dark);
 
   const [week, setWeek] = useState(0);
@@ -110,8 +114,8 @@ export default function WorkPlanner({ shared = null }) {
     let alive = true;
     (async () => {
       try {
-        if (shared) {
-          const res = await loadSharedPlanner(shared);
+        if (sharedView) {
+          const res = shared ? await loadSharedPlanner(shared) : null; // no token: nothing to show
           if (!alive) return;
           if (!res) { setNotFound(true); setJobs([]); }
           else {
@@ -125,11 +129,11 @@ export default function WorkPlanner({ shared = null }) {
           setJobs(rows || []);
           if (s) setSettings({ company: s.company || "Your company", title: s.title || "Work Planner", contractors: (s.contractors && s.contractors.length) ? s.contractors : DEFAULT_CONTRACTORS });
         }
-      } catch (e) { console.error(e); if (alive) { setJobs([]); if (shared) setNotFound(true); } }
+      } catch (e) { console.error(e); if (alive) { setJobs([]); if (sharedView) setNotFound(true); } }
       finally { if (alive) setLoading(false); }
     })();
     return () => { alive = false; };
-  }, [shared]);
+  }, [sharedView, shared]);
 
   const reload = async () => { try { setJobs(await loadPlannerJobs()); } catch (e) { console.error(e); } };
 
