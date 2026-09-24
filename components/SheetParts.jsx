@@ -2789,9 +2789,11 @@ async function jpegOrientation(blob) {
     const v = new DataView(await blob.slice(0, 65536).arrayBuffer());
     let off = 2; // past the SOI marker
     while (off + 4 <= v.byteLength) {
-      const marker = v.getUint16(off);
-      if ((marker & 0xff00) !== 0xff00 || marker === 0xffda) break; // start of scan: no more headers
-      if (marker === 0xffe1 && v.getUint32(off + 4) === 0x45786966) { // APP1 "Exif"
+      if (v.getUint8(off) !== 0xff) return 0;                 // not a marker: can't read
+      const type = v.getUint8(off + 1);
+      if (type === 0xff) { off += 1; continue; }              // fill byte before a marker
+      if (type === 0xda) return 1;                            // start of scan: headers had no Exif
+      if (type === 0xe1 && v.getUint32(off + 4) === 0x45786966) { // APP1 "Exif"
         const tiff = off + 10;
         const little = v.getUint16(tiff) === 0x4949; // "II"
         const ifd = tiff + v.getUint32(tiff + 4, little);
@@ -2804,7 +2806,7 @@ async function jpegOrientation(blob) {
       }
       off += 2 + v.getUint16(off + 2);
     }
-    return 1;
+    return 0; // headers run past what was read: treat as unknown
   } catch {
     return 0; // unreadable headers: let the browser decode it
   }
