@@ -1421,7 +1421,21 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   }, [currentProjectId]);
 
   // Quick-save: writes to the currently open project, or creates one if new.
-  const saveProject = async () => {
+  // One save at a time. A save can wait a while on a plan upload, and a second
+  // Save / Ctrl+S / Save As in that window would otherwise insert a duplicate
+  // drawing (sharing the first one's stored plan). A save requested while one
+  // is running gets that save's result instead of starting another.
+  const saveInFlightRef = useRef(null);
+  const runSave = (save) => {
+    if (saveInFlightRef.current) return saveInFlightRef.current;
+    const running = (async () => {
+      try { return await save(); } finally { saveInFlightRef.current = null; }
+    })();
+    saveInFlightRef.current = running;
+    return running;
+  };
+
+  const saveProject = () => runSave(async () => {
     try {
       if (currentProjectId) {
         const safe = await readyToSave(project);
@@ -1429,8 +1443,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         setProject(prev => mergeSavedPaths(prev, safe));
         await refreshProjectList();
       } else {
-        await saveProjectAs(meta.projectName || "Untitled drawing");
-        return;
+        return await insertAsNewProject(meta.projectName || "Untitled drawing");
       }
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 1500);
@@ -1439,7 +1452,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       alert("Save failed: " + (err.message || err));
       return false;
     }
-  };
+  });
 
   // Apply a plan handed back from the embedded Floor Plan sketch, in place (no navigation).
   const applyFloorPlan = async ({ path, w, h, dataUrl, sketchId }) => {
@@ -1460,18 +1473,26 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   };
 
   // Save As: store the current canvas as a new named project (new cloud row)
-  const saveProjectAs = async (name) => {
+  const saveProjectAs = (name) => runSave(() => insertAsNewProject(name));
+
+  // The body of Save As, also used by the first Save of a new drawing (which
+  // already holds the save slot, so it must not go through runSave again).
+  const insertAsNewProject = async (name) => {
     try {
       const named = { ...project, meta: { ...project.meta, projectName: name || project.meta.projectName } };
       const safe = await readyToSave(named);
       const id = await insertProject(name || named.meta.projectName || "Untitled drawing", safe);
       setCurrentProjectId(id);
-      setProject(mergeSavedPaths(named, safe));
+      // Merge into the LIVE project, not the click-time snapshot: the save may
+      // have waited on an upload, and edits made meanwhile must survive.
+      setProject(prev => mergeSavedPaths({ ...prev, meta: { ...prev.meta, projectName: named.meta.projectName } }, safe));
       await refreshProjectList();
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 1500);
+      return true;
     } catch (err) {
       alert("Save failed: " + (err.message || err));
+      return false;
     }
   };
 
