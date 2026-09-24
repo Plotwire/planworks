@@ -32,8 +32,8 @@ function Splash({ label = "Loading Plotwire…" }) {
 // Soon, terms acceptance or paywall: the planner share link contractors open
 // without a Plotwire account, the legal documents (which people must be able
 // to read before they sign up or accept them), and the page the "Confirm your
-// email" link lands on (it signs the user in, then sends them into the app,
-// where the gates apply).
+// email" and "Reset your password" links land on (it signs the user in, then
+// sends them into the app, where the gates apply).
 const PUBLIC_PATHS = [
   "/planner/view",
   LEGAL_LINKS.terms, LEGAL_LINKS.privacy, LEGAL_LINKS.dataProcessing,
