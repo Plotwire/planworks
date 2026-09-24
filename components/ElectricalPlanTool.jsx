@@ -639,21 +639,33 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     // always finds it and waits (see readyToSave).
     const upload = { displayUrl, done: null };
     planUploadsRef.current.set(targetId, upload);
+    // A slow upload must never put an older plan back. Its result lands only
+    // while it is the sheet's newest import AND the sheet still shows it (it
+    // may since have been replaced by a Floor Plan, say). A superseded upload
+    // changes nothing, but `done` still resolves with its bgImage for a save
+    // whose snapshot shows this plan (see readyToSave).
+    const isNewest = () => planUploadsRef.current.get(targetId) === upload;
+    const applyToSheet = (bg) => setProject(p => ({
+      ...p,
+      sheets: p.sheets.map(s => (s.id === targetId && s.bgImage?.src === displayUrl ? { ...s, bgImage: bg } : s)),
+    }));
     // `done` settles once the raster plan is stored -- the part a save must
     // wait for. The original PDF (larger, optional) follows in the background.
     upload.done = (async () => {
       try {
         const { path } = await uploadPlanImage(blob);
         const storedBg = { src: displayUrl, w, h, path, ...pdfNow };
-        patchSheetById(targetId, { bgImage: storedBg });
-        if (pdfNow.pdfSrc) storeOriginalPdf(targetId, pdfNow.pdfSrc);
+        if (isNewest()) {
+          applyToSheet(storedBg);
+          if (pdfNow.pdfSrc) storeOriginalPdf(targetId, pdfNow.pdfSrc);
+        }
         return storedBg;
       } catch (err) {
         console.warn("plan image upload failed; using inline fallback:", err?.message);
         try {
           const dataUrl = await blobToDataUrl(blob);
           const inlineBg = { src: dataUrl, w, h, ...pdfNow };
-          patchSheetById(targetId, { bgImage: inlineBg });
+          if (isNewest()) applyToSheet(inlineBg);
           return inlineBg;
         } catch {
           return null; // keep the object URL for this session at least
