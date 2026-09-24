@@ -4,6 +4,7 @@
 
 import * as Sentry from "@sentry/nextjs";
 import { beforeBreadcrumb, beforeSend, beforeSendTransaction } from "./lib/sentryScrub";
+import { SENTRY_PRIVACY } from "./lib/sentryPrivacy";
 import { tracesSampleRateFor } from "./lib/sentrySampling";
 
 Sentry.init({
@@ -19,12 +20,9 @@ Sentry.init({
   // Send logs to Sentry.
   enableLogs: true,
 
-  // Privacy: never send user-identifiable data or request bodies. Customer names,
-  // addresses and quote contents must not leave the app.
-  dataCollection: {
-    userInfo: false,
-    httpBodies: [],
-  },
+  // Privacy: no user data, cookies, headers, query strings or bodies, and
+  // sendDefaultPii off. Spelled out in full in lib/sentryPrivacy.js.
+  ...SENTRY_PRIVACY,
 
   // Privacy: signed file links, planner share links and sign-in returns carry
   // access tokens in their URLs; strip them from everything sent.
