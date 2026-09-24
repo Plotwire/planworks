@@ -129,25 +129,30 @@ export default function AppShell({ children }) {
     const user = session?.user;
     setTerms({ uid: user?.id || null, step: "unknown", error: "" });
     if (!user) return;
+    // Also ignore this check once a newer one has started, even for the same
+    // user (signed out and back in elsewhere): its answer may be out of date.
+    let active = true;
+    const land = (patch) => { if (active) setTermsFor(user.id, patch); };
     (async () => {
       try {
-        if (await hasAcceptedCurrentTerms(user.id)) { setTermsFor(user.id, { step: "ok" }); return; }
+        if (await hasAcceptedCurrentTerms(user.id)) { land({ step: "ok" }); return; }
         // Accepted on the sign-up form, before there was a session to record
         // it with (email confirmation): record it now, on the first sign-in.
         if (acceptedAtSignup(user)) {
           await recordTermsAcceptance(user.id);
-          setTermsFor(user.id, { step: "ok" });
+          land({ step: "ok" });
           return;
         }
-        setTermsFor(user.id, { step: "needed" });
+        land({ step: "needed" });
       } catch (err) {
         console.warn("terms acceptance check failed:", err?.message);
-        setTermsFor(user.id, {
+        land({
           step: "needed",
           error: "We couldn't confirm that you've accepted the current terms. Tick both boxes and try again.",
         });
       }
     })();
+    return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per user, not per token refresh
   }, [sessionUserId]);
 

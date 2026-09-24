@@ -25,6 +25,7 @@ export default function TermsGate({ user, onAccept, onSignOut, error = "" }) {
   const accept = async (e) => {
     e.preventDefault();
     if (!agreed || !acknowledged || busy) return;
+    setLogoutError(""); // so this attempt's outcome is the message shown
     setBusy(true);
     try { await onAccept(); } finally { setBusy(false); }
   };
