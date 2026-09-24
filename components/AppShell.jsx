@@ -15,6 +15,7 @@ import { useSubscription } from "@/lib/useSubscription";
 import { openBillingPortal } from "@/lib/billingClient";
 import { LEGAL_LINKS } from "@/lib/legal";
 import TermsGate from "@/components/TermsGate";
+import RotateNotice from "@/components/RotateNotice";
 import { hasAcceptedCurrentTerms, recordTermsAcceptance, acceptedAtSignup } from "@/lib/termsAcceptance";
 
 const AppCtx = createContext(null);
@@ -42,7 +43,21 @@ const PUBLIC_PATHS = [
 const isPublicPath = (pathname) =>
   typeof pathname === "string" && PUBLIC_PATHS.some(p => pathname === p || pathname.startsWith(p + "/"));
 
+// Every page renders inside this: the gates below, plus the "please rotate"
+// notice for tablets held in portrait (components/RotateNotice.jsx). The
+// notice sits BESIDE the app, not around it, and shows or hides by CSS alone,
+// so turning the device never unmounts anything. Public pages don't get it.
 export default function AppShell({ children }) {
+  const pathname = usePathname();
+  return (
+    <>
+      <AppGates>{children}</AppGates>
+      {!isPublicPath(pathname) && <RotateNotice />}
+    </>
+  );
+}
+
+function AppGates({ children }) {
   const pathname = usePathname();
   const isPublic = isPublicPath(pathname);
   const [theme, setTheme] = useState(() => {
