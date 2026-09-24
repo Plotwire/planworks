@@ -2841,6 +2841,23 @@ async function embedNow(imagePromise) {
   return image;
 }
 
+// pdf-lib only decodes an embedded page's content when the whole document is
+// saved, so a malformed source page (no content, a corrupt or unsupported
+// stream) used to throw at out.save() and fail EVERY sheet of the export.
+// This does the same decoding in a throwaway document, so a bad page throws
+// straight away -- inside its own sheet's try -- and only that sheet falls
+// back to its image layer.
+//
+// The throwaway copy is never written, so it skips compression (the costly
+// half of the work) by storing streams uncompressed, and it lives only in this
+// function, so its memory is freed as soon as the check is done.
+async function assertPageEmbeds(PDFDocument, srcDoc, pageIndex) {
+  const probe = await PDFDocument.create();
+  probe.context.flateStream = (contents, dict) => probe.context.stream(contents, dict);
+  const [page] = await probe.embedPdf(srcDoc, [pageIndex]);
+  await page.embed();
+}
+
 // Embed the stored plan image in `pdf`, at no more than the export cap for a
 // plan box `widthIn` inches wide. Returns the pdf-lib image.
 async function embedStoredPlan(pdf, src, path, w, h, widthIn) {
@@ -3069,6 +3086,8 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
             // preview honours it, so the export must too — otherwise the plan comes
             // out turned and stretched and the symbols no longer line up.
             const rot = ((srcDoc.getPage(idx).getRotation().angle % 360) + 360) % 360;
+            // A malformed page throws here, so only this sheet falls back.
+            await assertPageEmbeds(PDFDocument, srcDoc, idx);
             const [embedded] = await out.embedPdf(srcDoc, [idx]);
             // Displayed (rotation-applied) dimensions: what the preview shows and
             // what the symbols were positioned against.
