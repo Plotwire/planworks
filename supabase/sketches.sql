@@ -17,21 +17,23 @@
 
 alter table public.sketches enable row level security;
 
+-- No "to" clause: all four live policies apply to roles = public (the default).
+
 create policy sketches_select_own
-  on public.sketches for select to authenticated
+  on public.sketches for select
   using (auth.uid() = user_id);
 
 create policy sketches_insert_own
-  on public.sketches for insert to authenticated
+  on public.sketches for insert
   with check (auth.uid() = user_id);
 
 create policy sketches_update_own
-  on public.sketches for update to authenticated
+  on public.sketches for update
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
 
 create policy sketches_delete_own
-  on public.sketches for delete to authenticated
+  on public.sketches for delete
   using (auth.uid() = user_id);
 
 -- ----------------------------------------------------------------------------
