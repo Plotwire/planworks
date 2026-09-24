@@ -139,15 +139,18 @@ export default function LoginScreen({ recovery = false, onRecovered }) {
             <svg viewBox="0 0 24 24" fill="none"><path d="M4 13l5 5L20 7" stroke="#22808F" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
           </div>
           <h1>Check your email</h1>
-          <p className="sub">
-            {isReset
-              ? <>We've sent a password-reset link to <b>{sentTo}</b>. Open it to choose a new password.</>
-              : <>We've sent a confirmation link to <b>{sentTo}</b>. Open it to activate your account, then come back and sign in.</>}
-          </p>
+          {isReset ? (
+            <p className="sub">We've sent a password-reset link to <b>{sentTo}</b>. Open it to choose a new password.</p>
+          ) : (
+            <p className="sub">
+              We've sent you a confirmation email. If it's not in your inbox, check your junk folder.
+              <span className="sent-to">Sent to <b>{sentTo}</b></span>
+            </p>
+          )}
           <button type="button" className="submit" onClick={() => switchMode("signin")}>
             Back to sign in
           </button>
-          <p className="note">No email after a minute? Check spam, or try again.</p>
+          {isReset && <p className="note">No email after a minute? Check your junk folder, or try again.</p>}
         </div>
       </AuthFrame>
     );
@@ -309,6 +312,7 @@ const CSS = `
 .consent-row input{flex:none; width:18px; height:18px; margin-top:1px; accent-color:#22808F; cursor:pointer}
 .consent-row a,.inline-link{color:#22808F; font-weight:500; text-decoration:underline}
 .consent-row a:hover,.inline-link:hover{color:#3FB7C9}
+.sent-to{display:block; margin-top:10px; font-size:13px; color:#697785}
 .legal-foot{margin-top:22px; text-align:center; font-size:12px; color:#9AA6B2}
 .legal-foot a{color:#697785; text-decoration:none}
 .legal-foot a:hover{color:#22808F; text-decoration:underline}
