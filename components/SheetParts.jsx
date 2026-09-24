@@ -47,6 +47,19 @@ const SHEET = {
   titleHeight: 110,
 };
 
+/* Where the plan sits inside the drawing area: scaled to fit (contain) and
+ * centred. Returns { x, y, w, h } in CSS px, relative to DRAW's top-left.
+ *
+ * The editor, the print page and the PDF export all place the plan with this
+ * one function. Symbols are positioned in the same DRAW space, so sharing it
+ * is what keeps them on the right wall line in all three. */
+function planFootprint(DRAW, w, h) {
+  const scale = Math.min(DRAW.w / w, DRAW.h / h);
+  const fw = w * scale;
+  const fh = h * scale;
+  return { x: (DRAW.w - fw) / 2, y: (DRAW.h - fh) / 2, w: fw, h: fh };
+}
+
 const TOOLS = {
   select: { icon: MousePointer2, label: "Select", hint: "V" },
   pan:    { icon: Hand,          label: "Pan",    hint: "H" },
@@ -1088,17 +1101,10 @@ function DrawingArea({
   const selectedAnnoId = selection?.kind === "annotation" ? selection.id : null;
   const selectedWireId = selection?.kind === "wire" ? selection.id : null;
   // Fit the bgImage into the drawing area
-  const imageDisplay = useMemo(() => {
-    if (!bgImage) return null;
-    const scale = Math.min(DRAW.w / bgImage.w, DRAW.h / bgImage.h);
-    const w = bgImage.w * scale;
-    const h = bgImage.h * scale;
-    return {
-      x: (DRAW.w - w) / 2,
-      y: (DRAW.h - h) / 2,
-      w, h,
-    };
-  }, [bgImage, DRAW.w, DRAW.h]);
+  const imageDisplay = useMemo(
+    () => (bgImage ? planFootprint(DRAW, bgImage.w, bgImage.h) : null),
+    [bgImage, DRAW.w, DRAW.h]
+  );
 
   return (
     <div
@@ -2848,12 +2854,12 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
             const swap = rot === 90 || rot === 270;
             const dw = swap ? embedded.height : embedded.width;
             const dh = swap ? embedded.width : embedded.height;
-            // Contain inside DRAW, centred — identical maths to the on-screen plan,
+            // Contain inside DRAW, centred — the same helper as the on-screen plan,
             // so the vector underlay lands exactly where the raster preview did.
-            const fit = Math.min(DRAW.w / dw, DRAW.h / dh);
-            const pw = dw * fit, ph = dh * fit;
-            const planX = DRAW.x + (DRAW.w - pw) / 2;
-            const planY = DRAW.y + (DRAW.h - ph) / 2;
+            const fp = planFootprint(DRAW, dw, dh);
+            const pw = fp.w, ph = fp.h;
+            const planX = DRAW.x + fp.x;
+            const planY = DRAW.y + fp.y;
             const X = planX * sx;
             const Wt = pw * sx;
             const Ht = ph * sy;
@@ -3171,13 +3177,10 @@ function NotesColumnStatic({ notes }) {
 }
 
 function DrawingAreaStatic({ DRAW, bgImage, placed, wires, annotations, colourMode, symbolScale = 1 }) {
-  const imageDisplay = useMemo(() => {
-    if (!bgImage) return null;
-    const scale = Math.min(DRAW.w / bgImage.w, DRAW.h / bgImage.h);
-    const w = bgImage.w * scale;
-    const h = bgImage.h * scale;
-    return { x: (DRAW.w - w) / 2, y: (DRAW.h - h) / 2, w, h };
-  }, [bgImage, DRAW.w, DRAW.h]);
+  const imageDisplay = useMemo(
+    () => (bgImage ? planFootprint(DRAW, bgImage.w, bgImage.h) : null),
+    [bgImage, DRAW.w, DRAW.h]
+  );
 
   return (
     <div data-plan-area="" style={{
