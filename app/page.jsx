@@ -9,7 +9,7 @@ const HomeScreen = dynamic(() => import("@/components/HomeScreen"), {
   ssr: false,
   loading: () => (
     <div className="w-full h-screen flex items-center justify-center bg-[#F4F6F9] dark:bg-[#0B1117]">
-      <div className="text-[10px] tracking-[0.3em] text-slate-400 uppercase">Loadingâ€¦</div>
+      <div className="text-[10px] tracking-[0.3em] text-slate-400 uppercase">Loading…</div>
     </div>
   ),
 });

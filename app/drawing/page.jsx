@@ -11,7 +11,7 @@ import EditorErrorBoundary from "@/components/EditorErrorBoundary";
 function Loading() {
   return (
     <div className="w-full h-screen flex items-center justify-center bg-[#F4F6F9] dark:bg-[#0B1117]">
-      <div className="text-[10px] tracking-[0.3em] text-slate-400 uppercase">Loading drawingâ€¦</div>
+      <div className="text-[10px] tracking-[0.3em] text-slate-400 uppercase">Loading drawing…</div>
     </div>
   );
 }

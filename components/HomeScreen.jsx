@@ -7,7 +7,7 @@ import { signPlanImages } from "@/lib/planImages";
 import { useApp } from "@/components/AppShell";
 import { LEGAL_LINKS } from "@/lib/legal";
 
-/* Sheet geometry â€” must match ElectricalPlanTool */
+/* Sheet geometry — must match ElectricalPlanTool */
 const SHEET = { width: 1587, height: 1123, margin: 18, legendWidth: 230, notesWidth: 280, titleHeight: 110 };
 const DRAW = {
   x: SHEET.margin + SHEET.legendWidth + 8,
@@ -36,7 +36,7 @@ function greeting() {
 }
 
 function relTime(iso) {
-  if (!iso) return "â€”";
+  if (!iso) return "—";
   const then = new Date(iso).getTime();
   const mins = Math.round((Date.now() - then) / 60000);
   if (mins < 1) return "Just now";
@@ -249,7 +249,7 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
                 </div>
                 <div className="migrate-actions">
                   <button className="mg-ghost" onClick={dismissMigration} disabled={migrating}>Not now</button>
-                  <button className="mg-primary" onClick={runMigration} disabled={migrating}>{migrating ? "Uploadingâ€¦" : "Upload to my account"}</button>
+                  <button className="mg-primary" onClick={runMigration} disabled={migrating}>{migrating ? "Uploading…" : "Upload to my account"}</button>
                 </div>
               </div>
             )}
@@ -277,7 +277,7 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
             <div className="templates"><div className="tpl" onClick={onPlanner}><div className="tpl-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M7 13h3M7 17h3M14 13h3"/></svg></div><div><div className="t">Work planner</div><div className="s">Plan your team&apos;s week</div></div></div><div className="tpl" onClick={onSketch}><div className="tpl-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M14 6l4 4"/></svg></div><div><div className="t">Sketch a floor plan</div><div className="s">Draw the building, then add electrics</div></div></div>
               <div className="tpl" onClick={() => onNewProject()}>
                 <div className="tpl-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M14 3 5 13h6l-1 8 9-11h-6l1-7z"/></svg></div>
-                <div><div className="t">Blank A3 sheet</div><div className="s">Landscape Â· titled</div></div>
+                <div><div className="t">Blank A3 sheet</div><div className="s">Landscape · titled</div></div>
               </div>
               <div className="tpl" onClick={onImport}>
                 <div className="tpl-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 15V3m0 0L8 7m4-4 4 4"/><path d="M3 15v4a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-4"/></svg></div>
@@ -335,7 +335,7 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
             )}
 
             {cards && cards.length === 0 && (
-              <div className="empty">No saved drawings yet â€” start a blank sheet or import a plan to get going.</div>
+              <div className="empty">No saved drawings yet — start a blank sheet or import a plan to get going.</div>
             )}
 
             <footer className="legal-links" aria-label="Legal">
