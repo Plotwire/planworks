@@ -1521,6 +1521,11 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     saveQueueRef.current = done.catch(() => {});
     return done;
   };
+  // Resolves once no save is queued or running, including saves queued while
+  // it waits. Never rejects: the chain in saveQueueRef swallows save errors.
+  const whenSavesSettled = async () => {
+    while (queuedSavesRef.current > 0) await saveQueueRef.current;
+  };
 
   const confirmSaved = () => {
     refreshProjectList(); // not awaited: the list isn't part of the save
@@ -1631,13 +1636,20 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         if (data) paths = collectImagePaths(normaliseProject(data));
       } catch { /* still delete the row even if we can't read it */ }
       await deleteProjectRow(id);
-      // Best effort, not awaited: remove only the files nothing still uses --
-      // no other drawing (a Save As copy shares its source's files), and not
-      // the canvas, which keeps showing a deleted open drawing and can save it
-      // again.
-      const onCanvas = new Set(collectImagePaths(projectRef.current));
-      const candidates = paths.filter(path => !onCanvas.has(path));
-      if (candidates.length) unreferencedPlanPaths(candidates).then(deletePlanImages);
+      // Then, in the background, remove only the files nothing still uses.
+      // Checked once this tab's saves have settled: a Save As still waiting on
+      // an upload is about to insert a row that shares these files. Kept: any
+      // file a remaining row refers to (a Save As copy shares its source's
+      // files) or the canvas shows (a deleted open drawing stays on screen and
+      // can be saved again).
+      if (paths.length) {
+        whenSavesSettled()
+          .then(() => {
+            const onCanvas = new Set(collectImagePaths(projectRef.current));
+            return unreferencedPlanPaths(paths.filter(path => !onCanvas.has(path)));
+          })
+          .then(deletePlanImages);
+      }
       await refreshProjectList();
       if (currentProjectId === id) setCurrentProjectId(null);
     } catch (err) {
