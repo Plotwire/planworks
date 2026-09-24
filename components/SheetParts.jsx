@@ -24,6 +24,7 @@ import { useEditor } from "@/store/editorStore";
 import { Masthead } from "@/components/TitleBlockMasthead";
 import { isTouchDevice, supersampleFactor } from "@/lib/touch";
 import { dataUrlToBlob, signPlanImage, signPlanImages } from "@/lib/planImages";
+import { BOQ_ESTIMATE_NOTICE } from "@/lib/legal";
 
 // Per-project title block. The editor publishes the *effective* title block
 // (the project's own, falling back to the account default) through this context
@@ -2056,9 +2057,14 @@ function BoqPrintPages({ boq, projectName, company }) {
             </div>
           )}
 
-          <div style={{ position: "absolute", bottom: 22, left: 46, right: 46, fontSize: 8.5, color: "#94a3b8", display: "flex", justifyContent: "space-between", borderTop: "1px solid #eef2f6", paddingTop: 8 }}>
-            <span>Unit rates and totals to be completed by supplier{company ? ` · ${company}` : ""}</span>
-            <span>Page {pi + 1} of {pages.length}</span>
+          {/* Footer on every page. Two lines, kept inside the page's 54px
+              bottom padding so it never overlaps the schedule. */}
+          <div style={{ position: "absolute", bottom: 16, left: 46, right: 46, fontSize: 8.5, borderTop: "1px solid #eef2f6", paddingTop: 7 }}>
+            <div style={{ color: "#1A2530", marginBottom: 3 }}>{BOQ_ESTIMATE_NOTICE}</div>
+            <div style={{ color: "#94a3b8", display: "flex", justifyContent: "space-between" }}>
+              <span>Unit rates and totals to be completed by supplier{company ? ` · ${company}` : ""}</span>
+              <span>Page {pi + 1} of {pages.length}</span>
+            </div>
           </div>
         </div>
       ))}
@@ -2375,7 +2381,9 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
               <span className="tabular-nums">{gbp(projectTotal + vat)}</span>
             </div>
           </div>
-          <div className="text-[10px] text-slate-400 mt-3">Unit rates and totals to be completed by supplier. This schedule is issued for pricing.</div>
+          {/* Permanent, not dismissible: see BOQ_ESTIMATE_NOTICE in lib/legal.js. */}
+          <p className="text-[11px] leading-snug text-[#1A2530] mt-3">{BOQ_ESTIMATE_NOTICE}</p>
+          <div className="text-[10px] text-slate-400 mt-1">Unit rates and totals to be completed by supplier. This schedule is issued for pricing.</div>
         </div>
 
         {/* Footer */}
