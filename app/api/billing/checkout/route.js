@@ -1,7 +1,7 @@
 ﻿import { NextResponse } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
-import { bearer, userFromToken, STRIPE_PRICE, APP_URL, TRIAL_DAYS } from "@/lib/billing";
+import { bearer, userFromToken, STRIPE_PRICE, APP_URL, TRIAL_DAYS, LIVE_STATUSES } from "@/lib/billing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,13 +17,24 @@ export async function POST(req) {
     const admin = getSupabaseAdmin();
     const stripe = getStripe();
 
-    // Reuse an existing Stripe customer if this user has subscribed before.
-    const { data: existing } = await admin
+    const { data: existing, error: readError } = await admin
       .from("subscriptions")
-      .select("stripe_customer_id")
+      .select("stripe_customer_id, status")
       .eq("user_id", user.id)
       .limit(1);
-    const customerId = existing?.[0]?.stripe_customer_id || null;
+    if (readError) throw readError;
+    const current = existing?.[0] || null;
+
+    // Never start a second subscription for someone who already has a live one.
+    if (current && LIVE_STATUSES.has(current.status)) {
+      return NextResponse.json(
+        { error: "You already have an active subscription. Use Manage billing to change it." },
+        { status: 409 }
+      );
+    }
+
+    // Reuse an existing Stripe customer if this user has subscribed before.
+    const customerId = current?.stripe_customer_id || null;
 
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",

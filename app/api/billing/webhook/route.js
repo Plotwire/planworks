@@ -24,13 +24,18 @@ export async function POST(req) {
       case "customer.subscription.created":
       case "customer.subscription.updated":
       case "customer.subscription.deleted": {
-        const sub = event.data.object;
+        // Stripe doesn't guarantee event order, so the payload may be stale by
+        // the time it arrives. Re-fetch and use the subscription as it is NOW.
+        const sub = await getStripe().subscriptions.retrieve(event.data.object.id);
         const userId = sub.metadata?.user_id;
         // user_id is stamped onto the subscription at checkout. Without it we
         // can't map back to an account, so we ack (200) and move on rather than
         // make Stripe retry forever.
         if (userId) {
-          await upsertSubscription(sub, { userId, customerId: sub.customer });
+          const written = await upsertSubscription(sub, { userId, customerId: sub.customer });
+          if (!written) {
+            console.warn("[billing/webhook] kept the stored subscription; ignored non-live", sub.id, sub.status);
+          }
         } else {
           console.warn("[billing/webhook] subscription with no user_id metadata:", sub.id);
         }
