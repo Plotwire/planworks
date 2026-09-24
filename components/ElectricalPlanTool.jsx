@@ -333,12 +333,10 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const { bgImage, placed, wires, annotations, notes } = activeSheet;
   const furniture = activeSheet.furniture || [];
   const walls = activeSheet.walls || [];
-  // Refs so async image uploads target the right sheet even if the user has
+  // A ref so async image uploads target the right sheet even if the user has
   // since switched floors.
   const activeSheetIdRef = useRef(project.activeSheetId);
   activeSheetIdRef.current = project.activeSheetId;
-  const sheetsRef = useRef(project.sheets);
-  sheetsRef.current = project.sheets;
 
   // Title block: per-project, falling back to the account default for new jobs.
   const { titleBlock: accountTitleBlock, saveTitleBlock } = useApp();
@@ -625,9 +623,10 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   // bytes to Supabase Storage in the background and attach the durable `path`.
   // Falls back to inline base64 only if the upload can't happen (offline / not
   // configured) so the plan is never lost.
+  // The plan being replaced keeps its stored file: the saved row still points
+  // at it until the next save, and a Save As copy may point at it for good.
   const setPlanImageFromBlob = (blob, w, h, existingObjectUrl = null, sourcePdf = null) => {
     const targetId = activeSheetIdRef.current;
-    const prevPath = sheetsRef.current.find(s => s.id === targetId)?.bgImage?.path || null;
     const displayUrl = existingObjectUrl || URL.createObjectURL(blob);
     // For PDFs, mint a LOCAL link to the original right away so the crisp windowed
     // renderer switches on the instant the plan is imported — no save/reopen needed.
@@ -647,7 +646,6 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         const { path } = await uploadPlanImage(blob);
         const storedBg = { src: displayUrl, w, h, path, ...pdfNow };
         patchSheetById(targetId, { bgImage: storedBg });
-        if (prevPath && prevPath !== path) deletePlanImages([prevPath]);
         if (pdfNow.pdfSrc) storeOriginalPdf(targetId, pdfNow.pdfSrc);
         return storedBg;
       } catch (err) {
