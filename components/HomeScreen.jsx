@@ -5,6 +5,7 @@ import { Trash2 } from "lucide-react";
 import { listProjects, localProjectsPending, migrateLocalProjects, deleteProjectRow, verifyPassword } from "@/lib/db";
 import { signPlanImages } from "@/lib/planImages";
 import { useApp } from "@/components/AppShell";
+import { LEGAL_LINKS } from "@/lib/legal";
 
 /* Sheet geometry â€” must match ElectricalPlanTool */
 const SHEET = { width: 1587, height: 1123, margin: 18, legendWidth: 230, notesWidth: 280, titleHeight: 110 };
@@ -336,6 +337,12 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
             {cards && cards.length === 0 && (
               <div className="empty">No saved drawings yet â€” start a blank sheet or import a plan to get going.</div>
             )}
+
+            <footer className="legal-links" aria-label="Legal">
+              <a href={LEGAL_LINKS.terms} target="_blank" rel="noopener noreferrer">Terms of Service</a>
+              <a href={LEGAL_LINKS.privacy} target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+              <a href={LEGAL_LINKS.dataProcessing} target="_blank" rel="noopener noreferrer">Data Processing Terms</a>
+            </footer>
           </div>
         </div>
       </div>
@@ -497,6 +504,9 @@ html.dark .pw-home .new-card{border-color:#2A3947}
 html.dark .pw-home .card-foot .ct{background:#0E141B}
 html.dark .pw-home .migrate-banner{background:linear-gradient(120deg,#13343b,#152832); border-color:#235662}
 .pw-home .scroll{flex:1; overflow-y:auto; padding:36px 40px 60px}
+.pw-home .legal-links{margin-top:48px; display:flex; flex-wrap:wrap; justify-content:center; gap:8px 20px; font-size:12.5px}
+.pw-home .legal-links a{color:var(--muted); text-decoration:none}
+.pw-home .legal-links a:hover{color:#22808F; text-decoration:underline}
 .pw-home .hero{position:relative; overflow:hidden; border-radius:22px; background:linear-gradient(120deg,#1A2530 0%,#233241 60%,#2C4150 100%); padding:32px 34px; margin-bottom:34px; color:#fff; box-shadow:0 18px 40px -12px rgba(16,28,40,.22)}
 .pw-home .hero::before{content:""; position:absolute; inset:0; background-image:linear-gradient(var(--blueprint) 1px,transparent 1px),linear-gradient(90deg,var(--blueprint) 1px,transparent 1px); background-size:26px 26px; -webkit-mask-image:linear-gradient(105deg,transparent 40%,#000 100%); mask-image:linear-gradient(105deg,transparent 40%,#000 100%)}
 .pw-home .hero-glow{position:absolute; right:-80px; top:-90px; width:340px; height:340px; border-radius:50%; background:radial-gradient(circle,rgba(63,183,201,.32),transparent 68%)}
