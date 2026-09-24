@@ -23,7 +23,7 @@ import { ensurePdfjs } from "@/lib/pdfjs";
 import { useEditor } from "@/store/editorStore";
 import { Masthead } from "@/components/TitleBlockMasthead";
 import { isTouchDevice, supersampleFactor } from "@/lib/touch";
-import { dataUrlToBlob, signPlanImages } from "@/lib/planImages";
+import { dataUrlToBlob, signPlanImage, signPlanImages } from "@/lib/planImages";
 
 // Per-project title block. The editor publishes the *effective* title block
 // (the project's own, falling back to the account default) through this context
@@ -2748,13 +2748,27 @@ const EXPORT_PLAN_MAX_SIDE = 4096;
 const EXPORT_PLAN_MAX_AREA_DESKTOP = 12_000_000;
 const EXPORT_PLAN_MAX_AREA_TOUCH = 9_000_000;
 
-async function loadPlanBlob(src) {
+// Fetch one of a plan's files for the export. `url` is the link the sheet
+// already has -- a local blob: link from this session, or a signed link that
+// may have expired -- and `path` is its stored copy. The existing link is used
+// first, so nothing local or still valid is downloaded again; if it is missing
+// or fails, a fresh signed link is minted from `path` and tried once.
+async function fetchPlanFile(url, path) {
+  let res = url ? await fetch(url).catch(() => null) : null;
+  if ((!res || !res.ok) && path) {
+    const fresh = await signPlanImage(path);
+    if (fresh) res = await fetch(fresh);
+  }
+  if (!res) throw new Error("plan file could not be downloaded");
+  if (!res.ok) throw new Error(`plan file download failed (HTTP ${res.status})`);
+  return res;
+}
+
+async function loadPlanBlob(src, path) {
   // dataUrlToBlob rather than fetch: fetch on a multi-MB data URL is itself
   // memory-heavy on iOS Safari (see lib/planImages.js).
-  if (src.startsWith("data:")) return dataUrlToBlob(src);
-  const res = await fetch(src);
-  if (!res.ok) throw new Error(`plan image download failed (HTTP ${res.status})`);
-  return res.blob();
+  if (src && src.startsWith("data:")) return dataUrlToBlob(src);
+  return (await fetchPlanFile(src, path)).blob();
 }
 
 // "png", "jpeg" or null, from the file's first bytes (the stored content type
@@ -2827,8 +2841,8 @@ async function embedNow(imagePromise) {
 
 // Embed the stored plan image in `pdf`, at no more than the export cap for a
 // plan box `widthIn` inches wide. Returns the pdf-lib image.
-async function embedStoredPlan(pdf, src, w, h, widthIn) {
-  const blob = await loadPlanBlob(src);
+async function embedStoredPlan(pdf, src, path, w, h, widthIn) {
+  const blob = await loadPlanBlob(src, path);
   const kind = await sniffImageKind(blob);
 
   const touch = isTouchDevice();
@@ -2884,17 +2898,23 @@ async function embedStoredPlan(pdf, src, w, h, widthIn) {
 /* Plan links in the print preview.
  * A plan's src / pdfSrc are signed links that expire (lib/planImages.js) and
  * are otherwise only minted when the drawing is opened. So a drawing left open
- * for a working day would preview and export with a MISSING plan. The preview
- * renews them: before every export, and once if a plan image fails to load. */
+ * for a working day would preview and export with a MISSING plan. The export
+ * renews a link that fails (fetchPlanFile); the preview renews them once if a
+ * plan image fails to load, or straight away for a plan with no link at all. */
 function planPaths(sheets) {
   return sheets.flatMap((s) => [s.bgImage?.path, s.bgImage?.pdfPath]).filter(Boolean);
 }
 
+// Only signed (http) links expire. Local blob:/data: links from this session
+// never do, and must be kept: they are the plan the user is looking at, and
+// using them needs no network.
+const isRenewable = (url) => !url || /^https?:/i.test(url);
+
 // A copy of `bg` using freshly signed links where `links` has them.
 function withFreshLinks(bg, links) {
   if (!bg || !links || !links.size) return bg;
-  const src = bg.path ? links.get(bg.path) : null;
-  const pdfSrc = bg.pdfPath ? links.get(bg.pdfPath) : null;
+  const src = bg.path && isRenewable(bg.src) ? links.get(bg.path) : null;
+  const pdfSrc = bg.pdfPath && isRenewable(bg.pdfSrc) ? links.get(bg.pdfPath) : null;
   if (!src && !pdfSrc) return bg;
   return { ...bg, ...(src ? { src } : {}), ...(pdfSrc ? { pdfSrc } : {}) };
 }
@@ -2908,18 +2928,29 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
 
   // Renewed plan links (see withFreshLinks). null until a renewal is needed.
   const [freshLinks, setFreshLinks] = useState(null);
-  const renewedOnError = useRef(false);
   const sheets = useMemo(
     () => projectSheets.map((s) => (s.bgImage ? { ...s, bgImage: withFreshLinks(s.bgImage, freshLinks) } : s)),
     [projectSheets, freshLinks]
   );
-  // A plan image failed to load -- almost always an expired link. Renew once
-  // per preview; a plan that still fails after that is genuinely unavailable.
-  const onPlanError = () => {
-    if (renewedOnError.current) return;
-    renewedOnError.current = true;
-    signPlanImages(planPaths(projectSheets)).then((links) => { if (links.size) setFreshLinks(links); });
+  // At most one successful renewal per preview. An empty result (offline, a
+  // signing hiccup) doesn't count, so a later image error can try again; a
+  // plan that still fails after a successful renewal is genuinely unavailable.
+  const renewal = useRef("idle"); // "idle" | "busy" | "done"
+  const renewLinks = () => {
+    if (renewal.current !== "idle") return;
+    renewal.current = "busy";
+    signPlanImages(planPaths(projectSheets)).then((links) => {
+      if (links.size) { setFreshLinks(links); renewal.current = "done"; }
+      else renewal.current = "idle";
+    });
   };
+  // A plan image failed to load -- almost always an expired link.
+  const onPlanError = renewLinks;
+  // A plan with a stored copy but no link (signing failed when the drawing
+  // was opened) renders an <img> with no src, which never fires an error.
+  useEffect(() => {
+    if (projectSheets.some((s) => s.bgImage?.path && !s.bgImage.src)) renewLinks();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [mounted, setMounted] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
@@ -3011,11 +3042,6 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
       // the iOS canvas cap.
       const shotScale = isTouchDevice() ? 2 : 3;
 
-      // Fresh plan links for this export, so a drawing opened more than a
-      // signed link's lifetime ago still exports its plan. signPlanImages
-      // never throws; any path it can't sign keeps the link it already had.
-      const exportLinks = await signPlanImages(planPaths(sheets));
-
       const out = await PDFDocument.create();
 
       // Embedded ONCE for the whole document, not per symbol. The symbol
@@ -3026,17 +3052,15 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
 
       for (let i = 0; i < pageEls.length; i++) {
         const el = pageEls[i];
-        const bg = withFreshLinks((sheets[i] && sheets[i].bgImage) || null, exportLinks);
+        const bg = (sheets[i] && sheets[i].bgImage) || null;
         const page = out.addPage([PAGE_W, PAGE_H]);
 
         // 1. Vector plan underlay — only if we still hold the source PDF.
         let vectorOK = false;
         const sheetLabel = `sheet ${i + 1}` + (sheets[i]?.name ? ` ("${sheets[i].name}")` : "");
-        if (bg && bg.pdfSrc && bg.w && bg.h) {
+        if (bg && (bg.pdfSrc || bg.pdfPath) && bg.w && bg.h) {
           try {
-            const res = await fetch(bg.pdfSrc);
-            if (!res.ok) throw new Error(`original PDF download failed (HTTP ${res.status})`);
-            const bytes = await res.arrayBuffer();
+            const bytes = await (await fetchPlanFile(bg.pdfSrc, bg.pdfPath)).arrayBuffer();
             const idx = Math.max(0, (bg.pdfPage || 1) - 1);
             const srcDoc = await PDFDocument.load(bytes);
             // Architect PDFs are commonly saved with a /Rotate flag. The on-screen
@@ -3083,7 +3107,7 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
         //     plan image on the page as its own layer, in exactly the box the
         //     preview shows it in, instead of leaving it to the screenshot.
         let rasterOK = false;
-        if (!vectorOK && bg && bg.src && bg.w && bg.h) {
+        if (!vectorOK && bg && (bg.src || bg.path) && bg.w && bg.h) {
           try {
             const fp = planFootprint(DRAW, bg.w, bg.h);
             const rect = {
@@ -3092,7 +3116,7 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
               width: fp.w * sx,
               height: fp.h * sy,
             };
-            const image = await embedStoredPlan(out, bg.src, bg.w, bg.h, rect.width / 72);
+            const image = await embedStoredPlan(out, bg.src, bg.path, bg.w, bg.h, rect.width / 72);
             page.drawImage(image, rect);
             rasterOK = true;
           } catch (err) {
