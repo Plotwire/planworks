@@ -197,9 +197,9 @@ async function hydrateImages(p) {
 
 const isBlobUrl = (url) => typeof url === "string" && url.startsWith("blob:");
 
-// Uploads of tab-only PDFs, by blob: link -> Promise<stored path>. Shared, so
-// saves that overlap, or follow before the path reaches state, reuse ONE
-// stored copy instead of uploading the same large file again.
+// Uploads of original PDFs held only in this tab, by blob: link ->
+// Promise<stored path>. Shared, so a retry never uploads the same large file
+// twice, and a finished upload's path is reused.
 const tabPdfUploads = new Map();
 // PDFs that can never be stored: the server refused the file itself (too
 // large, wrong type) or the tab no longer has it. Not retried this session.
@@ -212,31 +212,30 @@ function isPermanentStoreError(err) {
   return err?.name === "StorageApiError" && (status === "413" || status === "415");
 }
 
-// If a sheet's original PDF exists only as a blob: link in this tab (its
-// background upload failed), store it now so the plan can still export as
-// vector. Best effort: the raster plan is what must not be lost.
-async function storeTabOnlyPdf(bg) {
-  if (bg.pdfPath || !isBlobUrl(bg.pdfSrc) || tabPdfStoreFailed.has(bg.pdfSrc)) return {};
-  let upload = tabPdfUploads.get(bg.pdfSrc);
+// Store an original PDF that exists only as a blob: link in this tab.
+// Resolves to its stored path, or null if it couldn't be stored (yet).
+async function storeTabOnlyPdf(pdfSrc) {
+  if (!isBlobUrl(pdfSrc) || tabPdfStoreFailed.has(pdfSrc)) return null;
+  let upload = tabPdfUploads.get(pdfSrc);
   if (!upload) {
     upload = (async () => {
       let pdf;
       try {
-        pdf = await (await fetch(bg.pdfSrc)).blob();
+        pdf = await (await fetch(pdfSrc)).blob();
       } catch {
         throw Object.assign(new Error("the original PDF is no longer available in this tab"), { tabCopyGone: true });
       }
       return (await uploadPlanImage(pdf)).path;
     })();
-    tabPdfUploads.set(bg.pdfSrc, upload);
+    tabPdfUploads.set(pdfSrc, upload);
   }
   try {
-    return { pdfPath: await upload, pdfPage: bg.pdfPage || 1 };
+    return await upload;
   } catch (err) {
-    tabPdfUploads.delete(bg.pdfSrc); // let a later save try again...
-    if (isPermanentStoreError(err)) tabPdfStoreFailed.add(bg.pdfSrc); // ...unless it never can
-    console.warn("original PDF store on save failed (plan kept as image):", err?.message);
-    return {};
+    if (tabPdfUploads.get(pdfSrc) === upload) tabPdfUploads.delete(pdfSrc); // a later save may retry...
+    if (isPermanentStoreError(err)) tabPdfStoreFailed.add(pdfSrc);          // ...unless it never can work
+    console.warn("original PDF store failed (plan kept as image):", err?.message);
+    return null;
   }
 }
 
@@ -246,16 +245,14 @@ async function prepareProjectForSave(p) {
   const sheets = await Promise.all((p?.sheets || []).map(async (s) => {
     const bg = s.bgImage;
     if (!bg) return s;
-    if (bg.path) {
-      // The plan is stored; its original PDF may not be (that upload can fail
-      // on its own, e.g. a large file), so store it now if the tab still has it.
-      const { src, pdfSrc, ...rest } = bg;
-      return { ...s, bgImage: { ...rest, ...(await storeTabOnlyPdf(bg)) } };
-    }
+    // An original PDF held only in this tab is not stored here: that happens in
+    // the background (storeOriginalPdf) so a save never waits on a large file,
+    // and the path is persisted by the next save.
+    if (bg.path) { const { src, pdfSrc, ...rest } = bg; return { ...s, bgImage: rest }; }
     if (typeof bg.src === "string" && bg.src.startsWith("data:")) {
       try {
         const { path } = await uploadPlanImage(dataUrlToBlob(bg.src));
-        return { ...s, bgImage: { path, w: bg.w, h: bg.h, ...(await storeTabOnlyPdf(bg)) } };
+        return { ...s, bgImage: { path, w: bg.w, h: bg.h } };
       } catch (err) {
         console.warn("image migrate-on-save failed; keeping inline:", err?.message);
         // Keep the base64 rather than lose the plan -- but not a blob: pdfSrc,
@@ -273,7 +270,7 @@ async function prepareProjectForSave(p) {
       try {
         const blob = await (await fetch(bg.src)).blob();
         const { path } = await uploadPlanImage(blob);
-        return { ...s, bgImage: { path, w: bg.w, h: bg.h, ...(await storeTabOnlyPdf(bg)) } };
+        return { ...s, bgImage: { path, w: bg.w, h: bg.h } };
       } catch (err) {
         console.warn("plan upload on save failed:", err?.message);
         throw new Error("The plan image couldn't be stored, so the drawing wasn't saved. Check your connection and try again.");
@@ -292,15 +289,8 @@ function mergeSavedPaths(current, safe) {
     ...current,
     sheets: (current?.sheets || []).map(s => {
       const safeBg = byId.get(s.id);
-      if (!safeBg || !s.bgImage) return s;
-      const pdf = safeBg.pdfPath && !s.bgImage.pdfPath ? { pdfPath: safeBg.pdfPath, pdfPage: safeBg.pdfPage } : {};
-      if (safeBg.path && !s.bgImage.path) {
-        return { ...s, bgImage: { ...s.bgImage, path: safeBg.path, ...pdf } };
-      }
-      // Same stored plan, and this save stored its original PDF: carry that
-      // back too, or the next save would drop it (and upload it again).
-      if (pdf.pdfPath && s.bgImage.path === safeBg.path) {
-        return { ...s, bgImage: { ...s.bgImage, ...pdf } };
+      if (safeBg && safeBg.path && s.bgImage && !s.bgImage.path) {
+        return { ...s, bgImage: { ...s.bgImage, path: safeBg.path } };
       }
       return s;
     }),
@@ -389,6 +379,23 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const planUploadsRef = useRef(new Map());
   const [finishingUpload, setFinishingUpload] = useState(false);
 
+  // Store a sheet's original PDF (held only as a blob: link in this tab) in
+  // the background, and attach its path to the sheet once stored. Saves never
+  // wait for this: the raster plan is what a save must not lose, the original
+  // only lets the export be vector, and the next save persists its path.
+  const storeOriginalPdf = useCallback((sheetId, pdfSrc) => {
+    storeTabOnlyPdf(pdfSrc).then((pdfPath) => {
+      if (!pdfPath) return;
+      setProject(p => ({
+        ...p,
+        sheets: p.sheets.map(s =>
+          s.id === sheetId && s.bgImage && s.bgImage.pdfSrc === pdfSrc && !s.bgImage.pdfPath
+            ? { ...s, bgImage: { ...s.bgImage, pdfPath, pdfPage: s.bgImage.pdfPage || 1 } }
+            : s),
+      }));
+    });
+  }, []);
+
   // While any save runs, the editor is blocked: a full-screen layer takes
   // every click and a capture listener every key. A save can wait on a plan
   // upload for a while, and edits, a second save, or opening another project
@@ -418,6 +425,11 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
 
   // The single way a project is made ready to persist.
   const readyToSave = useCallback(async (p) => {
+    // Retry, in the background, any original PDF whose upload failed earlier.
+    (p?.sheets || []).forEach(s => {
+      const bg = s.bgImage;
+      if (bg && !bg.pdfPath && isBlobUrl(bg.pdfSrc)) storeOriginalPdf(s.id, bg.pdfSrc);
+    });
     const pending = [...planUploadsRef.current.entries()];
     if (pending.length) {
       setFinishingUpload(true);
@@ -650,21 +662,15 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     // always finds it and waits (see readyToSave).
     const upload = { displayUrl, done: null };
     planUploadsRef.current.set(targetId, upload);
+    // `done` settles once the raster plan is stored -- the part a save must
+    // wait for. The original PDF (larger, optional) follows in the background.
     upload.done = (async () => {
       try {
         const { path } = await uploadPlanImage(blob);
-        let pdfExtra = {};
-        if (sourcePdf) {
-          try {
-            const { path: pdfPath } = await uploadPlanImage(sourcePdf);
-            pdfExtra = { pdfPath, pdfPage: 1 };
-          } catch (e) {
-            console.warn("original PDF store failed (preview still works):", e?.message);
-          }
-        }
-        const storedBg = { src: displayUrl, w, h, path, ...pdfNow, ...pdfExtra };
+        const storedBg = { src: displayUrl, w, h, path, ...pdfNow };
         patchSheetById(targetId, { bgImage: storedBg });
         if (prevPath && prevPath !== path) deletePlanImages([prevPath]);
+        if (pdfNow.pdfSrc) storeOriginalPdf(targetId, pdfNow.pdfSrc);
         return storedBg;
       } catch (err) {
         console.warn("plan image upload failed; using inline fallback:", err?.message);
