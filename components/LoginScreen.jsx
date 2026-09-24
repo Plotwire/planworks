@@ -2,6 +2,9 @@
 
 import React, { useState } from "react";
 import { supabase, isConfigured } from "@/lib/supabase";
+import TermsCheckboxes from "@/components/TermsCheckboxes";
+import { LEGAL_LINKS } from "@/lib/legal";
+import { signupTermsMetadata } from "@/lib/termsAcceptance";
 
 export default function LoginScreen({ recovery = false, onRecovered }) {
   const [mode, setMode] = useState("signin"); // "signin" | "signup" | "forgot"
@@ -14,11 +17,16 @@ export default function LoginScreen({ recovery = false, onRecovered }) {
   const [sentTo, setSentTo] = useState("");        // email we just messaged
   const [sentKind, setSentKind] = useState("");    // "confirm" | "reset"
   const [resetDone, setResetDone] = useState(false);
+  // Sign-up acknowledgements: both start unticked and both are required.
+  const [agreed, setAgreed] = useState(false);
+  const [acknowledged, setAcknowledged] = useState(false);
+  const consentGiven = agreed && acknowledged;
 
   const switchMode = (m) => {
     setMode(m);
     setError(""); setSentTo(""); setSentKind("");
     setPassword(""); setConfirm("");
+    setAgreed(false); setAcknowledged(false);
   };
 
   const signIn = async (e) => {
@@ -36,12 +44,16 @@ export default function LoginScreen({ recovery = false, onRecovered }) {
     if (!name.trim()) { setError("Please tell us your name."); return; }
     if (password.length < 8) { setError("Use a password of at least 8 characters."); return; }
     if (password !== confirm) { setError("Those two passwords don't match."); return; }
+    if (!consentGiven) { setError("Please tick both boxes to create your account."); return; }
     setBusy(true); setError("");
     const { data, error } = await supabase.auth.signUp({
       email: email.trim(),
       password,
       options: {
-        data: { name: name.trim() },
+        // The acceptance rides in the account's metadata: with email
+        // confirmation on there is no session yet to record it with, so the
+        // record is written on first sign-in (see lib/termsAcceptance.js).
+        data: { name: name.trim(), ...signupTermsMetadata() },
         emailRedirectTo: typeof window !== "undefined" ? window.location.origin : undefined,
       },
     });
@@ -196,9 +208,17 @@ export default function LoginScreen({ recovery = false, onRecovered }) {
           </label>
         )}
 
+        {mode === "signup" && (
+          <TermsCheckboxes
+            agreed={agreed} onAgreedChange={setAgreed}
+            acknowledged={acknowledged} onAcknowledgedChange={setAcknowledged}
+            disabled={busy}
+          />
+        )}
+
         {error && <div className="err">{error}</div>}
 
-        <button type="submit" className="submit" disabled={busy}>
+        <button type="submit" className="submit" disabled={busy || (mode === "signup" && !consentGiven)}>
           {busy
             ? (mode === "signin" ? "Signing in…" : mode === "signup" ? "Creating account…" : "Sending…")
             : (mode === "signin" ? "Sign in" : mode === "signup" ? "Create account" : "Send reset link")}
@@ -223,6 +243,12 @@ export default function LoginScreen({ recovery = false, onRecovered }) {
         {!isConfigured && (
           <div className="note">The cloud connection isn't set up yet — check the environment variables.</div>
         )}
+
+        <div className="legal-foot">
+          <a href={LEGAL_LINKS.terms} target="_blank" rel="noopener noreferrer">Terms of Service</a>
+          <span aria-hidden> · </span>
+          <a href={LEGAL_LINKS.privacy} target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+        </div>
       </form>
     </AuthFrame>
   );
@@ -283,6 +309,9 @@ const CSS = `
 .consent-row input{flex:none; width:18px; height:18px; margin-top:1px; accent-color:#22808F; cursor:pointer}
 .consent-row a,.inline-link{color:#22808F; font-weight:500; text-decoration:underline}
 .consent-row a:hover,.inline-link:hover{color:#3FB7C9}
+.legal-foot{margin-top:22px; text-align:center; font-size:12px; color:#9AA6B2}
+.legal-foot a{color:#697785; text-decoration:none}
+.legal-foot a:hover{color:#22808F; text-decoration:underline}
 .check-badge{width:52px; height:52px; border-radius:14px; background:#ECF8FA; display:grid; place-items:center; margin-bottom:18px}
 .check-badge svg{width:28px; height:28px}
 @media (max-width:760px){.login-rail{display:none}}
