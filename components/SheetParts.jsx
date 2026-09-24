@@ -23,6 +23,7 @@ import { ensurePdfjs } from "@/lib/pdfjs";
 import { useEditor } from "@/store/editorStore";
 import { Masthead } from "@/components/TitleBlockMasthead";
 import { isTouchDevice, supersampleFactor } from "@/lib/touch";
+import { dataUrlToBlob } from "@/lib/planImages";
 
 // Per-project title block. The editor publishes the *effective* title block
 // (the project's own, falling back to the account default) through this context
@@ -2729,6 +2730,110 @@ function glyphToJob(glyphEl, DRAW, sx, sy, PAGE_H) {
   return { prims: glyphToPrims(glyphEl), cx, cy, size: size * sx, rotationDeg: rot };
 }
 
+/* ============================================================================
+ * Raster plan layer for the PDF export
+ * ----------------------------------------------------------------------------
+ * When a sheet's original PDF can't be embedded as vector (image and CAD
+ * plans, older drawings, PDFs pdf-lib can't open), the stored plan image is
+ * placed on the page as its OWN layer rather than riding along in the page
+ * screenshot, which tops out at 288 dpi (192 on touch) and made the plan go
+ * soft when zoomed in.
+ *
+ * Capped at EXPORT_PLAN_DPI across the plan's box on the page, and at a pixel
+ * budget each device is known to handle: 12 MP is the on-screen plan's
+ * desktop budget, 9 MP the importer's touch budget.
+ * ========================================================================= */
+const EXPORT_PLAN_DPI = 400;
+const EXPORT_PLAN_MAX_SIDE = 4096;
+const EXPORT_PLAN_MAX_AREA_DESKTOP = 12_000_000;
+const EXPORT_PLAN_MAX_AREA_TOUCH = 9_000_000;
+
+async function loadPlanBlob(src) {
+  // dataUrlToBlob rather than fetch: fetch on a multi-MB data URL is itself
+  // memory-heavy on iOS Safari (see lib/planImages.js).
+  if (src.startsWith("data:")) return dataUrlToBlob(src);
+  const res = await fetch(src);
+  if (!res.ok) throw new Error(`plan image download failed (HTTP ${res.status})`);
+  return res.blob();
+}
+
+// "png", "jpeg" or null, from the file's first bytes (the stored content type
+// isn't always right, e.g. a .pdf imported with an empty type).
+async function sniffImageKind(blob) {
+  const b = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return "png";
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "jpeg";
+  return null;
+}
+
+function loadImageElement(url) {
+  // onload rather than decode(): decode() never resolves in a background tab.
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("could not decode the plan image"));
+    img.src = url;
+  });
+}
+
+function canvasToBytes(canvas, type, quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (b) => (b ? b.arrayBuffer().then((buf) => resolve(new Uint8Array(buf)), reject)
+                : reject(new Error("could not encode the plan image"))),
+      type, quality
+    );
+  });
+}
+
+// Embed the stored plan image in `pdf`, at no more than the export cap for a
+// plan box `widthIn` inches wide. Returns the pdf-lib image.
+async function embedStoredPlan(pdf, src, w, h, widthIn) {
+  const blob = await loadPlanBlob(src);
+  const kind = await sniffImageKind(blob);
+
+  const touch = isTouchDevice();
+  const maxArea = touch ? EXPORT_PLAN_MAX_AREA_TOUCH : EXPORT_PLAN_MAX_AREA_DESKTOP;
+  const scale = Math.min(
+    1,
+    (widthIn * EXPORT_PLAN_DPI) / w,
+    EXPORT_PLAN_MAX_SIDE / Math.max(w, h),
+    Math.sqrt(maxArea / (w * h))
+  );
+
+  // Already within the cap: embed the stored bytes as they are. Lossless, and
+  // pdf-lib passes JPEG data straight through without decoding it.
+  if (scale >= 1 && kind) {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    return kind === "png" ? pdf.embedPng(bytes) : pdf.embedJpg(bytes);
+  }
+
+  // Too big, or a format pdf-lib can't embed (WebP, GIF): resample to the cap.
+  // Loaded from a local object URL of the fetched bytes, so the canvas is never
+  // tainted by the cross-origin signed link.
+  const url = URL.createObjectURL(blob);
+  let canvas = null;
+  try {
+    const img = await loadImageElement(url);
+    const cw = Math.max(1, Math.round(img.naturalWidth * scale));
+    const ch = Math.max(1, Math.round(img.naturalHeight * scale));
+    canvas = document.createElement("canvas");
+    canvas.width = cw; canvas.height = ch;
+    const ctx = canvas.getContext("2d", { alpha: false });
+    ctx.fillStyle = "#ffffff"; // alpha:false starts black; plans need white
+    ctx.fillRect(0, 0, cw, ch);
+    drawRegionSmooth(ctx, img, { x: 0, y: 0, w: img.naturalWidth, h: img.naturalHeight }, cw, ch);
+    // Same rule as the importer: PNG keeps line art crisp on desktop; JPEG
+    // keeps memory and file size down on touch devices and for photos.
+    const asPng = kind === "png" && !touch;
+    const bytes = await canvasToBytes(canvas, asPng ? "image/png" : "image/jpeg", asPng ? undefined : 0.9);
+    return await (asPng ? pdf.embedPng(bytes) : pdf.embedJpg(bytes));
+  } finally {
+    if (canvas) canvas.width = canvas.height = 0; // release before html2canvas runs
+    URL.revokeObjectURL(url);
+  }
+}
+
 export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1, DRAW, onClose, onPrint }) {
   const { meta, notes } = project;
   const sheets = project.sheets && project.sheets.length
@@ -2785,11 +2890,15 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
   // raster ceiling, no iOS canvas-size cap (which is why bumping the screenshot
   // scale never helped: Safari silently clamps any canvas over ~16.7MP).
   //
-  // Everything the app draws on top (symbols, wires, dimensions, title block,
-  // notes, legend, borders) is captured as a TRANSPARENT overlay and laid over
-  // the vector plan; the white "paper" is the PDF page itself. A sheet imported
-  // as a plain image (no PDF source) falls back to a normal raster so it still
-  // exports.
+  // When that isn't possible (image or CAD plans, older drawings, a PDF pdf-lib
+  // can't open), the stored plan image is placed as its own layer instead, at
+  // up to EXPORT_PLAN_DPI. The plan is never left inside the page screenshot.
+  //
+  // Everything the app draws on top (wires, dimensions, title block, notes,
+  // legend, borders) is captured as a TRANSPARENT overlay and laid over the
+  // plan; the white "paper" is the PDF page itself. Symbols are redrawn as
+  // vector. Only if both plan layers fail does the screenshot carry the plan,
+  // on white, so the sheet still exports.
   const downloadPDF = async () => {
     setPdfBusy(true);
     // Declared out here, not inside the try: the finally restores them, and a
@@ -2817,8 +2926,9 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
       const sx = PAGE_W / SHEET.width;
       const sy = PAGE_H / SHEET.height;
 
-      // The overlay now only carries symbols + app text (the plan is vector), so
-      // a modest scale is sharp enough AND stays under the iOS canvas cap.
+      // The overlay only carries wires + app text (the plan and symbols have
+      // their own layers), so a modest scale is sharp enough AND stays under
+      // the iOS canvas cap.
       const shotScale = isTouchDevice() ? 2 : 3;
 
       const out = await PDFDocument.create();
@@ -2881,17 +2991,39 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
             console.warn(`PDF export: ${sheetLabel} plan not embedded as vector —`, err?.name || "Error", err?.message || String(err));
           }
         } else if (bg) {
-          console.warn(`PDF export: ${sheetLabel} has no original PDF (image, CAD sketch or older import), so its plan is exported as an image.`);
+          console.warn(`PDF export: ${sheetLabel} has no original PDF (image, CAD sketch or older import), so its plan is exported from the stored image.`);
         }
 
-        // 2. Overlay capture. When the plan is vector, hide the raster plan image
-        //    and make the plan-area + sheet backgrounds transparent so the vector
-        //    shows through; restore the DOM straight after.
+        // 1b. Raster plan layer — when there's no vector plan, place the stored
+        //     plan image on the page as its own layer, in exactly the box the
+        //     preview shows it in, instead of leaving it to the screenshot.
+        let rasterOK = false;
+        if (!vectorOK && bg && bg.src && bg.w && bg.h) {
+          try {
+            const fp = planFootprint(DRAW, bg.w, bg.h);
+            const rect = {
+              x: (DRAW.x + fp.x) * sx,
+              y: PAGE_H - (DRAW.y + fp.y + fp.h) * sy, // pdf-lib is bottom-left
+              width: fp.w * sx,
+              height: fp.h * sy,
+            };
+            const image = await embedStoredPlan(out, bg.src, bg.w, bg.h, rect.width / 72);
+            page.drawImage(image, rect);
+            rasterOK = true;
+          } catch (err) {
+            console.warn(`PDF export: ${sheetLabel} plan image could not be placed as its own layer —`, err?.name || "Error", err?.message || String(err));
+          }
+        }
+        const planDrawn = vectorOK || rasterOK;
+
+        // 2. Overlay capture. When the plan has its own layer, hide the plan
+        //    image and make the plan-area + sheet backgrounds transparent so the
+        //    layer shows through; restore the DOM straight after.
         const planImg = el.querySelector('img[alt="plan"]');
         const planArea = el.querySelector('[data-plan-area]');
         const sheetRoot = el.firstElementChild;
         const saved = [];
-        if (vectorOK) {
+        if (planDrawn) {
           // .print-page gets its white from the stylesheet; an inline override
           // beats it. The other two are inline whites stacked over the plan.
           saved.push([el, "background", el.style.background]); el.style.background = "transparent";
@@ -2917,7 +3049,7 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
         try {
           overlayCanvas = await html2canvas(el, {
             scale: shotScale,
-            backgroundColor: vectorOK ? null : "#ffffff",
+            backgroundColor: planDrawn ? null : "#ffffff",
             useCORS: true,
             logging: false,
             width: el.offsetWidth,
