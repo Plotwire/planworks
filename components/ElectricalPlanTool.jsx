@@ -195,16 +195,23 @@ async function hydrateImages(p) {
   };
 }
 
+const isBlobUrl = (url) => typeof url === "string" && url.startsWith("blob:");
+
+// Tried once per PDF per session: a PDF that failed (e.g. over the storage size
+// limit) would otherwise be uploaded again, and fail again, on every save.
+const tabPdfStoreFailed = new Set();
+
 // If a sheet's original PDF exists only as a blob: link in this tab (its
 // background upload failed), store it now so the plan can still export as
 // vector. Best effort: the raster plan is what must not be lost.
 async function storeTabOnlyPdf(bg) {
-  if (bg.pdfPath || typeof bg.pdfSrc !== "string" || !bg.pdfSrc.startsWith("blob:")) return {};
+  if (bg.pdfPath || !isBlobUrl(bg.pdfSrc) || tabPdfStoreFailed.has(bg.pdfSrc)) return {};
   try {
     const pdf = await (await fetch(bg.pdfSrc)).blob();
     const { path: pdfPath } = await uploadPlanImage(pdf);
     return { pdfPath, pdfPage: bg.pdfPage || 1 };
   } catch (err) {
+    tabPdfStoreFailed.add(bg.pdfSrc);
     console.warn("original PDF store on save failed (plan kept as image):", err?.message);
     return {};
   }
@@ -216,14 +223,23 @@ async function prepareProjectForSave(p) {
   const sheets = await Promise.all((p?.sheets || []).map(async (s) => {
     const bg = s.bgImage;
     if (!bg) return s;
-    if (bg.path) { const { src, pdfSrc, ...rest } = bg; return { ...s, bgImage: rest }; }
+    if (bg.path) {
+      // The plan is stored; its original PDF may not be (that upload can fail
+      // on its own, e.g. a large file), so store it now if the tab still has it.
+      const { src, pdfSrc, ...rest } = bg;
+      return { ...s, bgImage: { ...rest, ...(await storeTabOnlyPdf(bg)) } };
+    }
     if (typeof bg.src === "string" && bg.src.startsWith("data:")) {
       try {
         const { path } = await uploadPlanImage(dataUrlToBlob(bg.src));
         return { ...s, bgImage: { path, w: bg.w, h: bg.h, ...(await storeTabOnlyPdf(bg)) } };
       } catch (err) {
         console.warn("image migrate-on-save failed; keeping inline:", err?.message);
-        return s; // keep base64 rather than lose the plan
+        // Keep the base64 rather than lose the plan -- but not a blob: pdfSrc,
+        // which dies with the tab and on reopen would be tried instead of the
+        // inline image, leaving the plan blank.
+        const { pdfSrc, ...keep } = bg;
+        return { ...s, bgImage: isBlobUrl(pdfSrc) ? keep : bg };
       }
     }
     // A blob: URL with no path means the background upload never succeeded (the
@@ -253,9 +269,15 @@ function mergeSavedPaths(current, safe) {
     ...current,
     sheets: (current?.sheets || []).map(s => {
       const safeBg = byId.get(s.id);
-      if (safeBg && safeBg.path && s.bgImage && !s.bgImage.path) {
-        const pdf = safeBg.pdfPath && !s.bgImage.pdfPath ? { pdfPath: safeBg.pdfPath, pdfPage: safeBg.pdfPage } : {};
+      if (!safeBg || !s.bgImage) return s;
+      const pdf = safeBg.pdfPath && !s.bgImage.pdfPath ? { pdfPath: safeBg.pdfPath, pdfPage: safeBg.pdfPage } : {};
+      if (safeBg.path && !s.bgImage.path) {
         return { ...s, bgImage: { ...s.bgImage, path: safeBg.path, ...pdf } };
+      }
+      // Same stored plan, and this save stored its original PDF: carry that
+      // back too, or the next save would drop it (and upload it again).
+      if (pdf.pdfPath && s.bgImage.path === safeBg.path) {
+        return { ...s, bgImage: { ...s.bgImage, ...pdf } };
       }
       return s;
     }),
