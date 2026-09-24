@@ -1,5 +1,5 @@
 -- ============================================================================
--- Paywall enforced in the database  (projects + sketches)
+-- Paywall enforced in the database  (projects + sketches + planner_jobs)
 -- ----------------------------------------------------------------------------
 -- >>> RUN AT STRIPE GO-LIVE ONLY, after inserting billing_exempt rows for Joe
 -- >>> and any comped testers -- otherwise every current user loses the ability
@@ -13,21 +13,21 @@
 --
 -- WHAT CHANGES
 --   * READ and DELETE stay owner-only, with NO subscription check -- a lapsed
---     customer can still open, export and tidy up their own drawings.
+--     customer can still open, export and tidy up their own drawings and jobs.
 --   * INSERT and UPDATE additionally require public.has_active_subscription().
+--   * planner_settings, company_logos, company_profile and user_settings are
+--     deliberately NOT gated, so a lapsed user's onboarding, business details
+--     and share-link settings keep working.
 --   * The React paywall stays as the UX layer. When a save is refused by these
 --     policies the app shows "Your subscription isn't active" (lib/writeErrors.js).
 --
 -- WHAT COUNTS AS ACTIVE
--- A subscriptions row for the caller with status 'active' or 'trialing', OR a
--- row in public.billing_exempt for the caller.
+-- A subscriptions row for the caller with status 'active', 'trialing' or
+-- 'past_due', OR a row in public.billing_exempt for the caller.
 --
--- NOTE: the React gate (lib/useSubscription.js) ALSO unlocks 'past_due', so a
--- customer whose renewal card fails keeps working while Stripe retries. This
--- file deliberately does NOT include past_due, which means a past_due user can
--- open the app but their saves will be refused. If you want the two to match,
--- add 'past_due' to the status list in has_active_subscription() below before
--- running this.
+-- past_due is included on purpose, to match the React gate
+-- (lib/useSubscription.js): Stripe retries a failed renewal card, and the
+-- customer keeps saving during that window rather than being cut off mid-job.
 --
 -- BEFORE RUNNING -- comp yourself and any testers, e.g.:
 --
@@ -72,7 +72,7 @@ as $$
       select 1
         from public.subscriptions s
        where s.user_id = auth.uid()
-         and s.status in ('active', 'trialing')
+         and s.status in ('active', 'trialing', 'past_due')
     )
     or exists (
       select 1
@@ -132,6 +132,38 @@ create policy sketches_update_own
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id and public.has_active_subscription());
 
+-- ---------------------------------------------------------------------------
+-- 5. planner_jobs
+-- ---------------------------------------------------------------------------
+-- Live today: one ALL policy "Users manage their own planner jobs"
+-- (auth.uid() = user_id) -- see planner-rls-setup.sql and the 24 Sep 2026
+-- tidy. Replaced by one policy per command, same shape as projects.
+--
+-- The public share link is unaffected: planner_shared() is SECURITY DEFINER
+-- and only reads. Do NOT add "force row level security" here.
+drop policy if exists "Users manage their own planner jobs" on public.planner_jobs;
+drop policy if exists "planner jobs select own" on public.planner_jobs;
+drop policy if exists "planner jobs insert own" on public.planner_jobs;
+drop policy if exists "planner jobs update own" on public.planner_jobs;
+drop policy if exists "planner jobs delete own" on public.planner_jobs;
+
+create policy "planner jobs select own"
+  on public.planner_jobs for select to authenticated
+  using (auth.uid() = user_id);
+
+create policy "planner jobs insert own"
+  on public.planner_jobs for insert to authenticated
+  with check (auth.uid() = user_id and public.has_active_subscription());
+
+create policy "planner jobs update own"
+  on public.planner_jobs for update to authenticated
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id and public.has_active_subscription());
+
+create policy "planner jobs delete own"
+  on public.planner_jobs for delete to authenticated
+  using (auth.uid() = user_id);
+
 -- ============================================================================
 -- VERIFICATION -- run these after the above and check the output.
 -- ============================================================================
@@ -148,6 +180,12 @@ select policyname, cmd, qual, with_check
 select policyname, cmd, qual, with_check
   from pg_policies
  where schemaname = 'public' and tablename = 'sketches'
+ order by cmd;
+
+-- (b2) planner_jobs: expect FOUR rows, same shape as (a).
+select policyname, cmd, qual, with_check
+  from pg_policies
+ where schemaname = 'public' and tablename = 'planner_jobs'
  order by cmd;
 
 -- (c) billing_exempt: RLS on, and NO policies (expect zero rows from the
@@ -169,9 +207,12 @@ select e.user_id, u.email, e.note, e.created_at
 
 -- ----------------------------------------------------------------------------
 -- AFTER RUNNING: test before trusting it.
---   1. Signed in as an exempt account -> save a drawing and a sketch. Works.
+--   1. Signed in as an exempt account -> save a drawing, a sketch and a
+--      planner job. All work.
 --   2. Signed in as an account with NO subscription and NOT exempt (turn
 --      NEXT_PUBLIC_BILLING_ENABLED off locally to get past the React paywall)
---      -> open a drawing: works. Save: "Your subscription isn't active".
---      Delete a drawing: works.
+--      -> open a drawing / the planner: works. Save a drawing, sketch or
+--      job: "Your subscription isn't active". Delete a drawing: works.
+--   3. Signed out, open an existing /planner/view?t=<token> link -> the
+--      shared week still loads.
 -- ----------------------------------------------------------------------------
