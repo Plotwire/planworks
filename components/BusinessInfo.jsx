@@ -20,6 +20,7 @@ import {
   getCompanyProfile, saveCompanyProfile, EMPTY_PROFILE,
 } from "@/lib/companyProfile";
 import { resizeImageToDataUrl } from "@/lib/titleBlock";
+import { LEGAL_LINKS } from "@/lib/legal";
 
 const FIELDS = [
   { key: "company_name", label: "Company name", placeholder: "e.g. Your Company Ltd", type: "text" },
@@ -280,6 +281,12 @@ export default function BusinessInfo({ onClose, onSkip, onSaved, onboarding = fa
                 <span>{saved ? "Saved ✓" : busy ? "Saving…" : (onboarding ? "Save and continue" : "Save")}</span>
               </button>
             </div>
+
+            <nav className="biz-legal" aria-label="Legal">
+              <a href={LEGAL_LINKS.terms} target="_blank" rel="noopener noreferrer">Terms of Service</a>
+              <a href={LEGAL_LINKS.privacy} target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+              <a href={LEGAL_LINKS.dataProcessing} target="_blank" rel="noopener noreferrer">Data Processing Terms</a>
+            </nav>
           </form>
         )}
       </div>
@@ -324,6 +331,9 @@ html.dark .pw-biz{--paper:#0E141B; --surface:#16202B; --line:#263441; --ink:#E7E
 
 .pw-biz .biz-error{font-size:12.5px; color:#c0392b}
 .pw-biz .biz-actions{display:flex; justify-content:flex-end; gap:10px; margin-top:4px; padding-top:16px; border-top:1px solid var(--line)}
+.pw-biz .biz-legal{display:flex; flex-wrap:wrap; justify-content:center; gap:6px 18px; margin-top:18px; font-size:12px}
+.pw-biz .biz-legal a{color:var(--muted); text-decoration:none}
+.pw-biz .biz-legal a:hover{color:var(--teal-700); text-decoration:underline}
 
 /* App standard: solid teal with a dark navy icon. */
 .pw-biz .pw-btn-teal{display:inline-flex; align-items:center; justify-content:center; gap:8px; height:40px; padding:0 16px; font-family:inherit; font-size:13px; font-weight:600; border:0; border-radius:10px; background:var(--teal-600); color:var(--navy); cursor:pointer; transition:background .15s ease}
