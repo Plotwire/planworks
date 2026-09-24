@@ -23,7 +23,7 @@ import { ensurePdfjs } from "@/lib/pdfjs";
 import { useEditor } from "@/store/editorStore";
 import { Masthead } from "@/components/TitleBlockMasthead";
 import { isTouchDevice, supersampleFactor } from "@/lib/touch";
-import { dataUrlToBlob } from "@/lib/planImages";
+import { dataUrlToBlob, signPlanImages } from "@/lib/planImages";
 
 // Per-project title block. The editor publishes the *effective* title block
 // (the project's own, falling back to the account default) through this context
@@ -2834,12 +2834,45 @@ async function embedStoredPlan(pdf, src, w, h, widthIn) {
   }
 }
 
+/* Plan links in the print preview.
+ * A plan's src / pdfSrc are signed links that expire (lib/planImages.js) and
+ * are otherwise only minted when the drawing is opened. So a drawing left open
+ * for a working day would preview and export with a MISSING plan. The preview
+ * renews them: before every export, and once if a plan image fails to load. */
+function planPaths(sheets) {
+  return sheets.flatMap((s) => [s.bgImage?.path, s.bgImage?.pdfPath]).filter(Boolean);
+}
+
+// A copy of `bg` using freshly signed links where `links` has them.
+function withFreshLinks(bg, links) {
+  if (!bg || !links || !links.size) return bg;
+  const src = bg.path ? links.get(bg.path) : null;
+  const pdfSrc = bg.pdfPath ? links.get(bg.pdfPath) : null;
+  if (!src && !pdfSrc) return bg;
+  return { ...bg, ...(src ? { src } : {}), ...(pdfSrc ? { pdfSrc } : {}) };
+}
+
 export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1, DRAW, onClose, onPrint }) {
   const { meta, notes } = project;
-  const sheets = project.sheets && project.sheets.length
+  const projectSheets = project.sheets && project.sheets.length
     ? project.sheets
     : [{ id: "legacy", name: meta.sheetName, drawingNumber: meta.drawingNumber,
          bgImage: project.bgImage, placed: project.placed || [], wires: project.wires || [], annotations: project.annotations || [] }];
+
+  // Renewed plan links (see withFreshLinks). null until a renewal is needed.
+  const [freshLinks, setFreshLinks] = useState(null);
+  const renewedOnError = useRef(false);
+  const sheets = useMemo(
+    () => projectSheets.map((s) => (s.bgImage ? { ...s, bgImage: withFreshLinks(s.bgImage, freshLinks) } : s)),
+    [projectSheets, freshLinks]
+  );
+  // A plan image failed to load -- almost always an expired link. Renew once
+  // per preview; a plan that still fails after that is genuinely unavailable.
+  const onPlanError = () => {
+    if (renewedOnError.current) return;
+    renewedOnError.current = true;
+    signPlanImages(planPaths(projectSheets)).then((links) => { if (links.size) setFreshLinks(links); });
+  };
 
   const [mounted, setMounted] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
@@ -2931,6 +2964,11 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
       // the iOS canvas cap.
       const shotScale = isTouchDevice() ? 2 : 3;
 
+      // Fresh plan links for this export, so a drawing opened more than a
+      // signed link's lifetime ago still exports its plan. signPlanImages
+      // never throws; any path it can't sign keeps the link it already had.
+      const exportLinks = await signPlanImages(planPaths(sheets));
+
       const out = await PDFDocument.create();
 
       // Embedded ONCE for the whole document, not per symbol. The symbol
@@ -2941,7 +2979,7 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
 
       for (let i = 0; i < pageEls.length; i++) {
         const el = pageEls[i];
-        const bg = (sheets[i] && sheets[i].bgImage) || null;
+        const bg = withFreshLinks((sheets[i] && sheets[i].bgImage) || null, exportLinks);
         const page = out.addPage([PAGE_W, PAGE_H]);
 
         // 1. Vector plan underlay — only if we still hold the source PDF.
@@ -3171,6 +3209,7 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
                 colourMode={colourMode}
                 symbolScale={typeof s.symbolScale === "number" ? s.symbolScale : symbolScale}
                 DRAW={DRAW}
+                onPlanError={onPlanError}
               />
             </div>
           ))}
@@ -3222,7 +3261,7 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
 }
 
 // A non-interactive version of the Sheet used by Print Preview.
-function PrintSheet({ meta, notes, bgImage, placed, wires, annotations, legendItems, colourMode, symbolScale = 1, DRAW }) {
+function PrintSheet({ meta, notes, bgImage, placed, wires, annotations, legendItems, colourMode, symbolScale = 1, DRAW, onPlanError }) {
   return (
     <div style={{
       width: SHEET.width, height: SHEET.height,
@@ -3245,6 +3284,7 @@ function PrintSheet({ meta, notes, bgImage, placed, wires, annotations, legendIt
         placed={placed} wires={wires} annotations={annotations}
         colourMode={colourMode}
         symbolScale={symbolScale}
+        onPlanError={onPlanError}
       />
       <TitleBlockStatic meta={meta} />
     </div>
@@ -3308,7 +3348,7 @@ function NotesColumnStatic({ notes }) {
   );
 }
 
-function DrawingAreaStatic({ DRAW, bgImage, placed, wires, annotations, colourMode, symbolScale = 1 }) {
+function DrawingAreaStatic({ DRAW, bgImage, placed, wires, annotations, colourMode, symbolScale = 1, onPlanError }) {
   const imageDisplay = useMemo(
     () => (bgImage ? planFootprint(DRAW, bgImage.w, bgImage.h) : null),
     [bgImage, DRAW.w, DRAW.h]
@@ -3321,7 +3361,7 @@ function DrawingAreaStatic({ DRAW, bgImage, placed, wires, annotations, colourMo
       background: "#ffffff", border: "1px solid #0a0a0a", overflow: "hidden",
     }}>
       {bgImage && imageDisplay && (
-        <img src={bgImage.src} alt="plan"
+        <img src={bgImage.src} alt="plan" onError={onPlanError}
              style={{
                position: "absolute",
                left: imageDisplay.x, top: imageDisplay.y,
