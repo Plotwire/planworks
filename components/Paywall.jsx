@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import { startCheckout } from "@/lib/billingClient";
+import { TRIAL_DAYS } from "@/lib/pricing";
 
 const FEATURES = [
   "Unlimited plans & quotes",
@@ -44,11 +45,11 @@ export default function Paywall({ user, onSignOut, onManageBilling, hasLapsed = 
       <main className="pay-main">
         <div className="pay-intro">
           <div className="eyebrow">{hasLapsed ? "Welcome back" : "Subscribe to continue"}</div>
-          <h1>{hasLapsed ? "Pick up where you left off" : "Start your 14-day free trial"}</h1>
+          <h1>{hasLapsed ? "Pick up where you left off" : `Start your ${TRIAL_DAYS}-day free trial`}</h1>
           <p className="lede">
             {hasLapsed
               ? "Your subscription isn't active. Re-subscribe to carry on — your drawings are safe."
-              : "Full access while you trial. We'll take your card now, but won't charge until day 14 — cancel any time before then."}
+              : `Full access while you trial. We'll take your card now, but won't charge until day ${TRIAL_DAYS} — cancel any time before then.`}
           </p>
         </div>
 
@@ -74,7 +75,7 @@ export default function Paywall({ user, onSignOut, onManageBilling, hasLapsed = 
             {busy ? "Redirecting…" : (hasLapsed ? "Re-subscribe" : "Start free trial")}
           </button>
           <div className="reassure">
-            <span>14-day free trial</span><i /><span>Cancel anytime</span>
+            <span>{TRIAL_DAYS}-day free trial</span><i /><span>Cancel anytime</span>
           </div>
         </div>
 
