@@ -366,6 +366,33 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const planUploadsRef = useRef(new Map());
   const [finishingUpload, setFinishingUpload] = useState(false);
 
+  // While any save runs, the editor is blocked: a full-screen layer takes
+  // every click and a capture listener every key. A save can wait on a plan
+  // upload for a while, and edits, a second save, or opening another project
+  // during that wait are what went wrong (lost edits, duplicate rows, a new
+  // row bound to the wrong project). The layer only becomes visible if the
+  // save takes more than a moment, so an ordinary quick save doesn't flash.
+  const [saveBlock, setSaveBlock] = useState({ active: false, visible: false });
+  const activeSavesRef = useRef(0);
+  const trackSave = useCallback(async (save) => {
+    activeSavesRef.current += 1;
+    setSaveBlock(b => (b.active ? b : { active: true, visible: false }));
+    const showTimer = setTimeout(() => setSaveBlock(b => (b.active ? { active: true, visible: true } : b)), 300);
+    try {
+      return await save();
+    } finally {
+      clearTimeout(showTimer);
+      activeSavesRef.current -= 1;
+      if (activeSavesRef.current === 0) setSaveBlock({ active: false, visible: false });
+    }
+  }, []);
+  useEffect(() => {
+    if (!saveBlock.active) return;
+    const swallow = (e) => { e.preventDefault(); e.stopPropagation(); };
+    window.addEventListener("keydown", swallow, true);
+    return () => window.removeEventListener("keydown", swallow, true);
+  }, [saveBlock.active]);
+
   // The single way a project is made ready to persist.
   const readyToSave = useCallback(async (p) => {
     const pending = [...planUploadsRef.current.entries()];
@@ -550,20 +577,24 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       return updated;
     });
     if (currentProjectIdRef.current && updated) {
-      try {
-        const safe = await readyToSave(updated);
-        await updateProjectRow(currentProjectIdRef.current, updated.meta?.projectName || "Untitled drawing", safe);
-        setProject(prev => mergeSavedPaths(prev, safe));
-        // Same confirmation the Save button gives, so the rename visibly sticks.
-        setSavedFlash(true);
-        setTimeout(() => setSavedFlash(false), 1500);
-      } catch (err) {
-        // Keep the new name on screen -- it is still in state and goes up with
-        // the next Save; only the immediate write failed.
-        console.error("Rename save failed:", err);
-      }
+      await runSave(async () => {
+        try {
+          const safe = await readyToSave(updated);
+          await updateProjectRow(currentProjectIdRef.current, updated.meta?.projectName || "Untitled drawing", safe);
+          setProject(prev => mergeSavedPaths(prev, safe));
+          // Same confirmation the Save button gives, so the rename visibly sticks.
+          setSavedFlash(true);
+          setTimeout(() => setSavedFlash(false), 1500);
+          return true;
+        } catch (err) {
+          // Keep the new name on screen -- it is still in state and goes up with
+          // the next Save; only the immediate write failed.
+          console.error("Rename save failed:", err);
+          return false;
+        }
+      });
     }
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- runSave only touches refs
 
   const deleteSheet = useCallback((id) => {
     setProject(p => {
@@ -1443,16 +1474,13 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   }, [currentProjectId]);
 
   // Quick-save: writes to the currently open project, or creates one if new.
-  // One save at a time. A save can wait a while on a plan upload, and a second
-  // Save / Ctrl+S / Save As in that window would otherwise insert a duplicate
-  // drawing (sharing the first one's stored plan). A save requested while one
-  // is running gets that save's result instead of starting another.
+  // One save at a time. The editor is blocked while a save runs (trackSave),
+  // so this is a safety net for programmatic calls: a save requested while one
+  // is running gets that save's result instead of inserting a duplicate row.
   const saveInFlightRef = useRef(null);
   const runSave = (save) => {
     if (saveInFlightRef.current) return saveInFlightRef.current;
-    const running = (async () => {
-      try { return await save(); } finally { saveInFlightRef.current = null; }
-    })();
+    const running = trackSave(save).finally(() => { saveInFlightRef.current = null; });
     saveInFlightRef.current = running;
     return running;
   };
@@ -1486,11 +1514,17 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     });
     setFloorPlanOpen(false);
     if (currentProjectIdRef.current && updated) {
-      try {
-        const safe = await readyToSave(updated);
-        await updateProjectRow(currentProjectIdRef.current, updated.meta?.projectName || "Untitled drawing", safe);
-        setProject(prev => mergeSavedPaths(prev, safe));
-      } catch (err) { console.error("Floor plan save failed:", err); }
+      await runSave(async () => {
+        try {
+          const safe = await readyToSave(updated);
+          await updateProjectRow(currentProjectIdRef.current, updated.meta?.projectName || "Untitled drawing", safe);
+          setProject(prev => mergeSavedPaths(prev, safe));
+          return true;
+        } catch (err) {
+          console.error("Floor plan save failed:", err);
+          return false;
+        }
+      });
     }
   };
 
@@ -1700,6 +1734,21 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     <div className="w-full h-screen flex flex-col bg-slate-100 text-slate-900 dark:bg-[#0E141B] dark:text-slate-100 overflow-hidden select-none"
          style={{ height: "100dvh", fontFamily: "'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif" }}>
 
+      {/* ==================== SAVE BLOCKER (see trackSave) ==================== */}
+      {saveBlock.active && (
+        <div aria-busy="true"
+             className={`fixed inset-0 z-[100] flex items-center justify-center ${saveBlock.visible ? "bg-slate-900/30 backdrop-blur-sm" : ""}`}>
+          {saveBlock.visible && (
+            <div className="bg-white px-8 py-5 rounded-xl ring-1 ring-slate-300 flex items-center gap-3">
+              <Sparkles size={16} className="text-[#22808F] animate-pulse"/>
+              <span className="text-xs tracking-[0.2em] uppercase text-slate-800">
+                {finishingUpload ? "Finishing plan upload" : "Saving"}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ==================== TOP BAR ==================== */}
       <TopBar
         meta={meta}
@@ -1886,16 +1935,6 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
               <div className="bg-white px-8 py-5 rounded-xl ring-1 ring-slate-300 flex items-center gap-3">
                 <Sparkles size={16} className="text-[#22808F] animate-pulse"/>
                 <span className="text-xs tracking-[0.2em] uppercase text-slate-800">Rendering PDF</span>
-              </div>
-            </div>
-          )}
-
-          {/* Save waiting on a plan upload (see readyToSave) */}
-          {finishingUpload && (
-            <div className="absolute inset-0 z-30 bg-slate-900/30 backdrop-blur-sm flex items-center justify-center">
-              <div className="bg-white px-8 py-5 rounded-xl ring-1 ring-slate-300 flex items-center gap-3">
-                <Sparkles size={16} className="text-[#22808F] animate-pulse"/>
-                <span className="text-xs tracking-[0.2em] uppercase text-slate-800">Finishing plan upload</span>
               </div>
             </div>
           )}
