@@ -2766,6 +2766,36 @@ async function sniffImageKind(blob) {
   return null;
 }
 
+// EXIF orientation of a JPEG: 1 (upright) when the tag is absent, 2-8 when
+// present, 0 when the headers can't be read. Browsers apply this tag when they
+// show the photo, and bg.w/h were measured that way; pdf-lib embeds the bytes
+// as stored and ignores it. So only an upright JPEG may skip the canvas path.
+async function jpegOrientation(blob) {
+  try {
+    const v = new DataView(await blob.slice(0, 65536).arrayBuffer());
+    let off = 2; // past the SOI marker
+    while (off + 4 <= v.byteLength) {
+      const marker = v.getUint16(off);
+      if ((marker & 0xff00) !== 0xff00 || marker === 0xffda) break; // start of scan: no more headers
+      if (marker === 0xffe1 && v.getUint32(off + 4) === 0x45786966) { // APP1 "Exif"
+        const tiff = off + 10;
+        const little = v.getUint16(tiff) === 0x4949; // "II"
+        const ifd = tiff + v.getUint32(tiff + 4, little);
+        const count = v.getUint16(ifd, little);
+        for (let i = 0; i < count; i++) {
+          const entry = ifd + 2 + i * 12;
+          if (v.getUint16(entry, little) === 0x0112) return v.getUint16(entry + 8, little);
+        }
+        return 1;
+      }
+      off += 2 + v.getUint16(off + 2);
+    }
+    return 1;
+  } catch {
+    return 0; // unreadable headers: let the browser decode it
+  }
+}
+
 function loadImageElement(url) {
   // onload rather than decode(): decode() never resolves in a background tab.
   return new Promise((resolve, reject) => {
@@ -2786,6 +2816,15 @@ function canvasToBytes(canvas, type, quality) {
   });
 }
 
+// pdf-lib keeps a PNG's decoded pixels until save() unless the image is
+// embedded straight away; doing it per sheet keeps a long export's memory flat
+// on iPad. Output is identical.
+async function embedNow(imagePromise) {
+  const image = await imagePromise;
+  await image.embed();
+  return image;
+}
+
 // Embed the stored plan image in `pdf`, at no more than the export cap for a
 // plan box `widthIn` inches wide. Returns the pdf-lib image.
 async function embedStoredPlan(pdf, src, w, h, widthIn) {
@@ -2802,13 +2841,21 @@ async function embedStoredPlan(pdf, src, w, h, widthIn) {
   );
 
   // Already within the cap: embed the stored bytes as they are. Lossless, and
-  // pdf-lib passes JPEG data straight through without decoding it.
-  if (scale >= 1 && kind) {
+  // pdf-lib passes JPEG data straight through without decoding it -- so only
+  // an upright JPEG qualifies (see jpegOrientation). A PNG is decoded in JS by
+  // pdf-lib, so on touch devices it takes the canvas path and becomes a JPEG,
+  // the importer's rule for keeping iPad memory down.
+  const passThrough = scale >= 1 && (
+    (kind === "jpeg" && (await jpegOrientation(blob)) === 1) ||
+    (kind === "png" && !touch)
+  );
+  if (passThrough) {
     const bytes = new Uint8Array(await blob.arrayBuffer());
-    return kind === "png" ? pdf.embedPng(bytes) : pdf.embedJpg(bytes);
+    return embedNow(kind === "png" ? pdf.embedPng(bytes) : pdf.embedJpg(bytes));
   }
 
-  // Too big, or a format pdf-lib can't embed (WebP, GIF): resample to the cap.
+  // Too big, a rotated photo, a PNG on touch, or a format pdf-lib can't embed
+  // (WebP, GIF): let the browser decode it, and resample to the cap.
   // Loaded from a local object URL of the fetched bytes, so the canvas is never
   // tainted by the cross-origin signed link.
   const url = URL.createObjectURL(blob);
@@ -2827,7 +2874,7 @@ async function embedStoredPlan(pdf, src, w, h, widthIn) {
     // keeps memory and file size down on touch devices and for photos.
     const asPng = kind === "png" && !touch;
     const bytes = await canvasToBytes(canvas, asPng ? "image/png" : "image/jpeg", asPng ? undefined : 0.9);
-    return await (asPng ? pdf.embedPng(bytes) : pdf.embedJpg(bytes));
+    return await embedNow(asPng ? pdf.embedPng(bytes) : pdf.embedJpg(bytes));
   } finally {
     if (canvas) canvas.width = canvas.height = 0; // release before html2canvas runs
     URL.revokeObjectURL(url);
@@ -3097,7 +3144,7 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
           saved.forEach(([node, prop, val]) => { node.style[prop] = val || ""; });
         }
 
-        const png = await out.embedPng(overlayCanvas.toDataURL("image/png"));
+        const png = await embedNow(out.embedPng(overlayCanvas.toDataURL("image/png")));
         page.drawImage(png, { x: 0, y: 0, width: PAGE_W, height: PAGE_H });
 
         // Draw the symbols on top, as vector, exactly where they sit on screen.
