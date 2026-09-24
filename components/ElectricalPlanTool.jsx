@@ -399,9 +399,14 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   // The single way a project is made ready to persist.
   const readyToSave = useCallback(async (p) => {
     // Retry, in the background, any original PDF whose upload failed earlier.
+    // Not for a sheet whose raster is still uploading: the import starts the
+    // PDF itself once the raster is stored, and starting it now would only
+    // slow down the raster this save is about to wait for.
     (p?.sheets || []).forEach(s => {
       const bg = s.bgImage;
-      if (bg && !bg.pdfPath && isBlobUrl(bg.pdfSrc)) storeOriginalPdf(s.id, bg.pdfSrc);
+      if (bg && !bg.pdfPath && isBlobUrl(bg.pdfSrc) && !planUploadsRef.current.has(s.id)) {
+        storeOriginalPdf(s.id, bg.pdfSrc);
+      }
     });
     const pending = [...planUploadsRef.current.entries()];
     if (pending.length) {
@@ -1585,9 +1590,6 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   };
 
   const openProjectById = async (id) => {
-    // Bumped when the open starts AND when it lands, so a save asked for in
-    // between never binds to or merges into the drawing that arrives.
-    loadGenRef.current += 1;
     try {
       const data = await getProjectData(id);
       if (!data) { alert("Could not find that project."); return; }
@@ -1596,6 +1598,9 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       const hydrated = await hydrateImages(np);
       // Always open on the first drawing (ground floor), regardless of which
       // sheet was active when the project was last saved.
+      // Bumped only when the project actually arrives: a save asked for before
+      // this never binds to or merges into it, while a save that finishes
+      // first -- or an open that fails -- still binds to the drawing on screen.
       loadGenRef.current += 1;
       setProject({ ...hydrated, activeSheetId: hydrated.sheets[0].id });
       setCurrentProjectId(id);
@@ -1965,7 +1970,10 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
 
           {/* A save waiting on a plan upload (see readyToSave) */}
           {finishingUpload && (
-            <div className="absolute inset-0 z-30 bg-slate-900/30 backdrop-blur-sm flex items-center justify-center">
+            // Swallows file drops too: it sits over the drawing area's own drop
+            // handler, and an unhandled drop makes the browser open the file.
+            <div className="absolute inset-0 z-30 bg-slate-900/30 backdrop-blur-sm flex items-center justify-center"
+                 onDragOver={e => e.preventDefault()} onDrop={e => e.preventDefault()}>
               <div className="bg-white px-8 py-5 rounded-xl ring-1 ring-slate-300 flex items-center gap-3">
                 <Sparkles size={16} className="text-[#22808F] animate-pulse"/>
                 <span className="text-xs tracking-[0.2em] uppercase text-slate-800">Finishing plan upload</span>
