@@ -13,6 +13,14 @@ export default function TermsGate({ user, onAccept, onSignOut, error = "" }) {
   const [agreed, setAgreed] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [logoutError, setLogoutError] = useState("");
+
+  // onSignOut resolves to "" on success, or a message if it didn't go through.
+  const logOut = async () => {
+    setLogoutError("");
+    const message = await onSignOut();
+    if (message) setLogoutError(message);
+  };
 
   const accept = async (e) => {
     e.preventDefault();
@@ -39,14 +47,14 @@ export default function TermsGate({ user, onAccept, onSignOut, error = "" }) {
           disabled={busy}
         />
 
-        {error && <div className="err" role="alert">{error}</div>}
+        {(error || logoutError) && <div className="err" role="alert">{logoutError || error}</div>}
 
         <button type="submit" className="submit" disabled={!agreed || !acknowledged || busy}>
           {busy ? "Saving…" : "Accept and continue"}
         </button>
 
         <div className="alt">
-          <button type="button" onClick={onSignOut}>
+          <button type="button" onClick={logOut}>
             {user?.email ? `Log out (${user.email})` : "Log out"}
           </button>
         </div>

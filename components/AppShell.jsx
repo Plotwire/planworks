@@ -108,56 +108,75 @@ export default function AppShell({ children }) {
   }, []);
 
   // ---- Terms acceptance (before the paywall and the app) --------------------
-  // "unknown" while checking, "needed" shows the acceptance page, "ok" lets the
-  // user on. Checked once per signed-in user, not on every token refresh. Any
-  // failure keeps the user on the acceptance page, never lets them through.
-  // See lib/termsAcceptance.js.
-  const [termsStep, setTermsStep] = useState("unknown");
-  const [termsError, setTermsError] = useState("");
+  // step: "unknown" while checking, "needed" shows the acceptance page, "ok"
+  // lets the user on. Checked once per signed-in user, not on every token
+  // refresh. Any failure keeps the user on the acceptance page, never lets
+  // them through. See lib/termsAcceptance.js.
+  //
+  // The state carries the user id it belongs to, and a result only lands if
+  // it is still for that user: a slow check or accept for one account can
+  // never let another account (signed in since, on the same device) through.
+  const [terms, setTerms] = useState({ uid: null, step: "unknown", error: "" });
   const sessionUserId = session?.user?.id || null;
+  const termsStep = terms.uid === sessionUserId ? terms.step : "unknown";
+  const termsError = terms.uid === sessionUserId ? terms.error : "";
+  const setTermsFor = useCallback(
+    (uid, patch) => setTerms(t => (t.uid === uid ? { ...t, ...patch } : t)),
+    []
+  );
+
   useEffect(() => {
     const user = session?.user;
-    setTermsError("");
-    if (!user) { setTermsStep("unknown"); return; }
-    let active = true;
-    setTermsStep("unknown");
+    setTerms({ uid: user?.id || null, step: "unknown", error: "" });
+    if (!user) return;
     (async () => {
       try {
-        if (await hasAcceptedCurrentTerms(user.id)) { if (active) setTermsStep("ok"); return; }
+        if (await hasAcceptedCurrentTerms(user.id)) { setTermsFor(user.id, { step: "ok" }); return; }
         // Accepted on the sign-up form, before there was a session to record
         // it with (email confirmation): record it now, on the first sign-in.
         if (acceptedAtSignup(user)) {
           await recordTermsAcceptance(user.id);
-          if (active) setTermsStep("ok");
+          setTermsFor(user.id, { step: "ok" });
           return;
         }
-        if (active) setTermsStep("needed");
+        setTermsFor(user.id, { step: "needed" });
       } catch (err) {
         console.warn("terms acceptance check failed:", err?.message);
-        if (active) {
-          setTermsError("We couldn't confirm that you've accepted the current terms. Tick both boxes and try again.");
-          setTermsStep("needed");
-        }
+        setTermsFor(user.id, {
+          step: "needed",
+          error: "We couldn't confirm that you've accepted the current terms. Tick both boxes and try again.",
+        });
       }
     })();
-    return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per user, not per token refresh
   }, [sessionUserId]);
 
   const acceptTerms = useCallback(async () => {
-    if (!sessionUserId) return;
-    setTermsError("");
+    const uid = sessionUserId;
+    if (!uid) return;
+    setTermsFor(uid, { error: "" });
     try {
-      await recordTermsAcceptance(sessionUserId);
-      setTermsStep("ok");
+      await recordTermsAcceptance(uid);
+      setTermsFor(uid, { step: "ok" });
     } catch (err) {
       console.warn("terms acceptance save failed:", err?.message);
-      setTermsError("Your acceptance couldn't be saved, so you can't continue yet. Check your connection and try again.");
+      setTermsFor(uid, { error: "Your acceptance couldn't be saved, so you can't continue yet. Check your connection and try again." });
     }
-  }, [sessionUserId]);
+  }, [sessionUserId, setTermsFor]);
 
   const toggleTheme = useCallback(() => setTheme(t => (t === "dark" ? "light" : "dark")), []);
-  const signOut = useCallback(async () => { try { await supabase?.auth.signOut(); } catch {} }, []);
+  // Resolves to "" when signed out, or a message when it didn't go through
+  // (e.g. offline: Supabase keeps the session until it can reach the server).
+  // Callers that don't show messages can ignore it.
+  const signOut = useCallback(async () => {
+    const failed = "Couldn't log out. Check your connection and try again.";
+    try {
+      const { error } = (await supabase?.auth.signOut()) || {};
+      return error ? failed : "";
+    } catch {
+      return failed;
+    }
+  }, []);
 
   // Open the Stripe Customer Portal (change plan / card / cancel).
   const manageBilling = useCallback(async () => {
