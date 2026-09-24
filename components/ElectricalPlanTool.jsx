@@ -7,7 +7,7 @@ import {
   Palette, Ruler, Hand, Sparkles, Type, Printer, Settings,
   ChevronRight, X, FileText, Eye, EyeOff, Layers,
 } from "lucide-react";
-import { listProjects, getProjectData, insertProject, updateProjectRow, deleteProjectRow } from "@/lib/db";
+import { listProjects, getProjectData, insertProject, updateProjectRow, deleteProjectRow, unreferencedPlanPaths } from "@/lib/db";
 import { uploadPlanImage, signPlanImages, deletePlanImages, dataUrlToBlob, blobToDataUrl } from "@/lib/planImages";
 import { ensurePdfjs } from "@/lib/pdfjs";
 import {
@@ -1612,14 +1612,20 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
 
   const deleteProjectById = async (id) => {
     try {
-      // Best-effort: clear the project's Storage images before dropping the row.
+      // Note the project's stored files before its row goes.
       let paths = [];
       try {
         const data = await getProjectData(id);
         if (data) paths = collectImagePaths(normaliseProject(data));
       } catch { /* still delete the row even if we can't read it */ }
       await deleteProjectRow(id);
-      if (paths.length) deletePlanImages(paths);
+      // Best effort, not awaited: remove only the files nothing still uses --
+      // no other drawing (a Save As copy shares its source's files), and not
+      // the canvas, which keeps showing a deleted open drawing and can save it
+      // again.
+      const onCanvas = new Set(collectImagePaths(projectRef.current));
+      const candidates = paths.filter(path => !onCanvas.has(path));
+      if (candidates.length) unreferencedPlanPaths(candidates).then(deletePlanImages);
       await refreshProjectList();
       if (currentProjectId === id) setCurrentProjectId(null);
     } catch (err) {
