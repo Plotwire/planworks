@@ -14,6 +14,8 @@ import { DEFAULT_TITLEBLOCK, normaliseTitleBlock, companyProfileToTitleBlock, me
 import { useSubscription } from "@/lib/useSubscription";
 import { openBillingPortal } from "@/lib/billingClient";
 import { LEGAL_LINKS } from "@/lib/legal";
+import TermsGate from "@/components/TermsGate";
+import { hasAcceptedCurrentTerms, recordTermsAcceptance, acceptedAtSignup } from "@/lib/termsAcceptance";
 
 const AppCtx = createContext(null);
 export const useApp = () => useContext(AppCtx) || {};
@@ -104,6 +106,55 @@ export default function AppShell({ children }) {
     });
     return () => { active = false; sub?.subscription?.unsubscribe(); };
   }, []);
+
+  // ---- Terms acceptance (before the paywall and the app) --------------------
+  // "unknown" while checking, "needed" shows the acceptance page, "ok" lets the
+  // user on. Checked once per signed-in user, not on every token refresh. Any
+  // failure keeps the user on the acceptance page, never lets them through.
+  // See lib/termsAcceptance.js.
+  const [termsStep, setTermsStep] = useState("unknown");
+  const [termsError, setTermsError] = useState("");
+  const sessionUserId = session?.user?.id || null;
+  useEffect(() => {
+    const user = session?.user;
+    setTermsError("");
+    if (!user) { setTermsStep("unknown"); return; }
+    let active = true;
+    setTermsStep("unknown");
+    (async () => {
+      try {
+        if (await hasAcceptedCurrentTerms(user.id)) { if (active) setTermsStep("ok"); return; }
+        // Accepted on the sign-up form, before there was a session to record
+        // it with (email confirmation): record it now, on the first sign-in.
+        if (acceptedAtSignup(user)) {
+          await recordTermsAcceptance(user.id);
+          if (active) setTermsStep("ok");
+          return;
+        }
+        if (active) setTermsStep("needed");
+      } catch (err) {
+        console.warn("terms acceptance check failed:", err?.message);
+        if (active) {
+          setTermsError("We couldn't confirm that you've accepted the current terms. Tick both boxes and try again.");
+          setTermsStep("needed");
+        }
+      }
+    })();
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per user, not per token refresh
+  }, [sessionUserId]);
+
+  const acceptTerms = useCallback(async () => {
+    if (!sessionUserId) return;
+    setTermsError("");
+    try {
+      await recordTermsAcceptance(sessionUserId);
+      setTermsStep("ok");
+    } catch (err) {
+      console.warn("terms acceptance save failed:", err?.message);
+      setTermsError("Your acceptance couldn't be saved, so you can't continue yet. Check your connection and try again.");
+    }
+  }, [sessionUserId]);
 
   const toggleTheme = useCallback(() => setTheme(t => (t === "dark" ? "light" : "dark")), []);
   const signOut = useCallback(async () => { try { await supabase?.auth.signOut(); } catch {} }, []);
@@ -224,7 +275,13 @@ export default function AppShell({ children }) {
     return <LoginScreen />;
   }
 
-  // Signed in — enforce billing access only when billing is switched on.
+  // Signed in — the terms come first, before the paywall and everything else.
+  if (termsStep === "unknown") return <Splash />;
+  if (termsStep === "needed") {
+    return <TermsGate user={session?.user || null} onAccept={acceptTerms} onSignOut={signOut} error={termsError} />;
+  }
+
+  // Then billing access, enforced only when billing is switched on.
   if (BILLING_ENABLED) {
     if (subscription.loading) return <Splash />;
     if (activating && !subscription.isActive) return <Splash label="Activating your subscription…" />;

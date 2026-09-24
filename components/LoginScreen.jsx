@@ -78,7 +78,7 @@ export default function LoginScreen({ recovery = false, onRecovered }) {
   // ---- Recovery: user arrived via the reset link, set a new password ----
   if (recovery) {
     return (
-      <Frame>
+      <AuthFrame>
         {resetDone ? (
           <div className="login-card">
             <div className="check-badge" aria-hidden>
@@ -113,7 +113,7 @@ export default function LoginScreen({ recovery = false, onRecovered }) {
             </button>
           </form>
         )}
-      </Frame>
+      </AuthFrame>
     );
   }
 
@@ -121,7 +121,7 @@ export default function LoginScreen({ recovery = false, onRecovered }) {
   if (sentTo) {
     const isReset = sentKind === "reset";
     return (
-      <Frame>
+      <AuthFrame>
         <div className="login-card">
           <div className="check-badge" aria-hidden>
             <svg viewBox="0 0 24 24" fill="none"><path d="M4 13l5 5L20 7" stroke="#22808F" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
@@ -137,7 +137,7 @@ export default function LoginScreen({ recovery = false, onRecovered }) {
           </button>
           <p className="note">No email after a minute? Check spam, or try again.</p>
         </div>
-      </Frame>
+      </AuthFrame>
     );
   }
 
@@ -145,7 +145,7 @@ export default function LoginScreen({ recovery = false, onRecovered }) {
   const onSubmit = mode === "signin" ? signIn : mode === "signup" ? signUp : sendReset;
 
   return (
-    <Frame>
+    <AuthFrame>
       <form className="login-card" onSubmit={onSubmit}>
         <h1>
           {mode === "signin" ? "Sign in" : mode === "signup" ? "Create your account" : "Reset your password"}
@@ -224,11 +224,13 @@ export default function LoginScreen({ recovery = false, onRecovered }) {
           <div className="note">The cloud connection isn't set up yet — check the environment variables.</div>
         )}
       </form>
-    </Frame>
+    </AuthFrame>
   );
 }
 
-function Frame({ children }) {
+// The sign-in page layout (brand rail + card), shared with the terms acceptance
+// page (components/TermsGate.jsx).
+export function AuthFrame({ children }) {
   return (
     <div className="login-root">
       <style>{CSS}</style>
@@ -276,6 +278,11 @@ const CSS = `
 .alt button{background:none; border:none; padding:0; font:inherit; color:#22808F; font-weight:600; cursor:pointer}
 .alt button:hover{color:#3FB7C9; text-decoration:underline}
 .note{margin-top:16px; font-size:12.5px; color:#9AA6B2; text-align:center; line-height:1.5}
+.consent{display:flex; flex-direction:column; gap:12px; margin:4px 0 18px}
+.consent-row{display:flex; gap:10px; align-items:flex-start; font-size:13px; line-height:1.5; color:#3A4654; cursor:pointer}
+.consent-row input{flex:none; width:18px; height:18px; margin-top:1px; accent-color:#22808F; cursor:pointer}
+.consent-row a,.inline-link{color:#22808F; font-weight:500; text-decoration:underline}
+.consent-row a:hover,.inline-link:hover{color:#3FB7C9}
 .check-badge{width:52px; height:52px; border-radius:14px; background:#ECF8FA; display:grid; place-items:center; margin-bottom:18px}
 .check-badge svg{width:28px; height:28px}
 @media (max-width:760px){.login-rail{display:none}}
