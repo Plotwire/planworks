@@ -195,6 +195,21 @@ async function hydrateImages(p) {
   };
 }
 
+// If a sheet's original PDF exists only as a blob: link in this tab (its
+// background upload failed), store it now so the plan can still export as
+// vector. Best effort: the raster plan is what must not be lost.
+async function storeTabOnlyPdf(bg) {
+  if (bg.pdfPath || typeof bg.pdfSrc !== "string" || !bg.pdfSrc.startsWith("blob:")) return {};
+  try {
+    const pdf = await (await fetch(bg.pdfSrc)).blob();
+    const { path: pdfPath } = await uploadPlanImage(pdf);
+    return { pdfPath, pdfPage: bg.pdfPage || 1 };
+  } catch (err) {
+    console.warn("original PDF store on save failed (plan kept as image):", err?.message);
+    return {};
+  }
+}
+
 // Make a project safe to persist: migrate any legacy base64 image into Storage,
 // then drop transient src. Returns the persist-ready project.
 async function prepareProjectForSave(p) {
@@ -205,15 +220,25 @@ async function prepareProjectForSave(p) {
     if (typeof bg.src === "string" && bg.src.startsWith("data:")) {
       try {
         const { path } = await uploadPlanImage(dataUrlToBlob(bg.src));
-        return { ...s, bgImage: { path, w: bg.w, h: bg.h } };
+        return { ...s, bgImage: { path, w: bg.w, h: bg.h, ...(await storeTabOnlyPdf(bg)) } };
       } catch (err) {
         console.warn("image migrate-on-save failed; keeping inline:", err?.message);
         return s; // keep base64 rather than lose the plan
       }
     }
-    // A blob: URL with no path can't be persisted — drop it (shouldn't occur).
+    // A blob: URL with no path means the background upload never succeeded (the
+    // caller has already waited for it). The blob is still readable in this
+    // tab, so store it now. If even that fails, refuse the save: storing the
+    // drawing without its plan would lose the plan for good on reopen.
     if (typeof bg.src === "string" && bg.src.startsWith("blob:")) {
-      const { src, ...rest } = bg; return { ...s, bgImage: rest };
+      try {
+        const blob = await (await fetch(bg.src)).blob();
+        const { path } = await uploadPlanImage(blob);
+        return { ...s, bgImage: { path, w: bg.w, h: bg.h, ...(await storeTabOnlyPdf(bg)) } };
+      } catch (err) {
+        console.warn("plan upload on save failed:", err?.message);
+        throw new Error("The plan image couldn't be stored, so the drawing wasn't saved. Check your connection and try again.");
+      }
     }
     return s;
   }));
@@ -229,7 +254,8 @@ function mergeSavedPaths(current, safe) {
     sheets: (current?.sheets || []).map(s => {
       const safeBg = byId.get(s.id);
       if (safeBg && safeBg.path && s.bgImage && !s.bgImage.path) {
-        return { ...s, bgImage: { ...s.bgImage, path: safeBg.path } };
+        const pdf = safeBg.pdfPath && !s.bgImage.pdfPath ? { pdfPath: safeBg.pdfPath, pdfPage: safeBg.pdfPage } : {};
+        return { ...s, bgImage: { ...s.bgImage, path: safeBg.path, ...pdf } };
       }
       return s;
     }),
@@ -308,6 +334,41 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   // the sheet they started on, not whichever is active when they finish).
   const patchSheetById = useCallback((id, patch) => {
     setProject(p => ({ ...p, sheets: p.sheets.map(s => s.id === id ? { ...s, ...patch } : s) }));
+  }, []);
+
+  // Plan uploads still in flight, by sheet id: { displayUrl, done }, where
+  // `done` resolves to the bgImage the upload settled on (null if it failed).
+  // Every save waits on these first, so a drawing saved straight after an
+  // import still carries its plan's stored path instead of a blob: link that
+  // dies with the tab.
+  const planUploadsRef = useRef(new Map());
+  const [finishingUpload, setFinishingUpload] = useState(false);
+
+  // The single way a project is made ready to persist.
+  const readyToSave = useCallback(async (p) => {
+    const pending = [...planUploadsRef.current.entries()];
+    if (pending.length) {
+      setFinishingUpload(true);
+      try {
+        const settled = new Map(await Promise.all(
+          pending.map(async ([sheetId, upload]) => [sheetId, { upload, bg: await upload.done }])
+        ));
+        p = {
+          ...p,
+          sheets: (p.sheets || []).map(s => {
+            const r = settled.get(s.id);
+            // Only where this snapshot still shows the plan that was uploading.
+            if (r && r.bg && s.bgImage && s.bgImage.src === r.upload.displayUrl) {
+              return { ...s, bgImage: r.bg };
+            }
+            return s;
+          }),
+        };
+      } finally {
+        setFinishingUpload(false);
+      }
+    }
+    return prepareProjectForSave(p);
   }, []);
   const updateBoq = useCallback((boq) => {
     setProject(p => ({ ...p, boq }));
@@ -468,7 +529,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     });
     if (currentProjectIdRef.current && updated) {
       try {
-        const safe = await prepareProjectForSave(updated);
+        const safe = await readyToSave(updated);
         await updateProjectRow(currentProjectIdRef.current, updated.meta?.projectName || "Untitled drawing", safe);
         setProject(prev => mergeSavedPaths(prev, safe));
         // Same confirmation the Save button gives, so the rename visibly sticks.
@@ -509,7 +570,11 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     const pdfNow = sourcePdf ? { pdfSrc: URL.createObjectURL(sourcePdf), pdfPage: 1 } : {};
     patchSheetById(targetId, { bgImage: { src: displayUrl, w, h, ...pdfNow } });
     setTimeout(fitToScreen, 60);
-    (async () => {
+    // Registered BEFORE the upload starts, so a save that follows immediately
+    // always finds it and waits (see readyToSave).
+    const upload = { displayUrl, done: null };
+    planUploadsRef.current.set(targetId, upload);
+    upload.done = (async () => {
       try {
         const { path } = await uploadPlanImage(blob);
         let pdfExtra = {};
@@ -521,14 +586,23 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
             console.warn("original PDF store failed (preview still works):", e?.message);
           }
         }
-        patchSheetById(targetId, { bgImage: { src: displayUrl, w, h, path, ...pdfNow, ...pdfExtra } });
+        const storedBg = { src: displayUrl, w, h, path, ...pdfNow, ...pdfExtra };
+        patchSheetById(targetId, { bgImage: storedBg });
         if (prevPath && prevPath !== path) deletePlanImages([prevPath]);
+        return storedBg;
       } catch (err) {
         console.warn("plan image upload failed; using inline fallback:", err?.message);
         try {
           const dataUrl = await blobToDataUrl(blob);
-          patchSheetById(targetId, { bgImage: { src: dataUrl, w, h, ...pdfNow } });
-        } catch { /* keep the object URL for this session at least */ }
+          const inlineBg = { src: dataUrl, w, h, ...pdfNow };
+          patchSheetById(targetId, { bgImage: inlineBg });
+          return inlineBg;
+        } catch {
+          return null; // keep the object URL for this session at least
+        }
+      } finally {
+        // A newer import on the same sheet replaces this entry; only clear our own.
+        if (planUploadsRef.current.get(targetId) === upload) planUploadsRef.current.delete(targetId);
       }
     })();
   };
@@ -1350,7 +1424,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const saveProject = async () => {
     try {
       if (currentProjectId) {
-        const safe = await prepareProjectForSave(project);
+        const safe = await readyToSave(project);
         await updateProjectRow(currentProjectId, meta.projectName || "Untitled drawing", safe);
         setProject(prev => mergeSavedPaths(prev, safe));
         await refreshProjectList();
@@ -1378,7 +1452,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     setFloorPlanOpen(false);
     if (currentProjectIdRef.current && updated) {
       try {
-        const safe = await prepareProjectForSave(updated);
+        const safe = await readyToSave(updated);
         await updateProjectRow(currentProjectIdRef.current, updated.meta?.projectName || "Untitled drawing", safe);
         setProject(prev => mergeSavedPaths(prev, safe));
       } catch (err) { console.error("Floor plan save failed:", err); }
@@ -1389,7 +1463,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const saveProjectAs = async (name) => {
     try {
       const named = { ...project, meta: { ...project.meta, projectName: name || project.meta.projectName } };
-      const safe = await prepareProjectForSave(named);
+      const safe = await readyToSave(named);
       const id = await insertProject(name || named.meta.projectName || "Untitled drawing", safe);
       setCurrentProjectId(id);
       setProject(mergeSavedPaths(named, safe));
@@ -1769,6 +1843,16 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
               <div className="bg-white px-8 py-5 rounded-xl ring-1 ring-slate-300 flex items-center gap-3">
                 <Sparkles size={16} className="text-[#22808F] animate-pulse"/>
                 <span className="text-xs tracking-[0.2em] uppercase text-slate-800">Rendering PDF</span>
+              </div>
+            </div>
+          )}
+
+          {/* Save waiting on a plan upload (see readyToSave) */}
+          {finishingUpload && (
+            <div className="absolute inset-0 z-30 bg-slate-900/30 backdrop-blur-sm flex items-center justify-center">
+              <div className="bg-white px-8 py-5 rounded-xl ring-1 ring-slate-300 flex items-center gap-3">
+                <Sparkles size={16} className="text-[#22808F] animate-pulse"/>
+                <span className="text-xs tracking-[0.2em] uppercase text-slate-800">Finishing plan upload</span>
               </div>
             </div>
           )}
