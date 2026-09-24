@@ -197,21 +197,44 @@ async function hydrateImages(p) {
 
 const isBlobUrl = (url) => typeof url === "string" && url.startsWith("blob:");
 
-// Tried once per PDF per session: a PDF that failed (e.g. over the storage size
-// limit) would otherwise be uploaded again, and fail again, on every save.
+// Uploads of tab-only PDFs, by blob: link -> Promise<stored path>. Shared, so
+// saves that overlap, or follow before the path reaches state, reuse ONE
+// stored copy instead of uploading the same large file again.
+const tabPdfUploads = new Map();
+// PDFs that can never be stored: the server refused the file itself (too
+// large, wrong type) or the tab no longer has it. Not retried this session.
+// Offline and sign-in failures are NOT recorded, so a later save retries.
 const tabPdfStoreFailed = new Set();
+
+function isPermanentStoreError(err) {
+  if (err?.tabCopyGone) return true;
+  const status = String(err?.statusCode || err?.status || "");
+  return err?.name === "StorageApiError" && (status === "413" || status === "415");
+}
 
 // If a sheet's original PDF exists only as a blob: link in this tab (its
 // background upload failed), store it now so the plan can still export as
 // vector. Best effort: the raster plan is what must not be lost.
 async function storeTabOnlyPdf(bg) {
   if (bg.pdfPath || !isBlobUrl(bg.pdfSrc) || tabPdfStoreFailed.has(bg.pdfSrc)) return {};
+  let upload = tabPdfUploads.get(bg.pdfSrc);
+  if (!upload) {
+    upload = (async () => {
+      let pdf;
+      try {
+        pdf = await (await fetch(bg.pdfSrc)).blob();
+      } catch {
+        throw Object.assign(new Error("the original PDF is no longer available in this tab"), { tabCopyGone: true });
+      }
+      return (await uploadPlanImage(pdf)).path;
+    })();
+    tabPdfUploads.set(bg.pdfSrc, upload);
+  }
   try {
-    const pdf = await (await fetch(bg.pdfSrc)).blob();
-    const { path: pdfPath } = await uploadPlanImage(pdf);
-    return { pdfPath, pdfPage: bg.pdfPage || 1 };
+    return { pdfPath: await upload, pdfPage: bg.pdfPage || 1 };
   } catch (err) {
-    tabPdfStoreFailed.add(bg.pdfSrc);
+    tabPdfUploads.delete(bg.pdfSrc); // let a later save try again...
+    if (isPermanentStoreError(err)) tabPdfStoreFailed.add(bg.pdfSrc); // ...unless it never can
     console.warn("original PDF store on save failed (plan kept as image):", err?.message);
     return {};
   }
