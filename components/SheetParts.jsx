@@ -2830,9 +2830,12 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
 
         // 1. Vector plan underlay — only if we still hold the source PDF.
         let vectorOK = false;
+        const sheetLabel = `sheet ${i + 1}` + (sheets[i]?.name ? ` ("${sheets[i].name}")` : "");
         if (bg && bg.pdfSrc && bg.w && bg.h) {
           try {
-            const bytes = await (await fetch(bg.pdfSrc)).arrayBuffer();
+            const res = await fetch(bg.pdfSrc);
+            if (!res.ok) throw new Error(`original PDF download failed (HTTP ${res.status})`);
+            const bytes = await res.arrayBuffer();
             const idx = Math.max(0, (bg.pdfPage || 1) - 1);
             const srcDoc = await PDFDocument.load(bytes);
             // Architect PDFs are commonly saved with a /Rotate flag. The on-screen
@@ -2867,7 +2870,12 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
             vectorOK = true;
           } catch (err) {
             vectorOK = false; // any trouble → fall back to raster for this page
+            // Say why, so a soft plan can be traced. Never log the URL: signed
+            // links carry an access token.
+            console.warn(`PDF export: ${sheetLabel} plan not embedded as vector —`, err?.name || "Error", err?.message || String(err));
           }
+        } else if (bg) {
+          console.warn(`PDF export: ${sheetLabel} has no original PDF (image, CAD sketch or older import), so its plan is exported as an image.`);
         }
 
         // 2. Overlay capture. When the plan is vector, hide the raster plan image
