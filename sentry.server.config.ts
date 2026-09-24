@@ -4,6 +4,7 @@
 
 import * as Sentry from "@sentry/nextjs";
 import { beforeBreadcrumb, beforeSend, beforeSendTransaction } from "./lib/sentryScrub";
+import { tracesSampleRateFor } from "./lib/sentrySampling";
 
 Sentry.init({
   dsn: "https://65a6a4c88cf156a1717ad0578c2f325a@o4511682456649728.ingest.de.sentry.io/4511682467725392",
@@ -11,8 +12,9 @@ Sentry.init({
   // Tag events by environment so production and preview deploys don't get muddled.
   environment: process.env.NODE_ENV,
 
-  // Sample 10% of traces in production to protect the free quota; full sampling in dev.
-  tracesSampleRate: process.env.NODE_ENV === "production" ? 0.1 : 1,
+  // 10% of traces in production to protect the free quota; every trace on
+  // preview deploys and in dev. See lib/sentrySampling.js.
+  tracesSampleRate: tracesSampleRateFor(process.env.VERCEL_ENV, process.env.NODE_ENV),
 
   // Send logs to Sentry.
   enableLogs: true,
