@@ -13,6 +13,7 @@ import { getSettings, saveSettings } from "@/lib/db";
 import { DEFAULT_TITLEBLOCK, normaliseTitleBlock, companyProfileToTitleBlock, mergeTitleBlocks } from "@/lib/titleBlock";
 import { useSubscription } from "@/lib/useSubscription";
 import { openBillingPortal } from "@/lib/billingClient";
+import { LEGAL_LINKS } from "@/lib/legal";
 
 const AppCtx = createContext(null);
 export const useApp = () => useContext(AppCtx) || {};
@@ -25,11 +26,17 @@ function Splash({ label = "Loading Plotwire…" }) {
   );
 }
 
+// Public, read-only pages that must NOT be behind any gate -- login, Coming
+// Soon, terms acceptance or paywall: the planner share link contractors open
+// without a Plotwire account, and the legal documents (which people must be
+// able to read before they sign up or accept them).
+const PUBLIC_PATHS = ["/planner/view", LEGAL_LINKS.terms, LEGAL_LINKS.privacy, LEGAL_LINKS.dataProcessing];
+const isPublicPath = (pathname) =>
+  typeof pathname === "string" && PUBLIC_PATHS.some(p => pathname === p || pathname.startsWith(p + "/"));
+
 export default function AppShell({ children }) {
   const pathname = usePathname();
-  // Public, read-only pages that must NOT be behind the login gate (e.g. the
-  // planner share link contractors open without a Plotwire account).
-  const isPublic = typeof pathname === "string" && pathname.startsWith("/planner/view");
+  const isPublic = isPublicPath(pathname);
   const [theme, setTheme] = useState(() => {
     if (typeof window === "undefined") return "light";
     try { return localStorage.getItem("planworks:theme") || "light"; } catch { return "light"; }
