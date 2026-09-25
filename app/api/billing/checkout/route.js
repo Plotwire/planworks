@@ -1,7 +1,7 @@
 ﻿import { NextResponse } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
-import { bearer, userFromToken, STRIPE_PRICE, APP_URL, TRIAL_DAYS, LIVE_STATUSES } from "@/lib/billing";
+import { bearer, userFromToken, STRIPE_PRICE, APP_URL, TRIAL_DAYS, LIVE_STATUSES, isMissingCustomer } from "@/lib/billing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,9 +36,8 @@ export async function POST(req) {
     // Reuse an existing Stripe customer if this user has subscribed before.
     const customerId = current?.stripe_customer_id || null;
 
-    const session = await stripe.checkout.sessions.create({
+    const params = {
       mode: "subscription",
-      ...(customerId ? { customer: customerId } : { customer_email: user.email }),
       client_reference_id: user.id,
       line_items: [{ price, quantity: 1 }],
       allow_promotion_codes: true,
@@ -48,7 +47,21 @@ export async function POST(req) {
       },
       success_url: `${APP_URL}/?checkout=success`,
       cancel_url: `${APP_URL}/?checkout=cancelled`,
-    });
+    };
+
+    let session;
+    try {
+      session = await stripe.checkout.sessions.create(
+        customerId ? { ...params, customer: customerId } : { ...params, customer_email: user.email }
+      );
+    } catch (e) {
+      // A stored customer this Stripe account doesn't know (saved under a
+      // previous account) -- start fresh from the email instead of failing.
+      // The webhook then overwrites the stale ID with the new customer.
+      if (!customerId || !isMissingCustomer(e)) throw e;
+      console.warn("[billing/checkout] stored customer not found in Stripe; starting fresh:", customerId);
+      session = await stripe.checkout.sessions.create({ ...params, customer_email: user.email });
+    }
 
     return NextResponse.json({ url: session.url });
   } catch (e) {
