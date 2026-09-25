@@ -447,6 +447,9 @@ const CSS = `
   --brand:#2C3E50; --teal:#3FB7C9; --teal-600:#2C97A8; --teal-700:#22808F;
   --paper:#F4F6F9; --surface:#FFFFFF; --line:#E6EBF1; --line-2:#EEF2F6;
   --ink-2:#3A4654; --muted:#697785; --muted-2:#9AA6B2; --blueprint:rgba(63,183,201,.14);
+  /* Standard action button: teal with a navy icon, the same in both themes
+     (dark mode redefines --navy, so the icon colour has its own token). */
+  --action:var(--teal-600); --action-hover:var(--teal-700); --action-ink:#1A2530;
   font-family:'Inter',system-ui,sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased;}
 .pw-home *{box-sizing:border-box; margin:0; padding:0}
 .pw-home .pw-app{display:flex; height:100%; width:100%; background:var(--paper)}
@@ -477,12 +480,12 @@ const CSS = `
 .pw-home .account .sub{font-size:11px; color:var(--muted)}
 .pw-home .account .pic{width:32px; height:32px; border-radius:50%; background:var(--brand); color:#fff; display:grid; place-items:center; font-weight:600; font-size:12px; font-family:'Space Grotesk',sans-serif}
 .pw-home .trial-chip{font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:#08313a; background:#3FB7C9; padding:4px 8px; border-radius:999px; font-weight:600; white-space:nowrap}
-.pw-home .theme-toggle{width:38px; height:38px; border-radius:10px; border:1px solid var(--line); background:var(--surface); color:var(--muted); display:grid; place-items:center; cursor:pointer; transition:all .16s}
-.pw-home .theme-toggle:hover{color:var(--ink); border-color:var(--muted-2)}
+.pw-home .theme-toggle{width:38px; height:38px; border-radius:10px; border:none; background:var(--action); color:var(--action-ink); display:grid; place-items:center; cursor:pointer; transition:background .16s}
+.pw-home .theme-toggle:hover{background:var(--action-hover)}
 .pw-home .theme-toggle svg{width:18px; height:18px}
 .pw-home .cancel-chip{font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:#7A3E00; background:#FFE3C2; padding:4px 8px; border-radius:999px; font-weight:600; white-space:nowrap}
-.pw-home .billing-btn{height:38px; padding:0 14px 0 12px; border-radius:10px; border:none; background:var(--teal-600); color:var(--navy); display:flex; align-items:center; gap:8px; font-weight:600; font-size:13px; cursor:pointer; white-space:nowrap; transition:background .16s}
-.pw-home .billing-btn:hover{background:var(--teal-700)}
+.pw-home .billing-btn{height:38px; padding:0 14px 0 12px; border-radius:10px; border:none; background:var(--action); color:var(--action-ink); display:flex; align-items:center; gap:8px; font-weight:600; font-size:13px; cursor:pointer; white-space:nowrap; transition:background .16s}
+.pw-home .billing-btn:hover{background:var(--action-hover)}
 .pw-home .billing-btn svg{width:18px; height:18px; flex-shrink:0}
 
 /* ---- Migration banner ---- */
