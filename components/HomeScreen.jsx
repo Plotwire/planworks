@@ -230,8 +230,9 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
                 <span className="trial-chip" title="You're on a free trial">Trial</span>
               )}
               {manageBilling && subscription?.sub && (
-                <button className="theme-toggle" onClick={manageBilling} title="Manage billing" aria-label="Manage billing">
+                <button className="billing-btn" onClick={manageBilling} title="Manage billing">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="M2.5 9.5h19"/></svg>
+                  Billing
                 </button>
               )}
               <button className="theme-toggle" onClick={onSignOut} title="Sign out" aria-label="Sign out">
@@ -474,6 +475,9 @@ const CSS = `
 .pw-home .theme-toggle{width:38px; height:38px; border-radius:10px; border:1px solid var(--line); background:var(--surface); color:var(--muted); display:grid; place-items:center; cursor:pointer; transition:all .16s}
 .pw-home .theme-toggle:hover{color:var(--ink); border-color:var(--muted-2)}
 .pw-home .theme-toggle svg{width:18px; height:18px}
+.pw-home .billing-btn{height:38px; padding:0 14px 0 12px; border-radius:10px; border:none; background:var(--teal-600); color:var(--navy); display:flex; align-items:center; gap:8px; font-weight:600; font-size:13px; cursor:pointer; white-space:nowrap; transition:background .16s}
+.pw-home .billing-btn:hover{background:var(--teal-700)}
+.pw-home .billing-btn svg{width:18px; height:18px; flex-shrink:0}
 
 /* ---- Migration banner ---- */
 .pw-home .migrate-banner{display:flex; align-items:center; justify-content:space-between; gap:18px; flex-wrap:wrap; background:linear-gradient(120deg,#E8F7FA,#F0FBFC); border:1px solid #BFE7ED; border-radius:16px; padding:16px 20px; margin-bottom:22px}
