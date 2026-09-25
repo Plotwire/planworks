@@ -17,7 +17,8 @@
 --   user_id uuid (unique -- the webhook upserts on it),
 --   stripe_customer_id text, stripe_subscription_id text, status text,
 --   plan text, price_id text, current_period_end timestamptz,
---   cancel_at_period_end boolean, trial_end timestamptz, updated_at timestamptz
+--   cancel_at_period_end boolean, trial_end timestamptz, updated_at timestamptz,
+--   cancel_at timestamptz (added by subscriptions-cancel-at.sql)
 -- ============================================================================
 
 alter table public.subscriptions enable row level security;

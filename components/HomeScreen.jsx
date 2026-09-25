@@ -226,8 +226,13 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
                 <div style={{ textAlign: "right" }}><div className="nm">{displayName(user) || "Account"}</div><div className="sub">{user?.email || ""}</div></div>
                 <div className="pic">{(user?.email || displayName(user) || "?").slice(0, 2).toUpperCase()}</div>
               </div>
-              {subscription?.status === "trialing" && (
+              {subscription?.status === "trialing" && !subscription?.cancelAtPeriodEnd && (
                 <span className="trial-chip" title="You're on a free trial">Trial</span>
+              )}
+              {subscription?.cancelAtPeriodEnd && subscription?.cancelAt && (
+                <span className="cancel-chip" title="Your subscription is set to cancel. Undo it in Billing.">
+                  Cancels on {new Date(subscription.cancelAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}
+                </span>
               )}
               {manageBilling && subscription?.sub && (
                 <button className="billing-btn" onClick={manageBilling} title="Manage billing">
@@ -475,6 +480,7 @@ const CSS = `
 .pw-home .theme-toggle{width:38px; height:38px; border-radius:10px; border:1px solid var(--line); background:var(--surface); color:var(--muted); display:grid; place-items:center; cursor:pointer; transition:all .16s}
 .pw-home .theme-toggle:hover{color:var(--ink); border-color:var(--muted-2)}
 .pw-home .theme-toggle svg{width:18px; height:18px}
+.pw-home .cancel-chip{font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:#7A3E00; background:#FFE3C2; padding:4px 8px; border-radius:999px; font-weight:600; white-space:nowrap}
 .pw-home .billing-btn{height:38px; padding:0 14px 0 12px; border-radius:10px; border:none; background:var(--teal-600); color:var(--navy); display:flex; align-items:center; gap:8px; font-weight:600; font-size:13px; cursor:pointer; white-space:nowrap; transition:background .16s}
 .pw-home .billing-btn:hover{background:var(--teal-700)}
 .pw-home .billing-btn svg{width:18px; height:18px; flex-shrink:0}
