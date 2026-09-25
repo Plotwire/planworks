@@ -299,8 +299,8 @@ const CSS = `
 .linkish{background:none; border:none; padding:0; font:inherit; font-size:12.5px; color:#22808F; font-weight:500; cursor:pointer}
 .linkish:hover{color:#3FB7C9; text-decoration:underline}
 .err{background:#FEF2F2; border:1px solid #FECACA; color:#B91C1C; font-size:13px; border-radius:10px; padding:10px 12px; margin-bottom:14px}
-.submit{width:100%; height:48px; border:none; border-radius:12px; background:#3FB7C9; color:#08313a; font-weight:600; font-size:15px; cursor:pointer; transition:background .15s, transform .1s}
-.submit:hover:not(:disabled){background:#52C4D5}
+.submit{width:100%; height:48px; border:none; border-radius:12px; background:var(--action); color:var(--action-ink); font-weight:600; font-size:15px; cursor:pointer; transition:background .15s, transform .1s}
+.submit:hover:not(:disabled){background:var(--action-hover)}
 .submit:active:not(:disabled){transform:translateY(1px)}
 .submit:disabled{opacity:.6; cursor:default}
 .alt{margin-top:18px; font-size:13.5px; color:#697785; text-align:center}

@@ -102,10 +102,10 @@ export function TopBar({
         <button
           onClick={onShowMeta}
           title={`${projectLabel} — ${sheetLabel}`}
-          className="group flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-[#3FB7C9] hover:bg-[#52C4D5] text-[#08313a] transition-colors text-[11px] font-semibold shadow-[#3FB7C9]/30 shadow-md min-w-0">
-          <FileText size={13} className="text-[#08313a]/70 shrink-0"/>
+          className="group flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-[var(--action)] hover:bg-[var(--action-hover)] text-[color:var(--action-ink)] transition-colors text-[11px] font-semibold shadow-md min-w-0">
+          <FileText size={13} className="text-[color:var(--action-ink)] opacity-70 shrink-0"/>
           <span className="truncate max-w-[110px] sm:max-w-[220px]">{projectLabel}</span>
-          <ChevronRight size={12} className="text-[#08313a]/70 shrink-0"/>
+          <ChevronRight size={12} className="text-[color:var(--action-ink)] opacity-70 shrink-0"/>
         </button>
       </div>
 
@@ -161,7 +161,7 @@ function ToolbarButton({ onClick, icon: Icon, label, primary, active, hint, flas
       title={hint ? `${label} (${hint})` : label}
       className={`shrink-0 whitespace-nowrap px-3 py-2 text-[11px] uppercase tracking-wide font-semibold flex items-center gap-2 rounded-lg transition-all duration-150 ${
         primary
-          ? "bg-[#3FB7C9] text-[#08313a] hover:bg-[#52C4D5] shadow-[#3FB7C9]/30 shadow-md"
+          ? "bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)] shadow-md"
           : flash
           ? "bg-emerald-500 text-white"
           : teal
@@ -1823,7 +1823,7 @@ export function ProjectManager({
             <button
               onClick={() => { if (name.trim()) onSaveAs(name.trim()); }}
               disabled={!name.trim()}
-              className="px-4 py-2 bg-[#3FB7C9] text-[#08313a] rounded-lg text-[10px] uppercase tracking-wider font-semibold hover:bg-[#52C4D5] transition disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap">
+              className="px-4 py-2 bg-[var(--action)] text-[color:var(--action-ink)] rounded-lg text-[10px] uppercase tracking-wider font-semibold hover:bg-[var(--action-hover)] transition disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap">
               Save As
             </button>
           </div>
@@ -2141,7 +2141,7 @@ export function BoqTemplateEditor({ saved, onSave, onClose }) {
           <div className="text-[10px] text-slate-400">Presets apply to every new BOQ.</div>
           <div className="flex gap-2">
             <button onClick={onClose} className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-md text-[10px] uppercase tracking-wider">Close</button>
-            <button onClick={doSave} disabled={busy} className={`px-4 py-2 rounded-md text-[10px] uppercase tracking-wider font-semibold flex items-center gap-1.5 ${flash ? "bg-emerald-500 text-white" : "bg-[#3FB7C9] text-[#08313a] hover:bg-[#52C4D5]"}`}>
+            <button onClick={doSave} disabled={busy} className={`px-4 py-2 rounded-md text-[10px] uppercase tracking-wider font-semibold flex items-center gap-1.5 ${flash ? "bg-emerald-500 text-white" : "bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)]"}`}>
               {flash ? "Saved ✓" : busy ? "Saving…" : "Save presets"}
             </button>
           </div>
@@ -2402,7 +2402,7 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
             <button onClick={onClose} className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-md text-[10px] uppercase tracking-wider">Close</button>
             <button onClick={downloadCSV} className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-md text-[10px] uppercase tracking-wider font-semibold flex items-center gap-1.5"><Download size={12}/> CSV</button>
             <button onClick={downloadPDF} disabled={pdfBusy} style={pdfBusy ? { opacity: 0.6, cursor: "wait" } : undefined}
-              className="px-4 py-2 bg-[#3FB7C9] text-[#08313a] rounded-md text-[10px] uppercase tracking-wider font-semibold hover:bg-[#52C4D5] flex items-center gap-1.5">
+              className="px-4 py-2 bg-[var(--action)] text-[color:var(--action-ink)] rounded-md text-[10px] uppercase tracking-wider font-semibold hover:bg-[var(--action-hover)] flex items-center gap-1.5">
               <Download size={12}/> {pdfBusy ? "Building…" : "Download PDF"}
             </button>
           </div>
@@ -2462,7 +2462,7 @@ export function MetaEditor({ meta, updateMeta, onSheetField, onClose }) {
 
         <div className="mt-5 flex justify-end">
           <button onClick={onClose}
-            className="px-4 py-2 bg-[#3FB7C9] text-[#08313a] rounded-md text-[10px] uppercase tracking-wider font-semibold hover:bg-[#52C4D5] transition">
+            className="px-4 py-2 bg-[var(--action)] text-[color:var(--action-ink)] rounded-md text-[10px] uppercase tracking-wider font-semibold hover:bg-[var(--action-hover)] transition">
             Done
           </button>
         </div>
@@ -2630,7 +2630,7 @@ export function TitleBlockEditor({ start, isCustomised, onSaveProject, onSaveDef
           </label>
           <button onClick={onClose} className="px-4 py-2 text-[10px] uppercase tracking-wider font-semibold rounded-md bg-slate-100 text-slate-700 hover:bg-slate-200">Cancel</button>
           <button onClick={save} disabled={saving}
-            className="px-4 py-2 bg-[#3FB7C9] text-[#08313a] rounded-md text-[10px] uppercase tracking-wider font-semibold hover:bg-[#52C4D5] transition disabled:opacity-60">
+            className="px-4 py-2 bg-[var(--action)] text-[color:var(--action-ink)] rounded-md text-[10px] uppercase tracking-wider font-semibold hover:bg-[var(--action-hover)] transition disabled:opacity-60">
             {saving ? "Saving…" : "Apply to this job"}
           </button>
         </div>

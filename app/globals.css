@@ -2,6 +2,16 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Standard action button: solid teal, navy text/icon, darker teal on hover.
+   The same in both themes. Components use these rather than hard-coded hex. */
+:root {
+  --teal-600: #2C97A8;
+  --teal-700: #22808F;
+  --action: var(--teal-600);
+  --action-hover: var(--teal-700);
+  --action-ink: #1A2530;
+}
+
 html, body {
   margin: 0;
   padding: 0;

@@ -122,8 +122,8 @@ const CSS = `
 .feat{list-style:none; margin:20px 0 22px; display:flex; flex-direction:column; gap:12px}
 .feat li{display:flex; align-items:flex-start; gap:9px; font-size:14px; color:#3A4654; line-height:1.4}
 .feat svg{width:18px; height:18px; flex:0 0 18px; margin-top:1px}
-.pick{width:100%; height:48px; border-radius:11px; font:inherit; font-weight:600; font-size:15px; cursor:pointer; transition:background .15s, transform .1s; border:none; background:#3FB7C9; color:#08313a}
-.pick:hover:not(:disabled){background:#52C4D5}
+.pick{width:100%; height:48px; border-radius:11px; font:inherit; font-weight:600; font-size:15px; cursor:pointer; transition:background .15s, transform .1s; border:none; background:var(--action); color:var(--action-ink)}
+.pick:hover:not(:disabled){background:var(--action-hover)}
 .pick:active:not(:disabled){transform:translateY(1px)}
 .pick:disabled{opacity:.6; cursor:default}
 .reassure{display:flex; align-items:center; justify-content:center; gap:12px; margin-top:16px; color:#8b9bab; font-size:12px; font-family:'JetBrains Mono',monospace; letter-spacing:.04em}

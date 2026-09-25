@@ -1863,7 +1863,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
           <span className="font-semibold">Recovered unsaved work</span>
           <span className="text-amber-700">{countPlaced(recovery.project)} symbols · {new Date(recovery.savedAt).toLocaleString()}</span>
           <div className="ml-auto flex gap-2">
-            <button onClick={restoreDraft} className="px-3 py-1.5 rounded-md bg-[#3FB7C9] text-[#08313a] text-[11px] font-semibold uppercase tracking-wider hover:bg-[#52C4D5]">Restore</button>
+            <button onClick={restoreDraft} className="px-3 py-1.5 rounded-md bg-[var(--action)] text-[color:var(--action-ink)] text-[11px] font-semibold uppercase tracking-wider hover:bg-[var(--action-hover)]">Restore</button>
             <button onClick={dismissDraft} className="px-3 py-1.5 rounded-md bg-white/70 text-amber-800 text-[11px] font-semibold uppercase tracking-wider hover:bg-white">Dismiss</button>
           </div>
         </div>

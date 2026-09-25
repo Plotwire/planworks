@@ -446,11 +446,7 @@ const CSS = `
   --ink:#0E141B; --navy:#1A2530; --navy-2:#22303D; --navy-line:#314250;
   --brand:#2C3E50; --teal:#3FB7C9; --teal-600:#2C97A8; --teal-700:#22808F;
   --paper:#F4F6F9; --surface:#FFFFFF; --line:#E6EBF1; --line-2:#EEF2F6;
-  --ink-2:#3A4654; --muted:#697785; --muted-2:#9AA6B2; --blueprint:rgba(63,183,201,.14);
-  /* Standard action button: teal with a navy icon, the same in both themes
-     (dark mode redefines --navy, so the icon colour has its own token). */
-  --action:var(--teal-600); --action-hover:var(--teal-700); --action-ink:#1A2530;
-  font-family:'Inter',system-ui,sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased;}
+  --ink-2:#3A4654; --muted:#697785; --muted-2:#9AA6B2; --blueprint:rgba(63,183,201,.14);  font-family:'Inter',system-ui,sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased;}
 .pw-home *{box-sizing:border-box; margin:0; padding:0}
 .pw-home .pw-app{display:flex; height:100%; width:100%; background:var(--paper)}
 .pw-home .rail{width:74px; flex-shrink:0; background:var(--navy); display:flex; flex-direction:column; align-items:center; padding:18px 0; gap:6px; position:relative}
@@ -495,8 +491,8 @@ const CSS = `
 .pw-home .migrate-actions{display:flex; gap:10px; flex-shrink:0}
 .pw-home .mg-ghost{padding:9px 16px; border-radius:10px; border:1px solid var(--line); background:var(--surface); color:var(--ink-2); font-weight:500; font-size:13px; cursor:pointer}
 .pw-home .mg-ghost:hover{color:var(--ink)}
-.pw-home .mg-primary{padding:9px 18px; border-radius:10px; border:none; background:#3FB7C9; color:#08313a; font-weight:600; font-size:13px; cursor:pointer; transition:background .15s}
-.pw-home .mg-primary:hover{background:#52C4D5}
+.pw-home .mg-primary{padding:9px 18px; border-radius:10px; border:none; background:var(--action); color:var(--action-ink); font-weight:600; font-size:13px; cursor:pointer; transition:background .15s}
+.pw-home .mg-primary:hover{background:var(--action-hover)}
 .pw-home .mg-ghost:disabled,.pw-home .mg-primary:disabled{opacity:.6; cursor:default}
 
 /* ---- Dark theme ---- */
@@ -530,8 +526,8 @@ html.dark .pw-home .migrate-banner{background:linear-gradient(120deg,#13343b,#15
 .pw-home .hero-actions{display:flex; gap:11px}
 .pw-home .btn{height:46px; border-radius:12px; padding:0 20px; font-size:14px; font-weight:500; font-family:'Inter',sans-serif; display:inline-flex; align-items:center; gap:9px; cursor:pointer; border:none; transition:all .17s ease; white-space:nowrap}
 .pw-home .btn svg{width:18px; height:18px}
-.pw-home .btn-primary{background:var(--teal); color:#08313a; font-weight:600}
-.pw-home .btn-primary:hover{background:#52c4d5; transform:translateY(-1px); box-shadow:0 8px 22px -6px rgba(63,183,201,.6)}
+.pw-home .btn-primary{background:var(--action); color:var(--action-ink); font-weight:600}
+.pw-home .btn-primary:hover{background:var(--action-hover); transform:translateY(-1px); box-shadow:0 8px 22px -6px color-mix(in srgb, var(--action) 60%, transparent)}
 .pw-home .btn-ghost{background:rgba(255,255,255,.08); color:#e7eef4; border:1px solid rgba(255,255,255,.14)}
 .pw-home .btn-ghost:hover{background:rgba(255,255,255,.14)}
 .pw-home .stats{position:relative; display:flex; gap:34px; margin-top:26px; padding-top:22px; border-top:1px solid rgba(255,255,255,.1)}

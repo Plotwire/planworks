@@ -49,7 +49,7 @@ export default class EditorErrorBoundary extends React.Component {
             </div>
             <div className="flex gap-2 justify-center">
               <button onClick={this.downloadBackup}
-                className="px-4 py-2 rounded-lg bg-[#3FB7C9] text-[#08313a] text-xs font-semibold uppercase tracking-wider hover:bg-[#52C4D5]">
+                className="px-4 py-2 rounded-lg bg-[var(--action)] text-[color:var(--action-ink)] text-xs font-semibold uppercase tracking-wider hover:bg-[var(--action-hover)]">
                 Download backup
               </button>
               <button onClick={() => window.location.reload()}
