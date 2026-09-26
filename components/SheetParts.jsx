@@ -25,7 +25,8 @@ import { Masthead } from "@/components/TitleBlockMasthead";
 import { isTouchDevice, supersampleFactor } from "@/lib/touch";
 import { dataUrlToBlob, signPlanImage, signPlanImages } from "@/lib/planImages";
 import { BOQ_ESTIMATE_NOTICE } from "@/lib/legal";
-import { addDaysIso, QUOTE_VALID_DAYS, shownOnQuote } from "@/lib/boqOutputs";
+import { addDaysIso, QUOTE_VALID_DAYS, shownOnQuote, lineTotal as boqLineTotal, sectionTotal, boqTotals, outputSettings, materialsDoc, docToCsv } from "@/lib/boqOutputs";
+import BoqDocPages from "@/components/BoqDocPages";
 
 // Per-project title block. The editor publishes the *effective* title block
 // (the project's own, falling back to the account default) through this context
@@ -1903,175 +1904,6 @@ export function ProjectManager({
 /* ============================================================================
  * BILL OF QUANTITIES (modal) — auto-counted schedule of placed symbols
  * ========================================================================= */
-// ---- BOQ print layout (paginated A4) ----------------------------------------
-const boqGbp = (n) => "£" + (Number(n) || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const boqLine = (it) => (parseFloat(it.qty) || 0) * (parseFloat(it.rate) || 0);
-const boqSub = (sec) => sec.items.reduce((s, it) => s + boqLine(it), 0);
-
-// Flow the BOQ into A4 pages. A section that spills onto the next page repeats
-// its title (marked "cont.") and the column header, so a heading never gets
-// stranded away from its rows.
-function paginateBoq(boq) {
-  const H = { header: 86, meta: 222, notes: 30 + ((boq.notes || []).length * 20) + 22, title: 42, thead: 26, row: 28, subtotal: 30, totals: 240, gap: 14 };
-  const CONTENT = 1010;
-  const pages = [];
-  let page = { preamble: true, chunks: [], totals: false };
-  let used = H.header + H.meta + H.notes;
-  const flush = () => { pages.push(page); page = { preamble: false, chunks: [], totals: false }; };
-
-  for (const sec of boq.sections) {
-    used += H.gap;
-    if (used + H.title + H.thead + H.row > CONTENT) { flush(); used = H.gap; }
-    let chunk = { secKey: sec.key, title: sec.title, subtitle: sec.subtitle, continued: false, startIndex: 0, rows: [], subtotal: null };
-    used += H.title + H.thead;
-    for (let i = 0; i < sec.items.length; i++) {
-      if (used + H.row > CONTENT) {
-        page.chunks.push(chunk); flush();
-        used = H.gap + H.title + H.thead;
-        chunk = { secKey: sec.key, title: sec.title, subtitle: sec.subtitle, continued: true, startIndex: i, rows: [], subtotal: null };
-      }
-      chunk.rows.push(sec.items[i]);
-      used += H.row;
-    }
-    if (used + H.subtotal > CONTENT) {
-      page.chunks.push(chunk); flush();
-      used = H.gap + H.title + H.thead + H.subtotal;
-      chunk = { secKey: sec.key, title: sec.title, subtitle: sec.subtitle, continued: true, startIndex: sec.items.length, rows: [], subtotal: boqSub(sec) };
-    } else {
-      chunk.subtotal = boqSub(sec);
-      used += H.subtotal;
-    }
-    page.chunks.push(chunk);
-  }
-  if (used + H.totals > CONTENT) { flush(); }
-  page.totals = true;
-  pages.push(page);
-  return pages;
-}
-
-function BoqPrintPages({ boq, projectName, company }) {
-  const pages = paginateBoq(boq);
-  const m = boq.meta || {};
-  const projectTotal = boq.sections.reduce((s, sec) => s + boqSub(sec), 0);
-  const vat = projectTotal * (boq.vatRate || 0) / 100;
-  const th = { textAlign: "left", padding: "6px", fontSize: 8, letterSpacing: "0.06em", textTransform: "uppercase", color: "#64748b", borderBottom: "1px solid #cbd5e1" };
-  const td = { padding: "5px 6px", fontSize: 10, color: "#334155", borderBottom: "1px solid #eef2f6", verticalAlign: "top" };
-  const metaRow = (label, val) => (
-    <div style={{ display: "flex", borderBottom: "1px solid #eef2f6", padding: "6px 0" }}>
-      <div style={{ width: 110, fontSize: 8.5, letterSpacing: "0.05em", textTransform: "uppercase", color: "#94a3b8" }}>{label}</div>
-      <div style={{ fontSize: 11, color: "#0f172a", fontWeight: 600 }}>{val || "—"}</div>
-    </div>
-  );
-  const ColGroup = () => (
-    <colgroup>
-      <col style={{ width: 22 }} /><col /><col /><col style={{ width: 44 }} /><col style={{ width: 70 }} /><col style={{ width: 74 }} />
-    </colgroup>
-  );
-  const Thead = () => (
-    <thead><tr>
-      <th style={{ ...th, width: 22 }}>#</th><th style={th}>Item</th><th style={th}>Specification / Notes</th>
-      <th style={{ ...th, textAlign: "right" }}>Qty</th><th style={{ ...th, textAlign: "right" }}>Unit Rate</th><th style={{ ...th, textAlign: "right" }}>Total</th>
-    </tr></thead>
-  );
-
-  return (
-    <>
-      {pages.map((pg, pi) => (
-        <div key={pi} className="boq-page" style={{ width: 794, height: 1123, background: "#fff", padding: "40px 46px 54px", boxSizing: "border-box", color: "#1e293b", fontFamily: "Inter, system-ui, sans-serif", position: "relative", overflow: "hidden" }}>
-          {pg.preamble && (
-            <>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 26 }}>
-                <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>{company || ""}</div>
-                <div style={{ textAlign: "right" }}>
-                  <div style={{ fontSize: 9, letterSpacing: "0.22em", textTransform: "uppercase", color: "#22808F", fontWeight: 700 }}>Electrical Bill of Quantities</div>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: "#0f172a", marginTop: 2, lineHeight: 1.1 }}>{m.development || projectName || "Project"}</div>
-                  <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Issued for pricing · ex-VAT, GBP</div>
-                </div>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", columnGap: 34, marginBottom: 20 }}>
-                {metaRow("Development", m.development || projectName)}
-                {metaRow("Site address", m.siteAddress)}
-                {metaRow("Prepared by", m.preparedBy)}
-                {metaRow("Supplier", m.supplier)}
-                {metaRow("Drawing no.", m.drawingNo)}
-                {metaRow("Date issued", m.dateIssued)}
-                {metaRow("Required on site", m.requiredOnSite)}
-              </div>
-              <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "12px 16px", marginBottom: 8, background: "#f8fafc" }}>
-                <div style={{ fontSize: 8.5, textTransform: "uppercase", letterSpacing: "0.1em", color: "#22808F", fontWeight: 700, marginBottom: 7 }}>Notes to supplier</div>
-                {(boq.notes || []).map((n, i) => (
-                  <div key={i} style={{ fontSize: 10, color: "#475569", marginBottom: 4, display: "flex", gap: 6 }}><span style={{ color: "#94a3b8" }}>•</span><span>{n}</span></div>
-                ))}
-              </div>
-            </>
-          )}
-
-          {pg.chunks.map((ch, ci) => (
-            <div key={ci} style={{ marginTop: 14 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
-                <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>{ch.title}{ch.continued ? <span style={{ fontSize: 10, fontWeight: 600, color: "#94a3b8" }}>  (cont.)</span> : null}</div>
-                {ch.subtotal != null && <div style={{ fontSize: 13, fontWeight: 700, color: "#22808F" }}>{boqGbp(ch.subtotal)}</div>}
-              </div>
-              {!ch.continued && ch.subtitle && <div style={{ fontSize: 9.5, color: "#94a3b8", marginBottom: 4 }}>{ch.subtitle}</div>}
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <ColGroup />
-                <Thead />
-                <tbody>
-                  {ch.rows.map((it, ii) => (
-                    <tr key={it.id || ii}>
-                      <td style={{ ...td, color: "#94a3b8" }}>{ch.startIndex + ii + 1}</td>
-                      <td style={{ ...td, fontWeight: 600, color: "#1e293b" }}>{it.item}</td>
-                      <td style={{ ...td, color: "#64748b" }}>{it.spec}</td>
-                      <td style={{ ...td, textAlign: "right" }}>{it.qty === "" || it.qty == null ? "—" : it.qty}</td>
-                      <td style={{ ...td, textAlign: "right" }}>{Number(it.rate) ? boqGbp(it.rate) : "—"}</td>
-                      <td style={{ ...td, textAlign: "right", fontWeight: 600, color: "#0f172a" }}>{boqLine(it) ? boqGbp(boqLine(it)) : "—"}</td>
-                    </tr>
-                  ))}
-                  {ch.subtotal != null && (
-                    <tr>
-                      <td colSpan={5} style={{ padding: "6px", fontSize: 9, textTransform: "uppercase", letterSpacing: "0.05em", textAlign: "right", color: "#475569", fontWeight: 700 }}>{ch.title} subtotal</td>
-                      <td style={{ padding: "6px", fontSize: 11, textAlign: "right", fontWeight: 700, color: "#0f172a" }}>{boqGbp(ch.subtotal)}</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          ))}
-
-          {pg.totals && (
-            <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "16px 18px", marginTop: 16, background: "#f8fafc" }}>
-              <div style={{ fontSize: 8.5, textTransform: "uppercase", letterSpacing: "0.1em", color: "#64748b", fontWeight: 700, marginBottom: 8 }}>Plot total</div>
-              {boq.sections.map((sec, i) => (
-                <div key={i} style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid #eef2f6", padding: "5px 0", fontSize: 11 }}>
-                  <span style={{ color: "#475569" }}>{sec.title} subtotal</span><span style={{ fontWeight: 600 }}>{boqGbp(boqSub(sec))}</span>
-                </div>
-              ))}
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginTop: 12, paddingTop: 8, borderTop: "2px solid #1e293b" }}>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>Project total</div>
-                  <div style={{ fontSize: 8, textTransform: "uppercase", letterSpacing: "0.08em", color: "#94a3b8" }}>Excluding VAT · Issued for pricing</div>
-                </div>
-                <div style={{ fontSize: 24, fontWeight: 700, color: "#0f172a" }}>{boqGbp(projectTotal)}</div>
-              </div>
-              {boq.vatOn !== false && <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 11, marginTop: 4 }}><span style={{ color: "#475569" }}>VAT @ {boq.vatRate}%</span><span>{boqGbp(vat)}</span></div>}
-              {boq.vatOn !== false && <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0", fontSize: 11, fontWeight: 700 }}><span>Total inc. VAT</span><span>{boqGbp(projectTotal + vat)}</span></div>}
-            </div>
-          )}
-
-          {/* Footer on every page. Two lines, kept inside the page's 54px
-              bottom padding so it never overlaps the schedule. */}
-          <div style={{ position: "absolute", bottom: 16, left: 46, right: 46, fontSize: 8.5, borderTop: "1px solid #eef2f6", paddingTop: 7 }}>
-            <div style={{ color: "#1A2530", marginBottom: 3 }}>{BOQ_ESTIMATE_NOTICE}</div>
-            <div style={{ color: "#94a3b8", display: "flex", justifyContent: "space-between" }}>
-              <span>Unit rates and totals to be completed by supplier{company ? ` · ${company}` : ""}</span>
-              <span>Page {pi + 1} of {pages.length}</span>
-            </div>
-          </div>
-        </div>
-      ))}
-    </>
-  );
-}
 
 /* ============================================================================
  * BOQ TEMPLATE EDITOR — edit the default items/specs/sections saved per account.
@@ -2172,11 +2004,18 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
   useEffect(() => { updateBoq?.(boq); /* eslint-disable-next-line */ }, [boq]);
 
   const gbp = (n) => "\u00A3" + (Number(n) || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const lineTotal = (it) => (parseFloat(it.qty) || 0) * (parseFloat(it.rate) || 0);
-  const subtotal = (sec) => sec.items.reduce((s, it) => s + lineTotal(it), 0);
-  const projectTotal = boq.sections.reduce((s, sec) => s + subtotal(sec), 0);
-  const vatOn = boq.vatOn !== false; // BOQs saved before the switch charge VAT
-  const vat = vatOn ? projectTotal * (boq.vatRate || 0) / 100 : 0;
+  // Same arithmetic as the PDF and CSV (lib/boqOutputs.js).
+  const lineTotal = boqLineTotal;
+  const subtotal = sectionTotal;
+  const { net: projectTotal, vatOn, vat } = boqTotals(boq);
+
+  // Which output the Download buttons produce, and its options. Saved on the
+  // BOQ so they come back with the drawing.
+  const outSet = outputSettings(boq);
+  const setOutput = (output) => setBoq(b => ({ ...b, output }));
+  const setSkipEmpty = (skipEmpty) => setBoq(b => ({ ...b, materials: { ...(b.materials || {}), skipEmpty } }));
+  const docOpts = { projectName: meta.projectName || "", company: meta.company || boq.meta.preparedBy || "" };
+  const doc = materialsDoc(boq, { ...docOpts, notice: BOQ_ESTIMATE_NOTICE });
 
   const setMeta = (f, v) => setBoq(b => ({ ...b, meta: { ...b.meta, [f]: v } }));
   // A quantity typed on a drawing-linked line is marked qtyManual so reopening
@@ -2232,7 +2071,7 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
         if (i > 0) pdf.addPage();
         pdf.addImage(img, "JPEG", 0, 0, W, Hpt);
       }
-      pdf.save(fileBase() + "_BOQ.pdf");
+      pdf.save(`${fileBase()}_${doc.fileSuffix}.pdf`);
     } catch (e) {
       alert("PDF export failed: " + (e?.message || e));
     } finally {
@@ -2241,31 +2080,12 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
   };
 
   const downloadCSV = () => {
-    const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const L = [];
-    L.push([esc("Electrical Bill of Quantities"), esc(boq.meta.development || meta.projectName || "")].join(","));
-    L.push([esc("Prepared by"), esc(boq.meta.preparedBy)].join(","));
-    L.push([esc("Site address"), esc(boq.meta.siteAddress)].join(","));
-    L.push([esc("Supplier"), esc(boq.meta.supplier)].join(","));
-    L.push([esc("Drawing no."), esc(boq.meta.drawingNo)].join(","));
-    L.push([esc("Date issued"), esc(boq.meta.dateIssued)].join(","));
-    L.push([esc("Required on site"), esc(boq.meta.requiredOnSite)].join(","));
-    L.push("");
-    boq.sections.forEach(sec => {
-      L.push(esc(sec.title));
-      L.push(["#", "Item", "Specification / Notes", "Qty", "Unit Rate", "Total"].map(esc).join(","));
-      sec.items.forEach((it, i) => L.push([i + 1, it.item, it.spec, it.qty, it.rate, lineTotal(it).toFixed(2)].map(esc).join(",")));
-      L.push([esc(""), esc(sec.title + " subtotal"), esc(""), esc(""), esc(""), esc(subtotal(sec).toFixed(2))].join(","));
-      L.push("");
-    });
-    L.push([esc("Project total (ex VAT)"), esc(""), esc(""), esc(""), esc(""), esc(projectTotal.toFixed(2))].join(","));
-    if (vatOn) L.push([esc("VAT @ " + boq.vatRate + "%"), esc(""), esc(""), esc(""), esc(""), esc(vat.toFixed(2))].join(","));
-    if (vatOn) L.push([esc("Total inc VAT"), esc(""), esc(""), esc(""), esc(""), esc((projectTotal + vat).toFixed(2))].join(","));
-    const blob = new Blob([L.join("\r\n")], { type: "text/csv;charset=utf-8" });
+    const blob = new Blob([docToCsv(doc)], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = ((meta.projectName || "plan").replace(/[^a-z0-9-_]+/gi, "_")) + "_BOQ.csv";
+    a.download = `${fileBase()}_${doc.fileSuffix}.csv`;
     a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   };
 
   const cell = "w-full bg-transparent outline-none rounded px-1.5 py-1 focus:bg-[#ECF8FA] focus:ring-1 focus:ring-[#3FB7C9]/40";
@@ -2290,7 +2110,7 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
         {/* Off-screen print layout captured for PDF export */}
         <div aria-hidden style={{ position: "absolute", left: -10000, top: 0, width: 794, pointerEvents: "none" }}>
           <div ref={printRef}>
-            <BoqPrintPages boq={boq} projectName={meta.projectName} company={meta.company || boq.meta.preparedBy} />
+            <BoqDocPages doc={doc} />
           </div>
         </div>
 
@@ -2440,6 +2260,30 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
           {/* Permanent, not dismissible: see BOQ_ESTIMATE_NOTICE in lib/legal.js. */}
           <p className="text-[11px] leading-snug text-[#1A2530] mt-3">{BOQ_ESTIMATE_NOTICE}</p>
           <div className="text-[10px] text-slate-400 mt-1">Unit rates and totals to be completed by supplier. This schedule is issued for pricing.</div>
+        </div>
+
+        {/* Output: which document Download PDF / CSV produce, and its options. */}
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 px-6 py-2.5 border-t border-slate-200 bg-slate-50 shrink-0 text-[11px] text-slate-700">
+          <div className="flex items-center gap-2">
+            <span className="text-[9px] uppercase tracking-wider text-slate-500 font-semibold">Download</span>
+            <div className="flex rounded-md ring-1 ring-slate-300 overflow-hidden" role="radiogroup" aria-label="Output">
+              {[["materials", "Materials list"]].map(([k, label]) => (
+                <button key={k} role="radio" aria-checked={outSet.output === k} onClick={() => setOutput(k)}
+                  className={`px-3 py-1.5 text-[11px] font-semibold ${outSet.output === k ? "bg-[var(--action)] text-[color:var(--action-ink)]" : "bg-white text-slate-600 hover:bg-slate-100"}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {outSet.output === "materials" && (
+            <>
+              <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                <input type="checkbox" checked={outSet.skipEmpty} onChange={(e) => setSkipEmpty(e.target.checked)} className="accent-[var(--action)]"/>
+                Skip lines with no quantity
+              </label>
+              <span className="text-slate-400">No prices. Labour is left off.</span>
+            </>
+          )}
         </div>
 
         {/* Footer */}
