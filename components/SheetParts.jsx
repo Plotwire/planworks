@@ -16,7 +16,7 @@ import {
 } from "@/lib/symbols.jsx";
 import { findFurniture, FURNITURE, FURNITURE_VIEWBOX, FURNITURE_COLOUR } from "@/lib/furniture.jsx";
 import { drawSymbol } from "@/lib/symbolPdf";
-import { buildInitialBoq, refreshQuantities, reconcileBoq, newBoqItem, templateForEditing, templateForSaving, newTemplateItem } from "@/lib/boqTemplate";
+import { buildInitialBoq, reconcileBoq, hasTypedDrawingQtys, isDrawingLinked, newBoqItem, templateForEditing, templateForSaving, newTemplateItem } from "@/lib/boqTemplate";
 import { useApp } from "@/components/AppShell";
 import { DEFAULT_TITLEBLOCK, resizeImageToDataUrl } from "@/lib/titleBlock";
 import { ensurePdfjs } from "@/lib/pdfjs";
@@ -2170,14 +2170,33 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
   const vat = projectTotal * (boq.vatRate || 0) / 100;
 
   const setMeta = (f, v) => setBoq(b => ({ ...b, meta: { ...b.meta, [f]: v } }));
-  const setItem = (si, id, f, v) => setBoq(b => ({ ...b, sections: b.sections.map((sec, i) => i !== si ? sec : ({ ...sec, items: sec.items.map(it => it.id === id ? { ...it, [f]: v } : it) })) }));
+  // A quantity typed on a drawing-linked line is marked qtyManual so reopening
+  // the BOQ keeps it; clearing the field hands the line back to the drawing.
+  const setItem = (si, id, f, v) => setBoq(b => ({ ...b, sections: b.sections.map((sec, i) => i !== si ? sec : ({ ...sec, items: sec.items.map(it => {
+    if (it.id !== id) return it;
+    const next = { ...it, [f]: v };
+    if (f === "qty" && isDrawingLinked(it)) next.qtyManual = String(v).trim() !== "";
+    return next;
+  }) })) }));
   const addItem = (si) => setBoq(b => ({ ...b, sections: b.sections.map((sec, i) => i !== si ? sec : ({ ...sec, items: [...sec.items, newBoqItem()] })) }));
-  const removeItem = (si, id) => setBoq(b => ({ ...b, sections: b.sections.map((sec, i) => i !== si ? sec : ({ ...sec, items: sec.items.filter(it => it.id !== id) })) }));
+  // Deleting an auto-added line remembers its symbol so it doesn't come back
+  // on the next open ("Reset to presets" clears the list).
+  const removeItem = (si, id) => setBoq(b => {
+    const gone = b.sections[si]?.items.find(it => it.id === id);
+    const dismissed = gone?.fromDrawing && gone.symbolId
+      ? [...new Set([...(b.dismissed || []), gone.symbolId])] : b.dismissed;
+    return { ...b, dismissed, sections: b.sections.map((sec, i) => i !== si ? sec : ({ ...sec, items: sec.items.filter(it => it.id !== id) })) };
+  });
   const setSectionTitle = (si, v) => setBoq(b => ({ ...b, sections: b.sections.map((sec, i) => i !== si ? sec : ({ ...sec, title: v })) }));
   const setNote = (i, v) => setBoq(b => ({ ...b, notes: b.notes.map((n, idx) => idx === i ? v : n) }));
   const addNote = () => setBoq(b => ({ ...b, notes: [...b.notes, ""] }));
   const removeNote = (i) => setBoq(b => ({ ...b, notes: b.notes.filter((_, idx) => idx !== i) }));
-  const refresh = () => setBoq(b => refreshQuantities(b, project, SYMBOL_META, findSymbol));
+  // Opening already re-counts the drawing; Refresh also replaces quantities
+  // typed over drawing-linked lines, so it asks first when there are any.
+  const refresh = () => {
+    if (hasTypedDrawingQtys(boq) && !window.confirm("Replace the quantities you've typed on drawing-linked lines with the counts from the drawing?")) return;
+    setBoq(b => reconcileBoq(b, project, SYMBOL_META, findSymbol, { overrideTyped: true }));
+  };
   const resetToTemplate = () => {
     if (!window.confirm("Rebuild this BOQ from your saved presets and the current drawing? Quantities re-pull from the drawing and any rates you've typed will be cleared.")) return;
     setBoq(buildInitialBoq(project, SYMBOL_META, findSymbol, boqTemplate));
@@ -2335,7 +2354,9 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
                       <td className="py-0.5 text-slate-400 tabular-nums text-[11px] align-middle">{ii + 1}</td>
                       <td className="py-0.5 pr-1"><input value={it.item} onChange={(e) => setItem(si, it.id, "item", e.target.value)} className={`${cell} text-[12px] font-medium text-slate-800`} placeholder="Item"/></td>
                       <td className="py-0.5 pr-1"><input value={it.spec} onChange={(e) => setItem(si, it.id, "spec", e.target.value)} className={`${cell} text-[11px] text-slate-500`} placeholder="Spec / notes"/></td>
-                      <td className="py-0.5 pr-1"><input value={it.qty} onChange={(e) => setItem(si, it.id, "qty", e.target.value)} inputMode="decimal" className={`${cell} text-[12px] text-right tabular-nums`} placeholder="—"/></td>
+                      <td className="py-0.5 pr-1"><input value={it.qty} onChange={(e) => setItem(si, it.id, "qty", e.target.value)} inputMode="decimal"
+                        title={!isDrawingLinked(it) ? undefined : it.qtyManual ? "Typed quantity. Kept when the BOQ reopens; clear it to use the drawing count." : "Counted from the drawing"}
+                        className={`${cell} text-[12px] text-right tabular-nums ${isDrawingLinked(it) && it.qtyManual ? "italic" : ""}`} placeholder="—"/></td>
                       <td className="py-0.5 pr-1">
                         <div className="flex items-center justify-end gap-0.5">
                           <span className="text-slate-400 text-[11px]">£</span>
@@ -2389,7 +2410,7 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
         {/* Footer */}
         <div className="flex items-center justify-between px-6 py-3 border-t border-slate-200 shrink-0">
           <div className="flex gap-1">
-            <button onClick={refresh} title="Re-pull Second Fix quantities from the current drawing"
+            <button onClick={refresh} title="Re-count every drawing-linked quantity, replacing any you've typed"
               className="px-3 py-2 text-[10px] uppercase tracking-wider text-[#22808F] hover:bg-[#ECF8FA] rounded-md font-semibold flex items-center gap-1.5">
               <RotateCw size={12}/> Refresh from drawing
             </button>
