@@ -78,6 +78,7 @@ function AppGates({ children }) {
   // makes the legacy user_settings block a safe fallback below.
   const [companyBlock, setCompanyBlock] = useState(null);
   const [boqTemplate, setBoqTemplate] = useState(null); // null = use built-in default
+  const [boqPrefs, setBoqPrefs] = useState(null);       // { vatOn } for new BOQs; null = defaults
   const settingsRef = useRef({}); // latest full settings blob, so saves merge
 
   // --- Billing gate state ---
@@ -243,13 +244,14 @@ function AppGates({ children }) {
 
   // Load the account's saved settings (title block + BOQ preset) once signed in.
   useEffect(() => {
-    if (!session) { setTitleBlock(null); setBoqTemplate(null); return; }
+    if (!session) { setTitleBlock(null); setBoqTemplate(null); setBoqPrefs(null); return; }
     let active = true;
     getSettings().then(s => {
       if (!active) return;
       settingsRef.current = s || {};
       setTitleBlock(s?.titleBlock ? normaliseTitleBlock(s.titleBlock) : DEFAULT_TITLEBLOCK);
       setBoqTemplate(s?.boqTemplate || null);
+      setBoqPrefs(s?.boqPrefs || null);
     });
     return () => { active = false; };
   }, [session]);
@@ -297,10 +299,12 @@ function AppGates({ children }) {
     setTitleBlock(next);
   }, []);
 
-  const saveBoqTemplate = useCallback(async (tpl) => {
-    settingsRef.current = { ...settingsRef.current, boqTemplate: tpl };
+  // Presets = the item template plus BOQ preferences, saved together.
+  const saveBoqTemplate = useCallback(async (tpl, prefs) => {
+    settingsRef.current = { ...settingsRef.current, boqTemplate: tpl, ...(prefs ? { boqPrefs: prefs } : {}) };
     await saveSettings(settingsRef.current);
     setBoqTemplate(tpl);
+    if (prefs) setBoqPrefs(prefs);
   }, []);
 
   if (isPublic) {
@@ -352,7 +356,7 @@ function AppGates({ children }) {
       // Merged, not replaced: the profile wins per field, and any legacy line
       // or scheme logo it does not cover is carried through.
       titleBlock: mergeTitleBlocks(companyBlock, titleBlock) || DEFAULT_TITLEBLOCK, saveTitleBlock, refreshCompany,
-      boqTemplate, saveBoqTemplate,
+      boqTemplate, boqPrefs, saveBoqTemplate,
       subscription, manageBilling,
     }}>
       {profileStep === "needed" ? (

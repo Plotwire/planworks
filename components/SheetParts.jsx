@@ -2052,8 +2052,8 @@ function BoqPrintPages({ boq, projectName, company }) {
                 </div>
                 <div style={{ fontSize: 24, fontWeight: 700, color: "#0f172a" }}>{boqGbp(projectTotal)}</div>
               </div>
-              <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 11, marginTop: 4 }}><span style={{ color: "#475569" }}>VAT @ {boq.vatRate}%</span><span>{boqGbp(vat)}</span></div>
-              <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0", fontSize: 11, fontWeight: 700 }}><span>Total inc. VAT</span><span>{boqGbp(projectTotal + vat)}</span></div>
+              {boq.vatOn !== false && <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 11, marginTop: 4 }}><span style={{ color: "#475569" }}>VAT @ {boq.vatRate}%</span><span>{boqGbp(vat)}</span></div>}
+              {boq.vatOn !== false && <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0", fontSize: 11, fontWeight: 700 }}><span>Total inc. VAT</span><span>{boqGbp(projectTotal + vat)}</span></div>}
             </div>
           )}
 
@@ -2075,8 +2075,9 @@ function BoqPrintPages({ boq, projectName, company }) {
 /* ============================================================================
  * BOQ TEMPLATE EDITOR — edit the default items/specs/sections saved per account.
  * ========================================================================= */
-export function BoqTemplateEditor({ saved, onSave, onClose }) {
+export function BoqTemplateEditor({ saved, savedPrefs, onSave, onClose }) {
   const [tpl, setTpl] = useState(() => templateForEditing(saved));
+  const [vatOn, setVatOn] = useState(savedPrefs?.vatOn !== false);
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState(false);
 
@@ -2088,7 +2089,7 @@ export function BoqTemplateEditor({ saved, onSave, onClose }) {
   const doSave = async () => {
     setBusy(true);
     try {
-      await onSave(templateForSaving(tpl));
+      await onSave(templateForSaving(tpl), { ...(savedPrefs || {}), vatOn });
       setFlash(true); setTimeout(() => setFlash(false), 1800);
     } catch (e) { alert("Couldn't save presets: " + (e?.message || e)); }
     finally { setBusy(false); }
@@ -2138,7 +2139,13 @@ export function BoqTemplateEditor({ saved, onSave, onClose }) {
           ))}
         </div>
         <div className="flex items-center justify-between px-6 py-3 border-t border-slate-200 shrink-0">
-          <div className="text-[10px] text-slate-400">Presets apply to every new BOQ.</div>
+          <div className="flex items-center gap-4">
+            <label className="flex items-center gap-1.5 text-[11px] text-slate-700 cursor-pointer select-none">
+              <input type="checkbox" checked={vatOn} onChange={(e) => setVatOn(e.target.checked)} className="accent-[var(--action)]"/>
+              Charge VAT (20%)
+            </label>
+            <div className="text-[10px] text-slate-400">Presets apply to every new BOQ.</div>
+          </div>
           <div className="flex gap-2">
             <button onClick={onClose} className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-md text-[10px] uppercase tracking-wider">Close</button>
             <button onClick={doSave} disabled={busy} className={`px-4 py-2 rounded-md text-[10px] uppercase tracking-wider font-semibold flex items-center gap-1.5 ${flash ? "bg-emerald-500 text-white" : "bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)]"}`}>
@@ -2152,10 +2159,10 @@ export function BoqTemplateEditor({ saved, onSave, onClose }) {
 }
 
 export function BillOfQuantities({ project, updateBoq, onClose }) {
-  const { boqTemplate, saveBoqTemplate } = useApp();
+  const { boqTemplate, boqPrefs, saveBoqTemplate } = useApp();
   const meta = project.meta || {};
   const [boq, setBoq] = useState(() => {
-    const base = project.boq || buildInitialBoq(project, SYMBOL_META, findSymbol, boqTemplate);
+    const base = project.boq || buildInitialBoq(project, SYMBOL_META, findSymbol, boqTemplate, boqPrefs);
     return reconcileBoq(base, project, SYMBOL_META, findSymbol);
   });
   const [showTemplate, setShowTemplate] = useState(false);
@@ -2167,7 +2174,8 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
   const lineTotal = (it) => (parseFloat(it.qty) || 0) * (parseFloat(it.rate) || 0);
   const subtotal = (sec) => sec.items.reduce((s, it) => s + lineTotal(it), 0);
   const projectTotal = boq.sections.reduce((s, sec) => s + subtotal(sec), 0);
-  const vat = projectTotal * (boq.vatRate || 0) / 100;
+  const vatOn = boq.vatOn !== false; // BOQs saved before the switch charge VAT
+  const vat = vatOn ? projectTotal * (boq.vatRate || 0) / 100 : 0;
 
   const setMeta = (f, v) => setBoq(b => ({ ...b, meta: { ...b.meta, [f]: v } }));
   // A quantity typed on a drawing-linked line is marked qtyManual so reopening
@@ -2199,7 +2207,7 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
   };
   const resetToTemplate = () => {
     if (!window.confirm("Rebuild this BOQ from your saved presets and the current drawing? Quantities re-pull from the drawing and any rates you've typed will be cleared.")) return;
-    setBoq(buildInitialBoq(project, SYMBOL_META, findSymbol, boqTemplate));
+    setBoq(buildInitialBoq(project, SYMBOL_META, findSymbol, boqTemplate, boqPrefs));
   };
 
   const printRef = useRef(null);
@@ -2250,8 +2258,8 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
       L.push("");
     });
     L.push([esc("Project total (ex VAT)"), esc(""), esc(""), esc(""), esc(""), esc(projectTotal.toFixed(2))].join(","));
-    L.push([esc("VAT @ " + boq.vatRate + "%"), esc(""), esc(""), esc(""), esc(""), esc(vat.toFixed(2))].join(","));
-    L.push([esc("Total inc VAT"), esc(""), esc(""), esc(""), esc(""), esc((projectTotal + vat).toFixed(2))].join(","));
+    if (vatOn) L.push([esc("VAT @ " + boq.vatRate + "%"), esc(""), esc(""), esc(""), esc(""), esc(vat.toFixed(2))].join(","));
+    if (vatOn) L.push([esc("Total inc VAT"), esc(""), esc(""), esc(""), esc(""), esc((projectTotal + vat).toFixed(2))].join(","));
     const blob = new Blob([L.join("\r\n")], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -2393,14 +2401,22 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
               </div>
               <div className="text-[22px] font-bold text-slate-900 tabular-nums">{gbp(projectTotal)}</div>
             </div>
-            <div className="flex justify-between py-1 text-[12px] mt-1">
-              <span className="text-slate-600">VAT @ {boq.vatRate}%</span>
-              <span className="tabular-nums">{gbp(vat)}</span>
-            </div>
-            <div className="flex justify-between py-1 text-[12px] font-semibold">
-              <span className="text-slate-700">Total inc. VAT</span>
-              <span className="tabular-nums">{gbp(projectTotal + vat)}</span>
-            </div>
+            <label className="flex items-center gap-1.5 mt-2 text-[11px] text-slate-600 cursor-pointer select-none w-fit">
+              <input type="checkbox" checked={vatOn} onChange={(e) => setBoq(b => ({ ...b, vatOn: e.target.checked }))} className="accent-[var(--action)]"/>
+              Charge VAT ({boq.vatRate}%)
+            </label>
+            {vatOn && (
+              <>
+                <div className="flex justify-between py-1 text-[12px] mt-1">
+                  <span className="text-slate-600">VAT @ {boq.vatRate}%</span>
+                  <span className="tabular-nums">{gbp(vat)}</span>
+                </div>
+                <div className="flex justify-between py-1 text-[12px] font-semibold">
+                  <span className="text-slate-700">Total inc. VAT</span>
+                  <span className="tabular-nums">{gbp(projectTotal + vat)}</span>
+                </div>
+              </>
+            )}
           </div>
           {/* Permanent, not dismissible: see BOQ_ESTIMATE_NOTICE in lib/legal.js. */}
           <p className="text-[11px] leading-snug text-[#1A2530] mt-3">{BOQ_ESTIMATE_NOTICE}</p>
@@ -2433,7 +2449,8 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
       {showTemplate && (
         <BoqTemplateEditor
           saved={boqTemplate}
-          onSave={async (tpl) => { await saveBoqTemplate?.(tpl); }}
+          savedPrefs={boqPrefs}
+          onSave={async (tpl, prefs) => { await saveBoqTemplate?.(tpl, prefs); }}
           onClose={() => setShowTemplate(false)}
         />
       )}
