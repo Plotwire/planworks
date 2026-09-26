@@ -25,6 +25,7 @@ import { Masthead } from "@/components/TitleBlockMasthead";
 import { isTouchDevice, supersampleFactor } from "@/lib/touch";
 import { dataUrlToBlob, signPlanImage, signPlanImages } from "@/lib/planImages";
 import { BOQ_ESTIMATE_NOTICE } from "@/lib/legal";
+import { addDaysIso, QUOTE_VALID_DAYS, shownOnQuote } from "@/lib/boqOutputs";
 
 // Per-project title block. The editor publishes the *effective* title block
 // (the project's own, falling back to the account default) through this context
@@ -2269,14 +2270,17 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
 
   const cell = "w-full bg-transparent outline-none rounded px-1.5 py-1 focus:bg-[#ECF8FA] focus:ring-1 focus:ring-[#3FB7C9]/40";
 
-  const MetaField = ({ label, field, strong }) => (
-    <div className="flex items-center gap-2 border-b border-slate-100 py-1.5">
+  // Called as a function, not used as <MetaField/>: a component defined inside
+  // render is a new type every keystroke, so React would remount the input.
+  const metaField = ({ label, field, strong, placeholder }) => (
+    <div key={field} className="flex items-center gap-2 border-b border-slate-100 py-1.5">
       <div className="text-[9px] uppercase tracking-wider text-slate-500 w-28 shrink-0">{label}</div>
       <input value={boq.meta[field] || ""} onChange={(e) => setMeta(field, e.target.value)}
-        placeholder="—"
+        placeholder={placeholder || "—"}
         className={`${cell} text-[12px] ${strong ? "font-semibold text-slate-900" : "text-slate-700"}`}/>
     </div>
   );
+  const defaultValidUntil = addDaysIso(boq.meta.dateIssued, QUOTE_VALID_DAYS);
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
@@ -2309,14 +2313,23 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
 
         <div className="flex-1 overflow-y-auto px-6 py-5 text-slate-800">
           {/* Metadata grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 mb-4">
+            {metaField({ label: "Development", field: "development", strong: true })}
+            {metaField({ label: "Site address", field: "siteAddress" })}
+            {metaField({ label: "Prepared by", field: "preparedBy", strong: true })}
+            {metaField({ label: "Supplier", field: "supplier" })}
+            {metaField({ label: "Drawing no.", field: "drawingNo" })}
+            {metaField({ label: "Date issued", field: "dateIssued", placeholder: "YYYY-MM-DD" })}
+            {metaField({ label: "Required on site", field: "requiredOnSite" })}
+          </div>
+
+          {/* Client details: used on the client quote only. */}
+          <div className="text-[9px] uppercase tracking-wider text-[#22808F] font-semibold mb-1">Client (quote only)</div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 mb-5">
-            <MetaField label="Development" field="development" strong/>
-            <MetaField label="Site address" field="siteAddress"/>
-            <MetaField label="Prepared by" field="preparedBy" strong/>
-            <MetaField label="Supplier" field="supplier"/>
-            <MetaField label="Drawing no." field="drawingNo"/>
-            <MetaField label="Date issued" field="dateIssued"/>
-            <MetaField label="Required on site" field="requiredOnSite"/>
+            {metaField({ label: "Client name", field: "clientName", strong: true })}
+            {metaField({ label: "Client address", field: "clientAddress" })}
+            {metaField({ label: "Quote reference", field: "quoteRef" })}
+            {metaField({ label: "Valid until", field: "validUntil", placeholder: defaultValidUntil ? `${defaultValidUntil} (30 days)` : "30 days from date issued" })}
           </div>
 
           {/* Notes to supplier */}
@@ -2353,12 +2366,13 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
                     <th className="py-1.5 pr-2 w-14 text-right">Qty</th>
                     <th className="py-1.5 pr-2 w-24 text-right">Unit Rate</th>
                     <th className="py-1.5 w-24 text-right">Total</th>
+                    <th className="py-1.5 w-12 text-center" title="Show this line on the client quote. Hidden lines still count in the totals.">On quote</th>
                     <th className="w-6"></th>
                   </tr>
                 </thead>
                 <tbody>
                   {sec.items.map((it, ii) => (
-                    <tr key={it.id} className="group border-b border-slate-100">
+                    <tr key={it.id} className={`group border-b border-slate-100 ${it.hideOnQuote ? "bg-slate-50" : ""}`}>
                       <td className="py-0.5 text-slate-400 tabular-nums text-[11px] align-middle">{ii + 1}</td>
                       <td className="py-0.5 pr-1"><input value={it.item} onChange={(e) => setItem(si, it.id, "item", e.target.value)} className={`${cell} text-[12px] font-medium text-slate-800`} placeholder="Item"/></td>
                       <td className="py-0.5 pr-1"><input value={it.spec} onChange={(e) => setItem(si, it.id, "spec", e.target.value)} className={`${cell} text-[11px] text-slate-500`} placeholder="Spec / notes"/></td>
@@ -2372,6 +2386,11 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
                         </div>
                       </td>
                       <td className="py-0.5 text-right tabular-nums text-[12px] font-semibold text-slate-900 pr-1">{lineTotal(it) ? gbp(lineTotal(it)) : "\u2014"}</td>
+                      <td className="py-0.5 text-center">
+                        <input type="checkbox" checked={shownOnQuote(it)} onChange={(e) => setItem(si, it.id, "hideOnQuote", !e.target.checked)}
+                          title={shownOnQuote(it) ? "Shown on the client quote" : "Hidden from the client quote (still counts in the totals)"}
+                          aria-label="Show on client quote" className="accent-[var(--action)] w-3.5 h-3.5 cursor-pointer"/>
+                      </td>
                       <td className="py-0.5 text-center">
                         <button onClick={() => removeItem(si, it.id)} className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500"><X size={12}/></button>
                       </td>
