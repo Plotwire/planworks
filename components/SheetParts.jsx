@@ -25,7 +25,7 @@ import { Masthead } from "@/components/TitleBlockMasthead";
 import { isTouchDevice, supersampleFactor } from "@/lib/touch";
 import { dataUrlToBlob, signPlanImage, signPlanImages } from "@/lib/planImages";
 import { BOQ_ESTIMATE_NOTICE } from "@/lib/legal";
-import { addDaysIso, QUOTE_VALID_DAYS, shownOnQuote, lineTotal as boqLineTotal, sectionTotal, boqTotals, outputSettings, materialsDoc, docToCsv } from "@/lib/boqOutputs";
+import { addDaysIso, QUOTE_VALID_DAYS, shownOnQuote, lineTotal as boqLineTotal, sectionTotal, boqTotals, outputSettings, materialsDoc, quoteDoc, docToCsv, QUOTE_DETAILS, hasQty } from "@/lib/boqOutputs";
 import BoqDocPages from "@/components/BoqDocPages";
 
 // Per-project title block. The editor publishes the *effective* title block
@@ -2014,8 +2014,14 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
   const outSet = outputSettings(boq);
   const setOutput = (output) => setBoq(b => ({ ...b, output }));
   const setSkipEmpty = (skipEmpty) => setBoq(b => ({ ...b, materials: { ...(b.materials || {}), skipEmpty } }));
+  const setDetail = (detail) => setBoq(b => ({ ...b, quote: { ...(b.quote || {}), detail } }));
+  const hiddenCount = boq.sections.reduce((n, sec) => n + sec.items.filter(it => !shownOnQuote(it) && hasQty(it)).length, 0);
   const docOpts = { projectName: meta.projectName || "", company: meta.company || boq.meta.preparedBy || "" };
-  const doc = materialsDoc(boq, { ...docOpts, notice: BOQ_ESTIMATE_NOTICE });
+  // Materials list keeps the Plotwire estimate notice; the client quote uses
+  // its own neutral wording (see quoteDoc).
+  const doc = outSet.output === "quote"
+    ? quoteDoc(boq, docOpts)
+    : materialsDoc(boq, { ...docOpts, notice: BOQ_ESTIMATE_NOTICE });
 
   const setMeta = (f, v) => setBoq(b => ({ ...b, meta: { ...b.meta, [f]: v } }));
   // A quantity typed on a drawing-linked line is marked qtyManual so reopening
@@ -2267,7 +2273,7 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
           <div className="flex items-center gap-2">
             <span className="text-[9px] uppercase tracking-wider text-slate-500 font-semibold">Download</span>
             <div className="flex rounded-md ring-1 ring-slate-300 overflow-hidden" role="radiogroup" aria-label="Output">
-              {[["materials", "Materials list"]].map(([k, label]) => (
+              {[["materials", "Materials list"], ["quote", "Client quote"]].map(([k, label]) => (
                 <button key={k} role="radio" aria-checked={outSet.output === k} onClick={() => setOutput(k)}
                   className={`px-3 py-1.5 text-[11px] font-semibold ${outSet.output === k ? "bg-[var(--action)] text-[color:var(--action-ink)]" : "bg-white text-slate-600 hover:bg-slate-100"}`}>
                   {label}
@@ -2282,6 +2288,21 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
                 Skip lines with no quantity
               </label>
               <span className="text-slate-400">No prices. Labour is left off.</span>
+            </>
+          )}
+          {outSet.output === "quote" && (
+            <>
+              <div className="flex items-center gap-3" role="radiogroup" aria-label="Quote detail">
+                {QUOTE_DETAILS.map(d => (
+                  <label key={d.key} title={d.hint} className="flex items-center gap-1.5 cursor-pointer select-none">
+                    <input type="radio" name="quote-detail" checked={outSet.detail === d.key} onChange={() => setDetail(d.key)} className="accent-[var(--action)]"/>
+                    {d.label}
+                  </label>
+                ))}
+              </div>
+              {hiddenCount > 0 && outSet.detail !== "sectionTotals" && (
+                <span className="text-slate-400">{hiddenCount} line{hiddenCount === 1 ? "" : "s"} hidden, included as &ldquo;Other materials &amp; sundries&rdquo;</span>
+              )}
             </>
           )}
         </div>

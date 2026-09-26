@@ -25,7 +25,7 @@ function cellText(col, row) {
   const v = row[col.key];
   if (col.money) return v == null ? "" : gbp(v);
   if (col.key === "n") return v == null ? "" : v;
-  return v === "" || v == null ? (col.key === "qty" ? "—" : "") : v;
+  return v === "" || v == null ? (col.key === "qty" && row.kind !== "sundries" ? "—" : "") : v;
 }
 
 function Preamble({ doc }) {
