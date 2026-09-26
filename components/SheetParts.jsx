@@ -25,7 +25,7 @@ import { Masthead } from "@/components/TitleBlockMasthead";
 import { isTouchDevice, supersampleFactor } from "@/lib/touch";
 import { dataUrlToBlob, signPlanImage, signPlanImages } from "@/lib/planImages";
 import { BOQ_ESTIMATE_NOTICE } from "@/lib/legal";
-import { addDaysIso, QUOTE_VALID_DAYS, shownOnQuote, lineTotal as boqLineTotal, sectionTotal, boqTotals, outputSettings, materialsDoc, quoteDoc, docToCsv, QUOTE_DETAILS, hasQty } from "@/lib/boqOutputs";
+import { addDaysIso, QUOTE_VALID_DAYS, shownOnQuote, lineTotal as boqLineTotal, sectionTotal, boqTotals, outputSettings, materialsDoc, quoteDoc, docToCsv, QUOTE_DETAILS, hasQty, badNumberLines, parseNum } from "@/lib/boqOutputs";
 import BoqDocPages from "@/components/BoqDocPages";
 
 // Per-project title block. The editor publishes the *effective* title block
@@ -1962,7 +1962,7 @@ export function BoqTemplateEditor({ saved, savedPrefs, onSave, onClose }) {
                       <td className="py-0.5 pr-1"><input value={it.item} onChange={(e) => setItem(si, it.id, "item", e.target.value)} className={`${cell} text-[12px] font-medium text-slate-800`} placeholder="Item"/></td>
                       <td className="py-0.5 pr-1"><input value={it.spec} onChange={(e) => setItem(si, it.id, "spec", e.target.value)} className={`${cell} text-[11px] text-slate-500`} placeholder="Spec / notes"/></td>
                       <td className="py-0.5 text-center">{it.sf ? <span title="Quantity auto-fills from the drawing" className="text-[8px] uppercase tracking-wider text-[#22808F] bg-[#3FB7C9]/15 rounded px-1.5 py-0.5">auto</span> : <span className="text-slate-300 text-[10px]">—</span>}</td>
-                      <td className="py-0.5 text-center"><button onClick={() => removeItem(si, it.id)} className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500"><X size={12}/></button></td>
+                      <td className="py-0.5 text-center"><button onClick={() => removeItem(si, it.id)} aria-label="Delete line" className="opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 text-slate-300 hover:text-red-500"><X size={12}/></button></td>
                     </tr>
                   ))}
                 </tbody>
@@ -2014,6 +2014,9 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
   const outSet = outputSettings(boq);
   const setOutput = (output) => setBoq(b => ({ ...b, output }));
   const setSkipEmpty = (skipEmpty) => setBoq(b => ({ ...b, materials: { ...(b.materials || {}), skipEmpty } }));
+  const badLines = badNumberLines(boq);
+  const badCell = (v) => parseNum(v).bad ? " ring-1 ring-amber-400 bg-amber-50" : "";
+  const badTitle = (v) => parseNum(v).bad ? "Not a number, so this counts as 0" : undefined;
   const setDetail = (detail) => setBoq(b => ({ ...b, quote: { ...(b.quote || {}), detail } }));
   const hiddenCount = boq.sections.reduce((n, sec) => n + sec.items.filter(it => !shownOnQuote(it) && hasQty(it)).length, 0);
   const docOpts = { projectName: meta.projectName || "", company: meta.company || boq.meta.preparedBy || "" };
@@ -2160,12 +2163,12 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
 
           {/* Notes to supplier */}
           <div className="rounded-xl ring-1 ring-slate-200 bg-slate-50/60 px-4 py-3 mb-6">
-            <div className="text-[9px] uppercase tracking-wider text-[#22808F] font-semibold mb-2">Notes to supplier</div>
+            <div className="text-[9px] uppercase tracking-wider text-[#22808F] font-semibold mb-2">Notes to supplier <span className="normal-case tracking-normal font-normal text-slate-400">(materials list only)</span></div>
             {boq.notes.map((n, i) => (
               <div key={i} className="group flex items-start gap-2 mb-1">
                 <span className="text-slate-400 text-[11px] mt-1.5">•</span>
                 <input value={n} onChange={(e) => setNote(i, e.target.value)} className={`${cell} text-[11px] text-slate-600`}/>
-                <button onClick={() => removeNote(i)} className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500 mt-1.5"><X size={12}/></button>
+                <button onClick={() => removeNote(i)} aria-label="Delete note" className="opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 text-slate-300 hover:text-red-500 mt-1.5"><X size={12}/></button>
               </div>
             ))}
             <button onClick={addNote} className="text-[10px] text-slate-400 hover:text-[#22808F] mt-1 ml-4">+ Add note</button>
@@ -2203,12 +2206,12 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
                       <td className="py-0.5 pr-1"><input value={it.item} onChange={(e) => setItem(si, it.id, "item", e.target.value)} className={`${cell} text-[12px] font-medium text-slate-800`} placeholder="Item"/></td>
                       <td className="py-0.5 pr-1"><input value={it.spec} onChange={(e) => setItem(si, it.id, "spec", e.target.value)} className={`${cell} text-[11px] text-slate-500`} placeholder="Spec / notes"/></td>
                       <td className="py-0.5 pr-1"><input value={it.qty} onChange={(e) => setItem(si, it.id, "qty", e.target.value)} inputMode="decimal"
-                        title={!isDrawingLinked(it) ? undefined : it.qtyManual ? "Typed quantity. Kept when the BOQ reopens; clear it to use the drawing count." : "Counted from the drawing"}
-                        className={`${cell} text-[12px] text-right tabular-nums ${isDrawingLinked(it) && it.qtyManual ? "italic" : ""}`} placeholder="—"/></td>
+                        title={badTitle(it.qty) || (!isDrawingLinked(it) ? undefined : it.qtyManual ? "Typed quantity. Kept when the BOQ reopens; clear it to use the drawing count." : "Counted from the drawing")}
+                        className={`${cell} text-[12px] text-right tabular-nums ${isDrawingLinked(it) && it.qtyManual ? "italic" : ""}${badCell(it.qty)}`} placeholder="—"/></td>
                       <td className="py-0.5 pr-1">
                         <div className="flex items-center justify-end gap-0.5">
                           <span className="text-slate-400 text-[11px]">£</span>
-                          <input value={it.rate} onChange={(e) => setItem(si, it.id, "rate", e.target.value)} inputMode="decimal" className={`${cell} text-[12px] text-right tabular-nums`} placeholder="0.00"/>
+                          <input value={it.rate} onChange={(e) => setItem(si, it.id, "rate", e.target.value)} inputMode="decimal" title={badTitle(it.rate)} className={`${cell} text-[12px] text-right tabular-nums${badCell(it.rate)}`} placeholder="0.00"/>
                         </div>
                       </td>
                       <td className="py-0.5 text-right tabular-nums text-[12px] font-semibold text-slate-900 pr-1">{lineTotal(it) ? gbp(lineTotal(it)) : "\u2014"}</td>
@@ -2218,7 +2221,7 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
                           aria-label="Show on client quote" className="accent-[var(--action)] w-3.5 h-3.5 cursor-pointer"/>
                       </td>
                       <td className="py-0.5 text-center">
-                        <button onClick={() => removeItem(si, it.id)} className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500"><X size={12}/></button>
+                        <button onClick={() => removeItem(si, it.id)} aria-label="Delete line" className="opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 text-slate-300 hover:text-red-500"><X size={12}/></button>
                       </td>
                     </tr>
                   ))}
@@ -2230,20 +2233,26 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
             </div>
           ))}
 
+          {/* Qty/Rate that isn't a number counts as zero -- say so. */}
+          {badLines.length > 0 && (
+            <div role="alert" className="rounded-lg ring-1 ring-amber-300 bg-amber-50 px-4 py-2.5 mb-3 text-[11.5px] text-amber-900">
+              <b>{badLines.length} line{badLines.length === 1 ? " has" : "s have"} a Qty or Rate that isn&rsquo;t a number</b>, so {badLines.length === 1 ? "it counts" : "they count"} as &pound;0:{" "}
+              {badLines.slice(0, 5).map(l => `${l.item || "(no name)"} (${l.section})`).join(", ")}{badLines.length > 5 ? ", \u2026" : ""}.
+              {" "}A word like &ldquo;TBC&rdquo; is fine on the materials list.
+            </div>
+          )}
+
           {/* Totals */}
           <div className="rounded-xl ring-1 ring-slate-200 bg-slate-50/60 px-5 py-4 mt-2">
-            <div className="text-[9px] uppercase tracking-wider text-slate-500 font-semibold mb-2">Plot total</div>
+            <div className="text-[9px] uppercase tracking-wider text-slate-500 font-semibold mb-2">Totals</div>
             {boq.sections.map((sec, i) => (
               <div key={i} className="flex justify-between border-b border-slate-100 py-1.5 text-[12px]">
-                <span className="text-slate-600">{sec.title} subtotal</span>
+                <span className="text-slate-600">{sec.title}</span>
                 <span className="tabular-nums font-medium">{gbp(subtotal(sec))}</span>
               </div>
             ))}
             <div className="flex items-end justify-between mt-3 pt-2 border-t-2 border-slate-800">
-              <div>
-                <div className="text-[13px] font-bold text-slate-900">Project total</div>
-                <div className="text-[8px] uppercase tracking-wider text-slate-400">Excluding VAT \u00B7 Issued for pricing</div>
-              </div>
+              <div className="text-[13px] font-bold text-slate-900">{vatOn ? "Total (ex VAT)" : "Total"}</div>
               <div className="text-[22px] font-bold text-slate-900 tabular-nums">{gbp(projectTotal)}</div>
             </div>
             <label className="flex items-center gap-1.5 mt-2 text-[11px] text-slate-600 cursor-pointer select-none w-fit">
@@ -2265,7 +2274,7 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
           </div>
           {/* Permanent, not dismissible: see BOQ_ESTIMATE_NOTICE in lib/legal.js. */}
           <p className="text-[11px] leading-snug text-[#1A2530] mt-3">{BOQ_ESTIMATE_NOTICE}</p>
-          <div className="text-[10px] text-slate-400 mt-1">Unit rates and totals to be completed by supplier. This schedule is issued for pricing.</div>
+          <div className="text-[10px] text-slate-400 mt-1">Unit rates are your selling prices. The materials list shows quantities only; the client quote shows prices.</div>
         </div>
 
         {/* Output: which document Download PDF / CSV produce, and its options. */}
