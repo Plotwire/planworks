@@ -25,7 +25,7 @@ import { Masthead } from "@/components/TitleBlockMasthead";
 import { isTouchDevice, supersampleFactor } from "@/lib/touch";
 import { dataUrlToBlob, signPlanImage, signPlanImages } from "@/lib/planImages";
 import { BOQ_ESTIMATE_NOTICE } from "@/lib/legal";
-import { TrialSheetMark } from "@/components/TryMode";
+import { TrialSheetMark, TryPrompt, useTryPrompt, LOCKED } from "@/components/TryMode";
 import { addDaysIso, QUOTE_VALID_DAYS, shownOnQuote, lineTotal as boqLineTotal, sectionTotal, boqTotals, outputSettings, materialsDoc, quoteDoc, docToCsv, QUOTE_DETAILS, hasQty, badNumberLines, parseNum, expiredValidUntil, fmtDate } from "@/lib/boqOutputs";
 import BoqDocPages from "@/components/BoqDocPages";
 
@@ -2004,9 +2004,16 @@ export function BoqTemplateEditor({ saved, savedPrefs, onSave, onClose }) {
 // materials list and client quote can still be chosen and downloaded.
 export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false }) {
   const { boqTemplate, boqPrefs, saveBoqTemplate, companyBrand, access = {} } = useApp();
-  // Try mode: items and quantities only -- no prices, totals, quote choices
-  // or downloads (components/TryMode.jsx).
-  const priced = !access.isTry;
+  // Try mode: everything on screen works -- prices, totals, labour, VAT,
+  // client fields, On-quote ticks, both outputs. Only the downloads (PDF and
+  // CSV) are locked; they open the Subscribe prompt (components/TryMode.jsx).
+  const outputsLocked = Boolean(access.isTry);
+  const tryPrompt = useTryPrompt();
+  const downloadsAllowed = () => {
+    if (!outputsLocked) return true;
+    tryPrompt.show(LOCKED.download);
+    return false;
+  };
   const meta = project.meta || {};
   const [boq, setBoq] = useState(() => {
     const base = project.boq
@@ -2096,6 +2103,7 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
   const fileBase = () => (meta.projectName || "plan").replace(/[^a-z0-9-_]+/gi, "_");
 
   const downloadPDF = async () => {
+    if (!downloadsAllowed()) return; // Try mode: locked output
     if (!printRef.current || !okToExport()) return;
     setPdfBusy(true);
     try {
@@ -2121,6 +2129,7 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
   };
 
   const downloadCSV = () => {
+    if (!downloadsAllowed()) return; // Try mode: locked output
     if (!okToExport()) return;
     const blob = new Blob([docToCsv(doc)], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
@@ -2166,7 +2175,7 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
         {/* Off-screen print layout captured for PDF export */}
         <div aria-hidden style={{ position: "absolute", left: -10000, top: 0, width: 794, pointerEvents: "none" }}>
           <div ref={printRef}>
-            {priced && <BoqDocPages doc={doc} />}
+            <BoqDocPages doc={doc} />
           </div>
         </div>
 
@@ -2198,9 +2207,11 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
         )}
 
         {/* disabled on a fieldset switches off every input, tick box and add/
-            remove button inside it at once -- the read-only view. */}
-        <fieldset disabled={readOnly} className="flex-1 min-h-0 flex flex-col m-0 p-0 border-0 min-w-0">
-        <div className="flex-1 overflow-y-auto px-6 py-5 text-slate-800">
+            remove button inside it at once -- the read-only view. The fieldset
+            sits INSIDE the scrolling area: as the flex child itself it could
+            not shrink, so the BOQ stopped scrolling once taller than the window. */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5 text-slate-800">
+        <fieldset disabled={readOnly} className="m-0 p-0 border-0 min-w-0">
           {/* Metadata grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 mb-4">
             {metaField({ label: "Development", field: "development", strong: true })}
@@ -2241,12 +2252,10 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
               <div className="flex items-center justify-between mb-2">
                 <input value={sec.title} onChange={(e) => setSectionTitle(si, e.target.value)}
                   className="text-[14px] font-bold text-slate-900 bg-transparent outline-none focus:bg-[#ECF8FA] rounded px-1"/>
-                {priced && (
                   <div className="text-right">
                     <div className="text-[8px] uppercase tracking-wider text-slate-400">Subtotal</div>
                     <div className="text-[14px] font-bold text-[#22808F] tabular-nums">{gbp(subtotal(sec))}</div>
                   </div>
-                )}
               </div>
               {sec.subtitle && <div className="text-[10px] text-slate-400 -mt-1 mb-1.5 px-1">{sec.subtitle}</div>}
               <table className="w-full border-collapse">
@@ -2256,9 +2265,9 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
                     <th className="py-1.5 pr-2">Item</th>
                     <th className="py-1.5 pr-2">Specification / Notes</th>
                     <th className="py-1.5 pr-2 w-14 text-right">Qty</th>
-                    {priced && <th className="py-1.5 pr-2 w-24 text-right">Unit Rate</th>}
-                    {priced && <th className="py-1.5 w-24 text-right">Total</th>}
-                    {priced && <th className="py-1.5 w-12 text-center" title="Show this line on the client quote. Hidden lines still count in the totals.">On quote</th>}
+                    <th className="py-1.5 pr-2 w-24 text-right">Unit Rate</th>
+                    <th className="py-1.5 w-24 text-right">Total</th>
+                    <th className="py-1.5 w-12 text-center" title="Show this line on the client quote. Hidden lines still count in the totals.">On quote</th>
                     <th className="w-6"></th>
                   </tr>
                 </thead>
@@ -2271,22 +2280,18 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
                       <td className="py-0.5 pr-1"><input value={it.qty} onChange={(e) => setItem(si, it.id, "qty", e.target.value)} inputMode="decimal"
                         title={badTitle(it.qty) || (!isDrawingLinked(it) ? undefined : it.qtyManual ? "Typed quantity. Kept when the BOQ reopens; clear it to use the drawing count." : "Counted from the drawing")}
                         className={`${cell} text-[12px] text-right tabular-nums ${isDrawingLinked(it) && it.qtyManual ? "italic" : ""}${badCell(it.qty)}`} placeholder="—"/></td>
-                      {priced && (
                       <td className="py-0.5 pr-1">
                         <div className="flex items-center justify-end gap-0.5">
                           <span className="text-slate-400 text-[11px]">£</span>
                           <input value={it.rate} onChange={(e) => setItem(si, it.id, "rate", e.target.value)} inputMode="decimal" title={badTitle(it.rate)} className={`${cell} text-[12px] text-right tabular-nums${badCell(it.rate)}`} placeholder="0.00"/>
                         </div>
                       </td>
-                      )}
-                      {priced && <td className="py-0.5 text-right tabular-nums text-[12px] font-semibold text-slate-900 pr-1">{lineTotal(it) ? gbp(lineTotal(it)) : "\u2014"}</td>}
-                      {priced && (
+                      <td className="py-0.5 text-right tabular-nums text-[12px] font-semibold text-slate-900 pr-1">{lineTotal(it) ? gbp(lineTotal(it)) : "\u2014"}</td>
                       <td className="py-0.5 text-center">
                         <input type="checkbox" checked={shownOnQuote(it)} onChange={(e) => setItem(si, it.id, "hideOnQuote", !e.target.checked)}
                           title={shownOnQuote(it) ? "Shown on the client quote" : "Hidden from the client quote (still counts in the totals)"}
                           aria-label="Show on client quote" className="accent-[var(--action)] w-3.5 h-3.5 cursor-pointer"/>
                       </td>
-                      )}
                       <td className="py-0.5 text-center">
                         <button onClick={() => removeItem(si, it.id)} aria-label="Delete line" className="opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 text-slate-300 hover:text-red-500"><X size={12}/></button>
                       </td>
@@ -2302,21 +2307,9 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
 
           {/* Try mode: quantities only. Prices, totals, quotes and downloads
               unlock with a subscription. */}
-          {!priced && (
-            <div className="rounded-xl ring-1 ring-[#BFE7ED] bg-[#ECF8FA] px-5 py-4 mt-2 flex flex-wrap items-center justify-between gap-3">
-              <div className="text-[12px] text-slate-700 max-w-xl">
-                <b className="text-slate-900">Prices, client quotes and materials lists come with a subscription.</b>{" "}
-                Every item and quantity from your drawing is here. Subscribe to price the job, send a quote and download it.
-              </div>
-              <button onClick={access.openSubscribe}
-                className="px-4 py-2 bg-[var(--action)] text-[color:var(--action-ink)] rounded-md text-[11px] font-semibold hover:bg-[var(--action-hover)]">
-                Subscribe
-              </button>
-            </div>
-          )}
 
           {/* Qty/Rate that isn't a number counts as zero -- say so. */}
-          {priced && badLines.length > 0 && (
+          {badLines.length > 0 && (
             <div role="alert" className="rounded-lg ring-1 ring-amber-300 bg-amber-50 px-4 py-2.5 mb-3 text-[11.5px] text-amber-900">
               <b>{badLines.length} line{badLines.length === 1 ? " has" : "s have"} a Qty or Rate that isn&rsquo;t a number</b>, so {badLines.length === 1 ? "it counts" : "they count"} as &pound;0:{" "}
               {badLines.slice(0, 5).map(l => `${l.item || "(no name)"} (${l.section})`).join(", ")}{badLines.length > 5 ? ", \u2026" : ""}.
@@ -2325,7 +2318,6 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
           )}
 
           {/* Totals */}
-          {priced && (
           <div className="rounded-xl ring-1 ring-slate-200 bg-slate-50/60 px-5 py-4 mt-2">
             <div className="text-[9px] uppercase tracking-wider text-slate-500 font-semibold mb-2">Totals</div>
             {boq.sections.map((sec, i) => (
@@ -2355,15 +2347,13 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
               </>
             )}
           </div>
-          )}
           {/* Permanent, not dismissible: see BOQ_ESTIMATE_NOTICE in lib/legal.js. */}
           <p className="text-[11px] leading-snug text-[#1A2530] mt-3">{BOQ_ESTIMATE_NOTICE}</p>
-          {priced && <div className="text-[10px] text-slate-400 mt-1">Unit rates are your selling prices. The materials list shows quantities only; the client quote shows prices.</div>}
-        </div>
+          <div className="text-[10px] text-slate-400 mt-1">Unit rates are your selling prices. The materials list shows quantities only; the client quote shows prices.</div>
         </fieldset>
+        </div>
 
         {/* Output: which document Download PDF / CSV produce, and its options. */}
-        {priced && (
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2 px-6 py-2.5 border-t border-slate-200 bg-slate-50 shrink-0 text-[11px] text-slate-700">
           <div className="flex items-center gap-2">
             <span className="text-[9px] uppercase tracking-wider text-slate-500 font-semibold">Download</span>
@@ -2404,7 +2394,6 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
             </>
           )}
         </div>
-        )}
 
         {/* Footer */}
         <div className="flex items-center justify-between px-6 py-3 border-t border-slate-200 shrink-0">
@@ -2420,22 +2409,18 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
           </div>
           <div className="flex gap-2">
             <button onClick={onClose} className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-md text-[10px] uppercase tracking-wider">Close</button>
-            {!priced && (
-              <button onClick={access.openSubscribe}
-                className="px-4 py-2 bg-[var(--action)] text-[color:var(--action-ink)] rounded-md text-[10px] uppercase tracking-wider font-semibold hover:bg-[var(--action-hover)] flex items-center gap-1.5">
-                <Download size={12}/> Subscribe to download
-              </button>
-            )}
-            {priced && <>
             <button onClick={downloadCSV} className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-md text-[10px] uppercase tracking-wider font-semibold flex items-center gap-1.5"><Download size={12}/> CSV</button>
             <button onClick={downloadPDF} disabled={pdfBusy} style={pdfBusy ? { opacity: 0.6, cursor: "wait" } : undefined}
               className="px-4 py-2 bg-[var(--action)] text-[color:var(--action-ink)] rounded-md text-[10px] uppercase tracking-wider font-semibold hover:bg-[var(--action-hover)] flex items-center gap-1.5">
               <Download size={12}/> {pdfBusy ? "Building…" : "Download PDF"}
             </button>
-            </>}
           </div>
         </div>
       </div>
+
+      {/* Try mode: shown when a locked download is clicked. */}
+      <TryPrompt open={Boolean(tryPrompt.prompt)} title={tryPrompt.prompt?.title} body={tryPrompt.prompt?.body}
+        onSubscribe={() => { tryPrompt.hide(); access.openSubscribe?.(); }} onClose={tryPrompt.hide} />
 
       {showTemplate && (
         <BoqTemplateEditor

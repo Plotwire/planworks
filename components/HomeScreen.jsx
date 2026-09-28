@@ -281,7 +281,7 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
               <div className="access-banner" role="status">
                 <div>
                   <strong>You&rsquo;re trying Plotwire.</strong>
-                  <span> Place up to {symbolLimit} symbols across your drawings to see how it works. Exports, printing and quotes unlock when you subscribe, and everything you draw is kept.</span>
+                  <span> Use every feature, pricing and quotes included, with up to {symbolLimit} symbols across your drawings. Downloading, printing and sharing unlock when you subscribe, and everything you draw is kept.</span>
                 </div>
                 <button className="mg-primary" onClick={access.openSubscribe}>Subscribe</button>
               </div>

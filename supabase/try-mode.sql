@@ -34,6 +34,13 @@
 --     planner share token (the share link). See section 7 for links made
 --     before launch.
 --
+-- NOT RESTRICTED for try accounts: anything inside a drawing apart from the
+-- symbol count -- BOQ rates, totals, labour, VAT, client details, On-quote
+-- ticks and output choices are part of projects.data and save like any other
+-- edit. Try mode locks only the OUTPUTS (PDF/CSV downloads, print, the
+-- Save As file, planner image share); those are made in the browser, so the
+-- app enforces them, not the database.
+--
 -- The React app mirrors all of this for the user experience; these rules are
 -- what stop anyone skipping the app and calling Supabase directly.
 --

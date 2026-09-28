@@ -6,7 +6,9 @@ import { savedSymbolCounts } from "@/lib/db";
 /* ============================================================================
  * TRY MODE -- the in-app side of "Try Plotwire" (lib/access.js). An account
  * that has never paid can place TRY_SYMBOL_LIMIT symbols in total across all
- * its saved drawings, and can't export, price or share. Its drawing sheet is
+ * its saved drawings. Every feature works on screen (BOQ pricing and quotes
+ * included); only the outputs are locked -- PDF/CSV downloads, print, the
+ * Save As file and planner sharing -- and they open the Subscribe prompt. Its drawing sheet is
  * marked "TRIAL – NOT FOR ISSUE" with one faint Plotwire logo -- nothing is
  * laid over the toolbars, panels, BOQ or sketch tool. The database enforces
  * the same limit on save (supabase/try-mode.sql); this makes it friendly.
@@ -144,7 +146,7 @@ export function useTryPrompt() {
 export const LOCKED = {
   export: { title: "Exports come with a subscription", body: "Downloading and printing drawings unlocks when you subscribe. Everything you've drawn is kept." },
   saveFile: { title: "Saving to a file comes with a subscription", body: "Your drawings are saved to your account as you go. Downloading a copy unlocks when you subscribe." },
-  boq: { title: "Prices, quotes and materials lists come with a subscription", body: "You can see every item and quantity. Pricing, client quotes and downloads unlock when you subscribe." },
+  download: { title: "Downloads come with a subscription", body: "Price the job and build your quote as much as you like. Downloading the PDF or CSV unlocks when you subscribe, and everything you've done is kept." },
   share: { title: "Sharing comes with a subscription", body: "Share links and images of your planner unlock when you subscribe." },
   limit: null, // the default "Subscribe to keep going" wording
 };
