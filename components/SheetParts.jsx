@@ -3292,7 +3292,8 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
     }
   };
 
-  // Tucked-away backup: download the whole project as a re-importable file.
+  // "Data copy (.json)": the whole drawing's data, for the user's records.
+  // Nothing in the app imports it.
   const downloadBackup = () => {
     const blob = new Blob([JSON.stringify(project, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
@@ -3352,7 +3353,7 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
               <ClipboardList size={12}/> Quote
             </button>
           )}
-          <button onClick={downloadBackup} className="pp-btn pp-btn-ghost" title="Download a re-importable backup of the whole project (.json)">Backup</button>
+          <button onClick={downloadBackup} className="pp-btn pp-btn-ghost" title="Download a copy of this drawing's data for your records.">Data copy (.json)</button>
           <button onClick={emailClient} className="pp-btn pp-btn-email"><Mail size={12}/> Email client</button>
           <button onClick={onPrint} className="pp-btn pp-btn-email"><Printer size={12}/> Print</button>
           <button onClick={downloadPDF} disabled={pdfBusy} className="pp-btn pp-btn-primary" style={pdfBusy ? { opacity: 0.6, cursor: "wait" } : undefined}>
