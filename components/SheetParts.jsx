@@ -16,7 +16,7 @@ import {
 } from "@/lib/symbols.jsx";
 import { findFurniture, FURNITURE, FURNITURE_VIEWBOX, FURNITURE_COLOUR } from "@/lib/furniture.jsx";
 import { drawSymbol } from "@/lib/symbolPdf";
-import { buildInitialBoq, reconcileBoq, hasTypedDrawingQtys, isDrawingLinked, newBoqItem, templateForEditing, templateForSaving, newTemplateItem } from "@/lib/boqTemplate";
+import { buildInitialBoq, addMissingLabour, reconcileBoq, hasTypedDrawingQtys, isDrawingLinked, newBoqItem, templateForEditing, templateForSaving, newTemplateItem } from "@/lib/boqTemplate";
 import { useApp } from "@/components/AppShell";
 import { DEFAULT_TITLEBLOCK, resizeImageToDataUrl } from "@/lib/titleBlock";
 import { ensurePdfjs } from "@/lib/pdfjs";
@@ -25,7 +25,7 @@ import { Masthead } from "@/components/TitleBlockMasthead";
 import { isTouchDevice, supersampleFactor } from "@/lib/touch";
 import { dataUrlToBlob, signPlanImage, signPlanImages } from "@/lib/planImages";
 import { BOQ_ESTIMATE_NOTICE } from "@/lib/legal";
-import { addDaysIso, QUOTE_VALID_DAYS, shownOnQuote, lineTotal as boqLineTotal, sectionTotal, boqTotals, outputSettings, materialsDoc, quoteDoc, docToCsv, QUOTE_DETAILS, hasQty, badNumberLines, parseNum } from "@/lib/boqOutputs";
+import { addDaysIso, QUOTE_VALID_DAYS, shownOnQuote, lineTotal as boqLineTotal, sectionTotal, boqTotals, outputSettings, materialsDoc, quoteDoc, docToCsv, QUOTE_DETAILS, hasQty, badNumberLines, parseNum, expiredValidUntil, fmtDate } from "@/lib/boqOutputs";
 import BoqDocPages from "@/components/BoqDocPages";
 
 // Per-project title block. The editor publishes the *effective* title block
@@ -1995,7 +1995,9 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
   const { boqTemplate, boqPrefs, saveBoqTemplate, companyBrand } = useApp();
   const meta = project.meta || {};
   const [boq, setBoq] = useState(() => {
-    const base = project.boq || buildInitialBoq(project, SYMBOL_META, findSymbol, boqTemplate, boqPrefs);
+    const base = project.boq
+      ? addMissingLabour(project.boq, boqTemplate)
+      : buildInitialBoq(project, SYMBOL_META, findSymbol, boqTemplate, boqPrefs);
     return reconcileBoq(base, project, SYMBOL_META, findSymbol);
   });
   const [showTemplate, setShowTemplate] = useState(false);
@@ -2015,6 +2017,11 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
   const setOutput = (output) => setBoq(b => ({ ...b, output }));
   const setSkipEmpty = (skipEmpty) => setBoq(b => ({ ...b, materials: { ...(b.materials || {}), skipEmpty } }));
   const badLines = badNumberLines(boq);
+  // Valid until (typed or default) already in the past, else null.
+  const expiredOn = expiredValidUntil(boq.meta);
+  // An expired quote is never downloaded without saying so.
+  const okToExport = () => doc.kind !== "quote" || !expiredOn
+    || window.confirm(`This quote expired on ${fmtDate(expiredOn)}, and that date will be printed on it. Download anyway?\n\nTo fix it, update Date issued or Valid until.`);
   const badCell = (v) => parseNum(v).bad ? " ring-1 ring-amber-400 bg-amber-50" : "";
   const badTitle = (v) => parseNum(v).bad ? "Not a number, so this counts as 0" : undefined;
   const setDetail = (detail) => setBoq(b => ({ ...b, quote: { ...(b.quote || {}), detail } }));
@@ -2075,7 +2082,7 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
   const fileBase = () => (meta.projectName || "plan").replace(/[^a-z0-9-_]+/gi, "_");
 
   const downloadPDF = async () => {
-    if (!printRef.current) return;
+    if (!printRef.current || !okToExport()) return;
     setPdfBusy(true);
     try {
       const [{ default: jsPDF }, h2cMod] = await Promise.all([import("jspdf"), import("html2canvas")]);
@@ -2100,6 +2107,7 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
   };
 
   const downloadCSV = () => {
+    if (!okToExport()) return;
     const blob = new Blob([docToCsv(doc)], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -2112,12 +2120,15 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
 
   // Called as a function, not used as <MetaField/>: a component defined inside
   // render is a new type every keystroke, so React would remount the input.
-  const metaField = ({ label, field, strong, placeholder }) => (
-    <div key={field} className="flex items-center gap-2 border-b border-slate-100 py-1.5">
-      <div className="text-[9px] uppercase tracking-wider text-slate-500 w-28 shrink-0">{label}</div>
-      <input value={boq.meta[field] || ""} onChange={(e) => setMeta(field, e.target.value)}
-        placeholder={placeholder || "—"}
-        className={`${cell} text-[12px] ${strong ? "font-semibold text-slate-900" : "text-slate-700"}`}/>
+  const metaField = ({ label, field, strong, placeholder, warning }) => (
+    <div key={field} className="border-b border-slate-100 py-1.5">
+      <div className="flex items-center gap-2">
+        <div className="text-[9px] uppercase tracking-wider text-slate-500 w-28 shrink-0">{label}</div>
+        <input value={boq.meta[field] || ""} onChange={(e) => setMeta(field, e.target.value)}
+          placeholder={placeholder || "—"}
+          className={`${cell} text-[12px] ${strong ? "font-semibold text-slate-900" : "text-slate-700"}${warning ? " ring-1 ring-amber-400 bg-amber-50" : ""}`}/>
+      </div>
+      {warning && <div role="alert" className="ml-[120px] mt-1 text-[11px] font-medium text-amber-800">{warning}</div>}
     </div>
   );
   const defaultValidUntil = addDaysIso(boq.meta.dateIssued, QUOTE_VALID_DAYS);
@@ -2169,7 +2180,8 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
             {metaField({ label: "Client name", field: "clientName", strong: true })}
             {metaField({ label: "Client address", field: "clientAddress" })}
             {metaField({ label: "Quote reference", field: "quoteRef" })}
-            {metaField({ label: "Valid until", field: "validUntil", placeholder: defaultValidUntil ? `${defaultValidUntil} (30 days)` : "30 days from date issued" })}
+            {metaField({ label: "Valid until", field: "validUntil", placeholder: defaultValidUntil ? `${defaultValidUntil} (30 days)` : "30 days from date issued",
+              warning: expiredOn ? `This quote has expired (${fmtDate(expiredOn)}) — update the dates.` : null })}
           </div>
 
           {/* Notes to supplier */}
@@ -2320,6 +2332,9 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
                   </label>
                 ))}
               </div>
+              {expiredOn && (
+                <span className="font-medium text-amber-800">Valid until {fmtDate(expiredOn)} has passed: update the dates.</span>
+              )}
               {hiddenCount > 0 && outSet.detail !== "sectionTotals" && (
                 <span className="text-slate-400">{hiddenCount} line{hiddenCount === 1 ? "" : "s"} hidden, included as &ldquo;Other materials &amp; sundries&rdquo;</span>
               )}
