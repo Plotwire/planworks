@@ -77,7 +77,7 @@ const TOOLS = {
  * TOP BAR
  * ----------------------------------------------------------------------------
  * Left to right, in groups a new user can read:
- *   1. Dashboard + project name   2. File: Import, Save, Save as
+ *   1. Dashboard + project name   2. File: Import, Save, Download
  *   3. Edit: Undo, Redo (icons)   4. Drawing: Installation notes, Title block, BOQ
  *   5. View menu: Grid, Reset sizes, colour, Hide panels, Light/dark
  *   6. Far right, Try mode only: the Trial pill + Subscribe
@@ -115,7 +115,7 @@ export function TopBar({
       <TbGroup label="File">
         <TbButton onClick={onImport} icon={Upload} label="Import" title="Import a plan (PDF or image)" />
         <TbButton onClick={onSave} icon={Save} label={savedFlash ? "Saved ✓" : "Save"} title="Save (⌘S)" flash={savedFlash} />
-        <TbButton onClick={onPrint} icon={Download} label="Save as" title="Save as PDF or print (⌘P)" />
+        <TbButton onClick={onPrint} icon={Download} label="Download" title="Download a PDF or print (⌘P)" />
       </TbGroup>
 
       {/* 3. Edit */}
