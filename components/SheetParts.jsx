@@ -7,7 +7,7 @@ import {
   MousePointer2, Cable, BrickWall, RotateCw, ZoomIn, ZoomOut, Maximize2,
   Palette as PaletteIcon, Ruler, Hand, Type, Printer, Settings, Search, Sun, Moon, Mail,
   ChevronRight, ChevronLeft, X, FileText, PanelLeftClose, PanelLeftOpen,
-  Grid3x3, ClipboardList, Plus, Clock, LayoutPanelTop, ImagePlus, SlidersHorizontal, Building2,
+  Grid3x3, ChevronDown, Check, ClipboardList, Plus, Clock, LayoutPanelTop, ImagePlus, SlidersHorizontal, Building2,
 } from "lucide-react";
 import {
   SYMBOLS, SYMBOL_META, CATEGORY_COLOURS, VIEWBOX,
@@ -75,6 +75,16 @@ const TOOLS = {
 
 /* ============================================================================
  * TOP BAR
+ * ----------------------------------------------------------------------------
+ * Left to right, in groups a new user can read:
+ *   1. Dashboard + project name   2. File: Import, Save, Save as
+ *   3. Edit: Undo, Redo (icons)   4. Drawing: Installation notes, Title block, BOQ
+ *   5. View menu: Grid, Reset sizes, colour, Hide panels, Light/dark
+ *   6. Far right, Try mode only: the Trial pill + Subscribe
+ * Groups are 8px either side of a 1px divider. Every button is the standard
+ * action button (solid teal, navy icon and label). One row, no sideways
+ * scrolling, down to 1180px (iPad landscape): under 1300px the longest label
+ * shortens ("Notes") and the project name truncates sooner.
  * ========================================================================= */
 export function TopBar({
   meta, onHome, theme, onToggleTheme, onShowMeta, onImport, onUndo, onRedo, onSave, savedFlash, onShowProjects,
@@ -85,102 +95,140 @@ export function TopBar({
   const projectLabel = meta.projectName || "Untitled Project";
   const sheetLabel = meta.sheetName || "Drawing";
   return (
-    <header className="relative z-30 flex items-center gap-2 px-3 h-12 bg-white dark:bg-[#16202B] border-b border-slate-200 dark:border-[#263441]">
-      <div className="flex items-center gap-2 min-w-0 shrink-0">
-        {onHome && (
-          <>
-            <button onClick={onHome} title="Back to dashboard"
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-slate-100 dark:bg-white/10 text-slate-700 dark:text-slate-200 hover:bg-[#2C97A8] hover:text-[#1A2530] dark:hover:bg-[#2C97A8] dark:hover:text-[#1A2530] transition-colors text-[11px] font-semibold">
-              <ChevronLeft size={14}/> <span className="hidden lg:inline">Dashboard</span>
-            </button>
-            <div className="w-px h-5 bg-slate-200 dark:bg-[#2A3947]"/>
-          </>
-        )}
-        <div className="flex items-center gap-2">
-          <span className="font-semibold text-[15px] tracking-tight" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
-            Plot<span className="text-[#3FB7C9]">wire</span>
-          </span>
-        </div>
-        <div className="w-px h-5 bg-slate-200 dark:bg-[#2A3947]"/>
-        <button
-          onClick={onShowMeta}
-          title={`${projectLabel} — ${sheetLabel}`}
-          className="group flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-[var(--action)] hover:bg-[var(--action-hover)] text-[color:var(--action-ink)] transition-colors text-[11px] font-semibold shadow-md min-w-0">
-          <FileText size={13} className="text-[color:var(--action-ink)] opacity-70 shrink-0"/>
-          <span className="truncate max-w-[110px] sm:max-w-[220px]">{projectLabel}</span>
-          <ChevronRight size={12} className="text-[color:var(--action-ink)] opacity-70 shrink-0"/>
+    <header className="relative z-30 flex items-center px-3 h-12 bg-white dark:bg-[#16202B] border-b border-slate-200 dark:border-[#263441] whitespace-nowrap">
+      {/* 1. Back + project */}
+      <TbGroup first>
+        {onHome && <TbButton onClick={onHome} icon={ChevronLeft} label="Dashboard" title="Back to dashboard" />}
+        <span className="hidden min-[1600px]:inline font-semibold text-[15px] tracking-tight px-1 text-slate-900 dark:text-white"
+          style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
+          Plot<span className="text-[#3FB7C9]">wire</span>
+        </span>
+        <button onClick={onShowMeta} title={`${projectLabel} — ${sheetLabel}`}
+          className="group h-8 flex items-center gap-1.5 px-2.5 rounded-lg bg-[var(--action)] hover:bg-[var(--action-hover)] text-[color:var(--action-ink)] transition-colors text-[11px] font-semibold min-w-0">
+          <FileText size={14} className="opacity-70 shrink-0"/>
+          <span className="truncate max-w-[110px] min-[1300px]:max-w-[220px]">{projectLabel}</span>
+          <ChevronRight size={12} className="opacity-70 shrink-0"/>
         </button>
-        {/* Try mode: "Trial · N of 25 symbols" + Subscribe (components/TryMode.jsx). */}
-        {trialPill && <><div className="w-px h-5 bg-slate-200 dark:bg-[#2A3947]"/>{trialPill}</>}
-      </div>
+      </TbGroup>
 
-      <div className="flex items-center gap-1 ml-auto min-w-0 overflow-x-auto flex-nowrap [&::-webkit-scrollbar]:hidden" style={{ WebkitOverflowScrolling: "touch" }}>
-        {/* History */}
-        <ToolbarButton onClick={onUndo} icon={Undo2} label="Undo" hint="⌘Z"/>
-        <ToolbarButton onClick={onRedo} icon={Redo2} label="Redo" hint="⌘⇧Z"/>
-        <Divider />
-        {/* File */}
-        <ToolbarButton onClick={onImport} icon={Upload} label="Import"/>
-        <ToolbarButton onClick={onSave} icon={Save} label={savedFlash ? "Saved ✓" : "Save"} flash={savedFlash} hint="⌘S"/>
-        <ToolbarButton onClick={onPrint} icon={Download} label="Save As"/>
-        <Divider />
-        {/* View */}
-        <ToolbarButton onClick={onToggleSnap} icon={Grid3x3} label="Grid" active={snapEnabled}/>
-        <ToolbarButton onClick={onNormalise} icon={Ruler}
-          label={normaliseFlash ? "Reset ✓" : "Reset sizes"} flash={normaliseFlash}
-          hint="Make all symbols the same size"/>
-        <ToolbarButton
-          onClick={onToggleColour} icon={PaletteIcon}
-          label={colourMode === "navy" ? "Navy" : colourMode === "red" ? "PB Red" : colourMode === "colour" ? "Colour" : "Mono"}
-          active={colourMode === "navy"}/>
-        <Divider />
-        {/* Panels */}
-        <ToolbarButton onClick={onShowNotes} icon={Type} label="Installation Notes"/>
-        <ToolbarButton onClick={onShowBoq} icon={ClipboardList} label="BOQ"/>
-        <ToolbarButton onClick={onShowTitleBlock} icon={LayoutPanelTop} label="Title block"/>
-        <Divider />
-        {/* On their own */}
-        <ToolbarButton
-          onClick={onToggleSidebar}
-          icon={sidebarHidden ? PanelLeftOpen : PanelLeftClose}
-          label={sidebarHidden ? "Show" : "Hide"}
-          hint=""/>
-        {onToggleTheme && (
-          <>
-            <Divider />
-            <button onClick={onToggleTheme}
-              title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-              className="shrink-0 p-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/10 hover:text-slate-900 dark:hover:text-white transition-colors">
-              {theme === "dark" ? <Sun size={15}/> : <Moon size={15}/>}
-            </button>
-          </>
-        )}
-      </div>
+      {/* 2. File */}
+      <TbGroup label="File">
+        <TbButton onClick={onImport} icon={Upload} label="Import" title="Import a plan (PDF or image)" />
+        <TbButton onClick={onSave} icon={Save} label={savedFlash ? "Saved ✓" : "Save"} title="Save (⌘S)" flash={savedFlash} />
+        <TbButton onClick={onPrint} icon={Download} label="Save as" title="Save as PDF or print (⌘P)" />
+      </TbGroup>
+
+      {/* 3. Edit */}
+      <TbGroup label="Edit">
+        <TbButton onClick={onUndo} icon={Undo2} title="Undo (⌘Z)" iconOnly />
+        <TbButton onClick={onRedo} icon={Redo2} title="Redo (⌘⇧Z)" iconOnly />
+      </TbGroup>
+
+      {/* 4. Drawing */}
+      <TbGroup label="Drawing">
+        <TbButton onClick={onShowNotes} icon={Type} label="Installation notes" shortLabel="Notes" title="Installation notes" />
+        <TbButton onClick={onShowTitleBlock} icon={LayoutPanelTop} label="Title block" title="Title block" />
+        <TbButton onClick={onShowBoq} icon={ClipboardList} label="BOQ" title="Bill of quantities" />
+      </TbGroup>
+
+      {/* 5. View */}
+      <TbGroup label="View">
+        <ViewMenu
+          snapEnabled={snapEnabled} onToggleSnap={onToggleSnap}
+          onNormalise={onNormalise} normaliseFlash={normaliseFlash}
+          colourMode={colourMode} onToggleColour={onToggleColour}
+          sidebarHidden={sidebarHidden} onToggleSidebar={onToggleSidebar}
+          theme={theme} onToggleTheme={onToggleTheme}
+        />
+      </TbGroup>
+
+      {/* 6. Try mode: Trial pill + Subscribe, far right */}
+      {trialPill && <div className="ml-auto pl-4 flex items-center shrink-0">{trialPill}</div>}
     </header>
   );
 }
 
-function ToolbarButton({ onClick, icon: Icon, label, primary, active, hint, flash, teal }) {
+// One toolbar group: a subtle divider with 8px either side (16px + 1px
+// between groups), then the group's buttons 6px apart.
+function TbGroup({ first = false, label, children }) {
   return (
-    <button onClick={onClick}
-      title={hint ? `${label} (${hint})` : label}
-      className={`shrink-0 whitespace-nowrap px-3 py-2 text-[11px] uppercase tracking-wide font-semibold flex items-center gap-2 rounded-lg transition-all duration-150 ${
-        primary
-          ? "bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)] shadow-md"
-          : flash
-          ? "bg-emerald-500 text-white"
-          : teal
-          ? "bg-[#3FB7C9]/15 text-[#1C6E7B] dark:text-[#7fd6e3] ring-[1.5px] ring-[#3FB7C9]/70 hover:bg-[#3FB7C9]/25"
-          : active
-          ? "bg-[#3FB7C9]/15 text-[#1C6E7B] ring-1 ring-[#3FB7C9]/45"
-          : "bg-slate-100 dark:bg-white/10 text-slate-700 dark:text-slate-200 hover:bg-[#2C97A8] hover:text-[#1A2530] dark:hover:bg-[#2C97A8] dark:hover:text-[#1A2530]"
+    <>
+      {!first && <div aria-hidden className="w-px h-6 bg-slate-200 dark:bg-[#2A3947] mx-2 shrink-0" />}
+      <div role="group" aria-label={label} className="flex items-center gap-1.5 shrink-0 min-w-0">{children}</div>
+    </>
+  );
+}
+
+// The standard action button: solid teal, navy icon and label. iconOnly for
+// Undo/Redo (the title is the tooltip and the accessible name). shortLabel
+// replaces the label under 1300px.
+function TbButton({ onClick, icon: Icon, label, shortLabel, title, iconOnly = false, flash = false, trailing = null, buttonProps = {} }) {
+  return (
+    <button type="button" onClick={onClick} title={title || label} aria-label={iconOnly ? title : undefined} {...buttonProps}
+      className={`h-8 shrink-0 flex items-center justify-center gap-1.5 rounded-lg text-[11px] font-semibold transition-colors ${iconOnly ? "w-8" : "px-2.5"} ${
+        flash ? "bg-emerald-500 text-white" : "bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)]"
       }`}>
-      <Icon size={15} /> <span className="hidden lg:inline">{label}</span>
+      <Icon size={15} className="shrink-0" />
+      {!iconOnly && (shortLabel ? (
+        <>
+          <span className="hidden min-[1300px]:inline">{label}</span>
+          <span className="min-[1300px]:hidden">{shortLabel}</span>
+        </>
+      ) : <span>{label}</span>)}
+      {trailing}
     </button>
   );
 }
 
-function Divider() { return <div className="w-px h-5 bg-slate-200 dark:bg-[#2A3947] mx-1 shrink-0" />; }
+// "View" dropdown: Grid, Reset sizes, colour mode, Hide panels, Light/dark.
+// Stays open while you try options; closes on Escape or a click elsewhere.
+function ViewMenu({ snapEnabled, onToggleSnap, onNormalise, normaliseFlash, colourMode, onToggleColour,
+                    sidebarHidden, onToggleSidebar, theme, onToggleTheme }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const esc = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("pointerdown", away);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("pointerdown", away); document.removeEventListener("keydown", esc); };
+  }, [open]);
+  const colourLabel = colourMode === "navy" ? "Navy" : colourMode === "red" ? "PB Red" : colourMode === "colour" ? "Colour" : "Mono";
+  const item = "w-full flex items-center gap-2.5 px-3 h-9 rounded-lg text-[12px] font-medium text-slate-700 dark:text-slate-200 hover:bg-[#ECF8FA] dark:hover:bg-white/10 text-left";
+  return (
+    <div ref={ref} className="relative">
+      <TbButton onClick={() => setOpen(o => !o)} icon={SlidersHorizontal} label="View" title="View options"
+        trailing={<ChevronDown size={13} className={`shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />}
+        buttonProps={{ "aria-haspopup": "menu", "aria-expanded": open }} />
+      {open && (
+        <div role="menu" aria-label="View" className="absolute left-0 top-full mt-1.5 w-60 p-1.5 rounded-xl bg-white dark:bg-[#16202B] ring-1 ring-slate-200 dark:ring-[#2A3947] shadow-[0_16px_40px_-12px_rgba(15,23,42,0.35)] z-50">
+          <button type="button" role="menuitemcheckbox" aria-checked={Boolean(snapEnabled)} onClick={onToggleSnap} className={item}>
+            <Grid3x3 size={15} className="shrink-0 text-[#22808F]" /> <span className="flex-1">Grid</span>
+            {snapEnabled && <Check size={14} className="text-[#22808F]" />}
+          </button>
+          <button type="button" role="menuitem" onClick={onNormalise} className={item} title="Make all symbols the same size">
+            <Ruler size={15} className="shrink-0 text-[#22808F]" /> <span className="flex-1">{normaliseFlash ? "Sizes reset ✓" : "Reset sizes"}</span>
+          </button>
+          <button type="button" role="menuitem" onClick={onToggleColour} className={item} title="Cycle the symbol colours">
+            <PaletteIcon size={15} className="shrink-0 text-[#22808F]" /> <span className="flex-1">Colours</span>
+            <span className="text-[11px] font-semibold text-[#22808F]">{colourLabel}</span>
+          </button>
+          <button type="button" role="menuitem" onClick={onToggleSidebar} className={item}>
+            {sidebarHidden ? <PanelLeftOpen size={15} className="shrink-0 text-[#22808F]" /> : <PanelLeftClose size={15} className="shrink-0 text-[#22808F]" />}
+            <span className="flex-1">{sidebarHidden ? "Show panels" : "Hide panels"}</span>
+          </button>
+          {onToggleTheme && (
+            <button type="button" role="menuitem" onClick={onToggleTheme} className={item}>
+              {theme === "dark" ? <Sun size={15} className="shrink-0 text-[#22808F]" /> : <Moon size={15} className="shrink-0 text-[#22808F]" />}
+              <span className="flex-1">{theme === "dark" ? "Light mode" : "Dark mode"}</span>
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /* ============================================================================
  * SHEET TABS — switch between the drawings (floors) in a project
