@@ -1991,7 +1991,9 @@ export function BoqTemplateEditor({ saved, savedPrefs, onSave, onClose }) {
   );
 }
 
-export function BillOfQuantities({ project, updateBoq, onClose }) {
+// readOnly: a lapsed subscription's view -- nothing can be edited, but the
+// materials list and client quote can still be chosen and downloaded.
+export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false }) {
   const { boqTemplate, boqPrefs, saveBoqTemplate, companyBrand, access = {} } = useApp();
   // Try mode: items and quantities only -- no prices, totals, quote choices
   // or downloads (components/TryMode.jsx).
@@ -2147,7 +2149,8 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
   const defaultValidUntil = addDaysIso(boq.meta.dateIssued, QUOTE_VALID_DAYS);
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
+    // Read-only opens from the print preview (z 60), so it sits above it.
+    <div className={`fixed inset-0 ${readOnly ? "z-[65]" : "z-50"} bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4`} onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()}
         className="bg-white rounded-2xl ring-1 ring-slate-200 w-full max-w-5xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
 
@@ -2167,14 +2170,27 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => setShowTemplate(true)} title="Edit the default items/specs used for every BOQ"
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[10px] uppercase tracking-wider font-semibold bg-[#3FB7C9]/20 text-[#9fd8e2] ring-1 ring-[#3FB7C9]/50 hover:bg-[#3FB7C9]/30">
-              <SlidersHorizontal size={13}/> Presets
-            </button>
-            <button onClick={onClose} className="text-slate-300 hover:text-white"><X size={18}/></button>
+            {readOnly ? (
+              <span className="px-2.5 py-1 rounded-md text-[10px] uppercase tracking-wider font-semibold bg-amber-100 text-amber-900">View only</span>
+            ) : (
+              <button onClick={() => setShowTemplate(true)} title="Edit the default items/specs used for every BOQ"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[10px] uppercase tracking-wider font-semibold bg-[#3FB7C9]/20 text-[#9fd8e2] ring-1 ring-[#3FB7C9]/50 hover:bg-[#3FB7C9]/30">
+                <SlidersHorizontal size={13}/> Presets
+              </button>
+            )}
+            <button onClick={onClose} aria-label="Close" className="text-slate-300 hover:text-white"><X size={18}/></button>
           </div>
         </div>
 
+        {readOnly && (
+          <div className="px-6 py-2 bg-amber-50 border-b border-amber-200 text-[11.5px] text-amber-900 shrink-0">
+            Your subscription has ended, so this BOQ is view-only. You can still download the materials list and client quote.
+          </div>
+        )}
+
+        {/* disabled on a fieldset switches off every input, tick box and add/
+            remove button inside it at once -- the read-only view. */}
+        <fieldset disabled={readOnly} className="flex-1 min-h-0 flex flex-col m-0 p-0 border-0 min-w-0">
         <div className="flex-1 overflow-y-auto px-6 py-5 text-slate-800">
           {/* Metadata grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 mb-4">
@@ -2335,6 +2351,7 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
           <p className="text-[11px] leading-snug text-[#1A2530] mt-3">{BOQ_ESTIMATE_NOTICE}</p>
           {priced && <div className="text-[10px] text-slate-400 mt-1">Unit rates are your selling prices. The materials list shows quantities only; the client quote shows prices.</div>}
         </div>
+        </fieldset>
 
         {/* Output: which document Download PDF / CSV produce, and its options. */}
         {priced && (
@@ -2382,7 +2399,7 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
 
         {/* Footer */}
         <div className="flex items-center justify-between px-6 py-3 border-t border-slate-200 shrink-0">
-          <div className="flex gap-1">
+          <div className={`flex gap-1 ${readOnly ? "invisible" : ""}`} aria-hidden={readOnly || undefined}>
             <button onClick={refresh} title="Re-count every drawing-linked quantity, replacing any you've typed"
               className="px-3 py-2 text-[10px] uppercase tracking-wider text-[#22808F] hover:bg-[#ECF8FA] rounded-md font-semibold flex items-center gap-1.5">
               <RotateCw size={12}/> Refresh from drawing
@@ -2951,7 +2968,7 @@ function withFreshLinks(bg, links) {
 
 // notice / closeLabel: used when the preview is the whole view (a lapsed
 // subscription's read-only drawings) rather than a step from the editor.
-export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1, DRAW, onClose, onPrint, notice = null, closeLabel = null }) {
+export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1, DRAW, onClose, onPrint, notice = null, closeLabel = null, onShowBoq = null }) {
   const { meta, notes } = project;
   const projectSheets = project.sheets && project.sheets.length
     ? project.sheets
@@ -3288,6 +3305,11 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
           </div>
           <span className="pp-hint">Download the PDF, then attach it to your client email.</span>
           <button onClick={onClose} className="pp-btn pp-btn-ghost">{closeLabel || "Close"}</button>
+          {onShowBoq && (
+            <button onClick={onShowBoq} className="pp-btn pp-btn-ghost" title="View and download the bill of quantities">
+              <ClipboardList size={12}/> BOQ
+            </button>
+          )}
           <button onClick={downloadBackup} className="pp-btn pp-btn-ghost" title="Download a re-importable backup of the whole project (.json)">Backup</button>
           <button onClick={emailClient} className="pp-btn pp-btn-email"><Mail size={12}/> Email client</button>
           <button onClick={onPrint} className="pp-btn pp-btn-email"><Printer size={12}/> Print</button>

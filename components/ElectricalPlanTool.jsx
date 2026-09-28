@@ -2116,14 +2116,15 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
           DRAW={DRAW}
           onClose={readOnly ? leaveToDashboard : () => setPrintPreview(false)}
           onPrint={printSheet}
-          notice={readOnly ? "Your subscription has ended, so this drawing is view-only. You can still download and print it." : null}
+          notice={readOnly ? "Your subscription has ended, so this drawing is view-only. You can still download and print it, and its BOQ." : null}
+          onShowBoq={readOnly ? () => setShowBoq(true) : null}
           closeLabel={readOnly ? "Back to dashboard" : null}
         />
       )}
 
       {/* ==================== BILL OF QUANTITIES ==================== */}
       {showBoq && (
-        <BillOfQuantities project={project} updateBoq={updateBoq} onClose={() => setShowBoq(false)} />
+        <BillOfQuantities project={project} updateBoq={updateBoq} onClose={() => setShowBoq(false)} readOnly={readOnly} />
       )}
 
       {/* ==================== TITLE BLOCK TEMPLATE ==================== */}
