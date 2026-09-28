@@ -2120,17 +2120,27 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
 
   // Called as a function, not used as <MetaField/>: a component defined inside
   // render is a new type every keystroke, so React would remount the input.
-  const metaField = ({ label, field, strong, placeholder, warning }) => (
-    <div key={field} className="border-b border-slate-100 py-1.5">
-      <div className="flex items-center gap-2">
-        <div className="text-[9px] uppercase tracking-wider text-slate-500 w-28 shrink-0">{label}</div>
-        <input value={boq.meta[field] || ""} onChange={(e) => setMeta(field, e.target.value)}
-          placeholder={placeholder || "—"}
-          className={`${cell} text-[12px] ${strong ? "font-semibold text-slate-900" : "text-slate-700"}${warning ? " ring-1 ring-amber-400 bg-amber-50" : ""}`}/>
+  // date: a date box, shown in the device's own format (dd/mm/yyyy in the UK)
+  // with a picker, stored as YYYY-MM-DD. `fallback` is shown while the field
+  // is empty (e.g. the 30-day default). Text that isn't a date -- typed into
+  // an older BOQ -- keeps a plain text box so it isn't hidden.
+  const metaField = ({ label, field, strong, placeholder, warning, date, fallback, hint }) => {
+    const raw = boq.meta[field] || "";
+    const asDate = date && (raw === "" || /^\d{4}-\d{2}-\d{2}$/.test(raw));
+    return (
+      <div key={field} className="border-b border-slate-100 py-1.5">
+        <div className="flex items-center gap-2">
+          <div className="text-[9px] uppercase tracking-wider text-slate-500 w-28 shrink-0">{label}</div>
+          <input type={asDate ? "date" : "text"} value={asDate ? (raw || fallback || "") : raw}
+            onChange={(e) => setMeta(field, e.target.value)}
+            placeholder={placeholder || "—"}
+            className={`${cell} text-[12px] ${strong ? "font-semibold text-slate-900" : "text-slate-700"}${warning ? " ring-1 ring-amber-400 bg-amber-50" : ""}`}/>
+          {hint && !raw && <span className="text-[10px] text-slate-400 whitespace-nowrap shrink-0">{hint}</span>}
+        </div>
+        {warning && <div role="alert" className="ml-[120px] mt-1 text-[11px] font-medium text-amber-800">{warning}</div>}
       </div>
-      {warning && <div role="alert" className="ml-[120px] mt-1 text-[11px] font-medium text-amber-800">{warning}</div>}
-    </div>
-  );
+    );
+  };
   const defaultValidUntil = addDaysIso(boq.meta.dateIssued, QUOTE_VALID_DAYS);
 
   return (
@@ -2170,7 +2180,7 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
             {metaField({ label: "Prepared by", field: "preparedBy", strong: true })}
             {metaField({ label: "Supplier", field: "supplier" })}
             {metaField({ label: "Drawing no.", field: "drawingNo" })}
-            {metaField({ label: "Date issued", field: "dateIssued", placeholder: "YYYY-MM-DD" })}
+            {metaField({ label: "Date issued", field: "dateIssued", date: true })}
             {metaField({ label: "Required on site", field: "requiredOnSite" })}
           </div>
 
@@ -2180,7 +2190,7 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
             {metaField({ label: "Client name", field: "clientName", strong: true })}
             {metaField({ label: "Client address", field: "clientAddress" })}
             {metaField({ label: "Quote reference", field: "quoteRef" })}
-            {metaField({ label: "Valid until", field: "validUntil", placeholder: defaultValidUntil ? `${defaultValidUntil} (30 days)` : "30 days from date issued",
+            {metaField({ label: "Valid until", field: "validUntil", date: true, fallback: defaultValidUntil, hint: "30 days after issue",
               warning: expiredOn ? `This quote has expired (${fmtDate(expiredOn)}) — update the dates.` : null })}
           </div>
 
