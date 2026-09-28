@@ -84,8 +84,10 @@ export function TryPill({ used, limit, onSubscribe, subscribeLabel = "Subscribe"
   return (
     <span className="pw-try-pill" style={PILL_ROW}>
       <span className="pw-try-pill-count" data-full={full ? "1" : undefined} role="status" style={PILL}
-        title="Try Plotwire: symbols across all your saved drawings">
-        Trial &middot; {Math.min(used, limit)} of {limit} symbols
+        title={`Try Plotwire: ${Math.min(used, limit)} of ${limit} symbols used across all your saved drawings`}>
+        {/* Full wording on wide screens; "Trial · N/25" under 1300px (tablets). */}
+        <span className="pw-try-pill-full">Trial &middot; {Math.min(used, limit)} of {limit} symbols</span>
+        <span className="pw-try-pill-short">Trial &middot; {Math.min(used, limit)}/{limit}</span>
       </span>
       <button type="button" className="pw-try-pill-btn" onClick={onSubscribe} style={PILL_BTN}>{subscribeLabel}</button>
       <style>{PILL_CSS}</style>
@@ -156,6 +158,8 @@ const PILL_CSS = `
 .pw-try-pill-btn{background:var(--action,#2C97A8); color:var(--action-ink,#1A2530)}
 .pw-try-pill-btn:hover{background:var(--action-hover,#22808F)}
 html.dark .pw-try-pill-count{color:#E7EDF3}
+.pw-try-pill-short{display:none}
+@media (max-width:1299px){.pw-try-pill-full{display:none} .pw-try-pill-short{display:inline}}
 @media print{.pw-try-pill{display:none !important}}
 `;
 

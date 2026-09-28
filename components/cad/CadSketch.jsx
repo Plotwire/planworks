@@ -578,7 +578,8 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     const data = {
       meta: { projectName: name, drawingNumber: "", date: today, revision: "A", revNote: "First Issue", company: "", clientName: "", clientEmail: "" },
       boq: null, titleBlock: null, colourMode: "red",
-      sheets: [{ id: sheetId, name, drawingNumber: "", bgImage: { path, w, h }, placed: [], furniture: [], walls: [], wires: [], annotations: [], symbolScale: 1 }],
+      notes: "", // blank Installation Notes, like any new drawing
+      sheets: [{ id: sheetId, name, drawingNumber: "", bgImage: { path, w, h }, placed: [], furniture: [], walls: [], wires: [], annotations: [], notes: "", symbolScale: 1 }],
       activeSheetId: sheetId,
     };
     const newId = await insertProject(name, data);

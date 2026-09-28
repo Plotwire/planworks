@@ -702,15 +702,14 @@ function LegendColumn({ legendItems, colourMode }) {
       overflow: "hidden",
     }}>
       <SheetColumnHeader padL={14} padR={12} padT={12}>Electrical Legend</SheetColumnHeader>
-      <div style={{ fontSize: 8.5, color: "#404040", marginBottom: 10, letterSpacing: "0.06em" }}>
-        UK ARCHITECTURAL · TO BE READ IN COLOUR
-      </div>
-
-      {legendItems.length === 0 ? (
-        <div style={{ fontSize: 10, color: "#737373", fontStyle: "italic", marginTop: 14 }}>
-          Place symbols on the drawing — they'll be listed here automatically with mounting heights.
+      {/* Blank until symbols are placed: just the heading, no prefilled text. */}
+      {legendItems.length > 0 && (
+        <div style={{ fontSize: 8.5, color: "#404040", marginBottom: 10, letterSpacing: "0.06em" }}>
+          UK ARCHITECTURAL · TO BE READ IN COLOUR
         </div>
-      ) : (
+      )}
+
+      {legendItems.length === 0 ? null : (
         <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
           {legendItems.map(({ id, symbol, meta }) => {
             const cols = resolveColours(id, colourMode);
@@ -3441,9 +3440,11 @@ function LegendColumnStatic({ legendItems, colourMode }) {
       padding: "12px 12px 12px 14px",
     }}>
       <SheetColumnHeader padL={14} padR={12} padT={12}>Electrical Legend</SheetColumnHeader>
-      <div style={{ fontSize: 8.5, color: "#404040", marginBottom: 10, letterSpacing: "0.06em" }}>
-        UK ARCHITECTURAL · TO BE READ IN COLOUR
-      </div>
+      {legendItems.length > 0 && (
+        <div style={{ fontSize: 8.5, color: "#404040", marginBottom: 10, letterSpacing: "0.06em" }}>
+          UK ARCHITECTURAL · TO BE READ IN COLOUR
+        </div>
+      )}
       {legendItems.map(({ id, symbol, meta }) => {
         const cols = resolveColours(id, colourMode);
         return (

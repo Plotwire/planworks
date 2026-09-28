@@ -82,7 +82,9 @@ IMPORTANT NOTE
 The electrical layout provided is indicative only and to show locations of client required electrical items. Contractor to confirm all locations, runs and products with the client prior to purchase or installation of goods. All electrical works are to be carried out by a certified electrician and provide completion certificates. All works to be completed in accordance with BS 7671.`;
 
 // Notes are a single free-text block per drawing. Convert any older saved
-// format (array of {heading, body} sections) into plain text.
+// format (array of {heading, body} sections) into plain text. New drawings
+// start with EMPTY notes; DEFAULT_NOTES_TEXT is only the fallback for older
+// saved drawings that never had a notes field, so they keep what they showed.
 function notesToText(n) {
   if (typeof n === "string") return n;
   if (Array.isArray(n)) return n.map(s => [s.heading, s.body].filter(Boolean).join("\n")).join("\n\n");
@@ -94,7 +96,7 @@ const sid = () => "s_" + Math.random().toString(36).slice(2, 9);
 // A sheet holds one drawing (one floor). bgImage = imported plan. Each sheet
 // has its OWN editable free-text notes.
 function freshSheet(name = "Ground floor") {
-  return { id: sid(), name, drawingNumber: "", bgImage: null, placed: [], furniture: [], walls: [], wires: [], annotations: [], notes: DEFAULT_NOTES_TEXT, symbolScale: 1 };
+  return { id: sid(), name, drawingNumber: "", bgImage: null, placed: [], furniture: [], walls: [], wires: [], annotations: [], notes: "", symbolScale: 1 };
 }
 
 // A project holds meta + drawings (sheets); notes live on each sheet.
@@ -102,7 +104,7 @@ function freshProject() {
   const sheet = freshSheet("Ground floor");
   return {
     meta: { ...DEFAULT_META, date: new Date().toISOString().slice(0, 10) },
-    notes: DEFAULT_NOTES_TEXT,
+    notes: "", // new drawings start with blank Installation Notes
     boq: null,
     titleBlock: null, // null = use the account default; set = job-specific
     colourMode: "red",     // new drawings start on PB Red; the toolbar palette
