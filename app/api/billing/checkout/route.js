@@ -1,7 +1,7 @@
 ﻿import { NextResponse } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
-import { bearer, userFromToken, STRIPE_PRICE, APP_URL, TRIAL_DAYS, LIVE_STATUSES, isMissingCustomer } from "@/lib/billing";
+import { bearer, userFromToken, STRIPE_PRICE, APP_URL, LIVE_STATUSES, isMissingCustomer } from "@/lib/billing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,8 +41,9 @@ export async function POST(req) {
       client_reference_id: user.id,
       line_items: [{ price, quantity: 1 }],
       allow_promotion_codes: true,
+      // No trial: the first month is charged at checkout. People try Plotwire
+      // before paying through Try mode instead (lib/access.js).
       subscription_data: {
-        trial_period_days: TRIAL_DAYS,
         metadata: { user_id: user.id },
       },
       success_url: `${APP_URL}/?checkout=success`,

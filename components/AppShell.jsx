@@ -12,6 +12,7 @@ import { supabase, isConfigured } from "@/lib/supabase";
 import { getSettings, saveSettings } from "@/lib/db";
 import { DEFAULT_TITLEBLOCK, normaliseTitleBlock, companyProfileToTitleBlock, companyLogoFrom, mergeTitleBlocks } from "@/lib/titleBlock";
 import { useSubscription } from "@/lib/useSubscription";
+import { TRY_SYMBOL_LIMIT } from "@/lib/pricing";
 import { openBillingPortal } from "@/lib/billingClient";
 import { LEGAL_LINKS } from "@/lib/legal";
 import TermsGate from "@/components/TermsGate";
@@ -100,6 +101,10 @@ function AppGates({ children }) {
   // that makes "have they filled this in?" unanswerable ever after.
   const skipKey = (uid) => "plotwire:onboardingSkipped:" + uid;
   const [billingNotice, setBillingNotice] = useState("");
+  // The Subscribe screen, opened from Subscribe buttons in the app. Nobody is
+  // made to see it first: never-paid accounts use Try mode instead.
+  const [showSubscribe, setShowSubscribe] = useState(false);
+  const openSubscribe = useCallback(() => { setBillingNotice(""); setShowSubscribe(true); }, []);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -225,7 +230,8 @@ function AppGates({ children }) {
     window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash);
     if (flag === "success") setActivating(true);
     else if (flag === "cancelled" || flag === "canceled") {
-      setBillingNotice("Checkout cancelled — choose a plan whenever you're ready.");
+      setBillingNotice("Checkout cancelled — subscribe whenever you're ready.");
+      setShowSubscribe(true);
     }
   }, []);
 
@@ -333,17 +339,22 @@ function AppGates({ children }) {
     return <TermsGate user={session?.user || null} onAccept={acceptTerms} onSignOut={signOut} error={termsError} />;
   }
 
-  // Then billing access, enforced only when billing is switched on.
+  // Then billing, only when it's switched on. Every signed-in account gets into
+  // the app: "full" as normal, "try" with the symbol cap, watermark and locked
+  // exports, "lapsed" read-only (lib/access.js). With billing off, everyone is
+  // full, exactly as before.
+  const level = BILLING_ENABLED ? subscription.level : "full";
   if (BILLING_ENABLED) {
     if (subscription.loading) return <Splash />;
     if (activating && !subscription.isActive) return <Splash label="Activating your subscription…" />;
-    if (!subscription.isActive) {
+    if (showSubscribe && level !== "full") {
       return (
         <Paywall
           user={session?.user || null}
           onSignOut={signOut}
           onManageBilling={manageBilling}
-          hasLapsed={Boolean(subscription.sub)}
+          onBack={() => setShowSubscribe(false)}
+          hasLapsed={level === "lapsed"}
           notice={billingNotice}
         />
       );
@@ -364,6 +375,15 @@ function AppGates({ children }) {
       // the profile's detail lines (name first).
       companyBrand: { logo: companyLogo, details: companyBlock?.details || [] },
       subscription, manageBilling,
+      // What this account may do (lib/access.js). isTry: 25-symbol cap,
+      // watermark, no exports. readOnly: lapsed -- view and export only.
+      access: {
+        level,
+        isTry: level === "try",
+        readOnly: level === "lapsed",
+        symbolLimit: TRY_SYMBOL_LIMIT,
+        openSubscribe,
+      },
     }}>
       {profileStep === "needed" ? (
         <BusinessInfo

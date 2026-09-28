@@ -2,17 +2,19 @@
 
 import React, { useState } from "react";
 import { startCheckout } from "@/lib/billingClient";
-import { TRIAL_DAYS } from "@/lib/pricing";
+import { PRICE_GBP_MONTHLY } from "@/lib/pricing";
 
 const FEATURES = [
-  "Unlimited plans & quotes",
+  "Unlimited drawings & symbols",
   "Automatic bill of quantities",
-  "Branded PDF export",
+  "Materials lists & client quotes",
+  "Branded PDF export & printing",
   "All your jobs in one place",
-  "Unlimited users on your account",
 ];
 
-export default function Paywall({ user, onSignOut, onManageBilling, hasLapsed = false, notice = "" }) {
+// The Subscribe screen. Opened from Subscribe buttons inside the app (onBack
+// returns there); Try mode means nobody has to see it before using Plotwire.
+export default function Paywall({ user, onSignOut, onManageBilling, onBack, hasLapsed = false, notice = "" }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -37,19 +39,24 @@ export default function Paywall({ user, onSignOut, onManageBilling, hasLapsed = 
           </div>
           <div className="wordmark">Plot<b>wire</b></div>
         </div>
-        <button type="button" className="signout" onClick={onSignOut}>
-          {user?.email ? `Sign out (${user.email})` : "Sign out"}
-        </button>
+        <div className="toprow">
+          {onBack && (
+            <button type="button" className="signout" onClick={onBack}>&larr; Back to Plotwire</button>
+          )}
+          <button type="button" className="signout" onClick={onSignOut}>
+            {user?.email ? `Sign out (${user.email})` : "Sign out"}
+          </button>
+        </div>
       </header>
 
       <main className="pay-main">
         <div className="pay-intro">
-          <div className="eyebrow">{hasLapsed ? "Welcome back" : "Subscribe to continue"}</div>
-          <h1>{hasLapsed ? "Pick up where you left off" : `Start your ${TRIAL_DAYS}-day free trial`}</h1>
+          <div className="eyebrow">{hasLapsed ? "Welcome back" : "Keep going"}</div>
+          <h1>{hasLapsed ? "Pick up where you left off" : "Subscribe to Plotwire"}</h1>
           <p className="lede">
             {hasLapsed
-              ? "Your subscription isn't active. Re-subscribe to carry on — your drawings are safe."
-              : `Full access while you trial. We'll take your card now, but won't charge until day ${TRIAL_DAYS} — cancel any time before then.`}
+              ? "Your subscription has ended. Re-subscribe to edit and add to your drawings again — they're all safe."
+              : `£${PRICE_GBP_MONTHLY} a month, charged today. No symbol limit, no watermark, and everything you've drawn so far is kept.`}
           </p>
         </div>
 
@@ -60,7 +67,7 @@ export default function Paywall({ user, onSignOut, onManageBilling, hasLapsed = 
         <div className="card">
           <div className="card-name">Plotwire</div>
           <div className="card-price">
-            <span className="amt">£15</span><span className="per">/month</span>
+            <span className="amt">£{PRICE_GBP_MONTHLY}</span><span className="per">/month</span>
           </div>
           <p className="card-blurb">One simple plan. Unlimited users on your account.</p>
           <ul className="feat">
@@ -72,10 +79,10 @@ export default function Paywall({ user, onSignOut, onManageBilling, hasLapsed = 
             ))}
           </ul>
           <button type="button" className="pick primary" onClick={choose} disabled={busy}>
-            {busy ? "Redirecting…" : (hasLapsed ? "Re-subscribe" : "Start free trial")}
+            {busy ? "Redirecting…" : (hasLapsed ? "Re-subscribe" : "Subscribe")}
           </button>
           <div className="reassure">
-            <span>{TRIAL_DAYS}-day free trial</span><i /><span>Cancel anytime</span>
+            <span>Billed monthly</span><i /><span>Cancel anytime</span>
           </div>
         </div>
 
@@ -100,6 +107,7 @@ const CSS = `
   background-size:30px 30px; -webkit-mask-image:radial-gradient(120% 90% at 50% 0%,#000,transparent 80%); mask-image:radial-gradient(120% 90% at 50% 0%,#000,transparent 80%)}
 .pay-top{position:relative; display:flex; align-items:center; justify-content:space-between; padding:22px 28px}
 .brandrow{display:flex; align-items:center; gap:12px}
+.toprow{display:flex; align-items:center; gap:8px; min-width:0}
 .brandmark{width:40px; height:40px; border-radius:11px; background:linear-gradient(150deg,#3FB7C9,#22808F); display:grid; place-items:center; box-shadow:0 8px 20px -6px rgba(63,183,201,.55)}
 .brandmark svg{width:20px; height:20px}
 .wordmark{font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:20px; letter-spacing:-.01em}
