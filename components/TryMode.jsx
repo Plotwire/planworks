@@ -1,14 +1,19 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { savedSymbolCounts } from "@/lib/db";
 
 /* ============================================================================
  * TRY MODE -- the in-app side of "Try Plotwire" (lib/access.js). An account
  * that has never paid can place TRY_SYMBOL_LIMIT symbols in total across all
- * its saved drawings, sees a watermark, and can't export. The database enforces
+ * its saved drawings, and can't export, price or share. Its drawing sheet is
+ * marked "TRIAL – NOT FOR ISSUE" with one faint Plotwire logo -- nothing is
+ * laid over the toolbars, panels, BOQ or sketch tool. The database enforces
  * the same limit on save (supabase/try-mode.sql); this makes it friendly.
  * ========================================================================= */
+
+// Shown in the title block's drawing-number chip while in Try mode.
+export const TRIAL_DRAWING_NUMBER = "TRIAL – NOT FOR ISSUE";
 
 // Symbols in a drawing: every sheet's placed symbols (furniture, wires and
 // notes don't count). Same rule as buildPreview().count in lib/db.js.
@@ -58,14 +63,49 @@ export function useTryUsage({ enabled, limit, currentProjectId, project }) {
   };
 }
 
-// Small pill: "12 of 25 trial symbols used · Subscribe".
-export function TryChip({ used, limit, onSubscribe }) {
+/* "Trial · 12 of 25 symbols" pill with the standard solid teal Subscribe
+ * button beside it. Used in the editor's top toolbar and on the dashboard,
+ * never over the canvas. Sizes are set on the elements themselves, not in a
+ * stylesheet, so no page rule can stretch them (a `body > div` rule once
+ * turned an earlier floating chip into a full-height capsule). */
+const PILL_ROW = { display: "inline-flex", alignItems: "center", gap: 8, flex: "none" };
+const PILL = {
+  display: "inline-flex", alignItems: "center", boxSizing: "border-box", height: 32, padding: "0 12px",
+  borderRadius: 999, fontSize: 12, lineHeight: 1, fontWeight: 600, whiteSpace: "nowrap",
+  fontFamily: "Inter, system-ui, sans-serif", fontVariantNumeric: "tabular-nums",
+};
+const PILL_BTN = {
+  boxSizing: "border-box", height: 32, padding: "0 14px", border: 0, borderRadius: 10,
+  fontSize: 12, lineHeight: 1, fontWeight: 600, cursor: "pointer", flex: "none", whiteSpace: "nowrap",
+  fontFamily: "Inter, system-ui, sans-serif",
+};
+export function TryPill({ used, limit, onSubscribe, subscribeLabel = "Subscribe" }) {
   const full = used >= limit;
   return (
-    <div className="pw-try-chip" data-full={full ? "1" : undefined} role="status">
-      <span>{Math.min(used, limit)} of {limit} trial symbols used</span>
-      <button type="button" onClick={onSubscribe}>Subscribe</button>
-      <style>{CHIP_CSS}</style>
+    <span className="pw-try-pill" style={PILL_ROW}>
+      <span className="pw-try-pill-count" data-full={full ? "1" : undefined} role="status" style={PILL}
+        title="Try Plotwire: symbols across all your saved drawings">
+        Trial &middot; {Math.min(used, limit)} of {limit} symbols
+      </span>
+      <button type="button" className="pw-try-pill-btn" onClick={onSubscribe} style={PILL_BTN}>{subscribeLabel}</button>
+      <style>{PILL_CSS}</style>
+    </span>
+  );
+}
+
+/* One faint Plotwire logo centred on the drawing sheet (about 6% opacity).
+ * The caller places it inside the sheet; it never takes clicks. */
+export function TrialSheetMark() {
+  return (
+    <div aria-hidden style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                              pointerEvents: "none", zIndex: 5, opacity: 0.06 }}>
+      <svg width="520" height="150" viewBox="0 0 520 150" fill="none">
+        <rect x="0" y="15" width="120" height="120" rx="30" fill="#1A2530" />
+        <path d="M68 38 38 80h22l-5 33 32-45H65l3-30z" fill="#ffffff" />
+        <text x="148" y="104" fontFamily="'Space Grotesk', Inter, system-ui, sans-serif" fontSize="84" fontWeight="700" letterSpacing="-2" fill="#1A2530">
+          Plotwire
+        </text>
+      </svg>
     </div>
   );
 }
@@ -90,20 +130,6 @@ export function TryPrompt({ open, title, body, onSubscribe, onClose }) {
   );
 }
 
-// Faint diagonal "PLOTWIRE TRIAL" over everything on screen (drawing, BOQ,
-// sketch), including when the page is printed. It never takes clicks.
-export function TrialWatermark() {
-  const bg = useMemo(() => {
-    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='420' height='260'><text x='50%' y='50%' text-anchor='middle' dominant-baseline='middle' transform='rotate(-28 210 130)' font-family='Inter,Arial,sans-serif' font-size='30' font-weight='800' letter-spacing='6' fill='%231A2530' fill-opacity='0.09'>PLOTWIRE TRIAL</text></svg>`;
-    return `url("data:image/svg+xml;utf8,${svg.replace(/#/g, "%23").replace(/\n/g, "")}")`;
-  }, []);
-  return (
-    <div className="pw-trial-wm" aria-hidden style={{ backgroundImage: bg }}>
-      <style>{WM_CSS}</style>
-    </div>
-  );
-}
-
 // The prompt state most screens need: which message is showing.
 export function useTryPrompt() {
   const [prompt, setPrompt] = useState(null); // { title, body } or null
@@ -121,16 +147,16 @@ export const LOCKED = {
   limit: null, // the default "Subscribe to keep going" wording
 };
 
-const CHIP_CSS = `
-.pw-try-chip{position:fixed; left:50%; bottom:46px; transform:translateX(-50%); z-index:45; display:flex; align-items:center; gap:10px;
-  padding:6px 6px 6px 14px; border-radius:999px; background:#ECF8FA; border:1px solid #BFE7ED; box-shadow:0 6px 18px -8px rgba(16,28,40,.35);
-  font:600 11.5px/1 Inter,system-ui,sans-serif; color:#1A2530; white-space:nowrap}
-.pw-try-chip[data-full]{background:#FFF1DE; border-color:#F5C58A; color:#7A3E00}
-.pw-try-chip button{border:0; border-radius:999px; padding:6px 12px; font:inherit; cursor:pointer; background:var(--action,#2C97A8); color:var(--action-ink,#1A2530)}
-.pw-try-chip button:hover{background:var(--action-hover,#22808F)}
-html.dark .pw-try-chip{background:#13343b; border-color:#235662; color:#E7EDF3}
-html.dark .pw-try-chip[data-full]{background:#3a2a14; border-color:#6b4a1f; color:#FFD9A8}
-@media print{.pw-try-chip{display:none}}
+// Colours only; sizes are inline (PILL / PILL_BTN). Navy text and a thin teal
+// outline; the button is the standard solid teal action button. Dark mode
+// lightens the text so it stays readable on the dark toolbar.
+const PILL_CSS = `
+.pw-try-pill-count{color:#1A2530; border:1px solid #2C97A8; background:transparent}
+.pw-try-pill-count[data-full]{border-color:#D9822B}
+.pw-try-pill-btn{background:var(--action,#2C97A8); color:var(--action-ink,#1A2530)}
+.pw-try-pill-btn:hover{background:var(--action-hover,#22808F)}
+html.dark .pw-try-pill-count{color:#E7EDF3}
+@media print{.pw-try-pill{display:none !important}}
 `;
 
 const PROMPT_CSS = `
@@ -147,12 +173,4 @@ const PROMPT_CSS = `
 html.dark .pw-try-prompt .box{background:#16202B; color:#E7EDF3}
 html.dark .pw-try-prompt p{color:#B6C2CE}
 html.dark .pw-try-prompt .ghost{background:#22303D; color:#E7EDF3}
-`;
-
-// Above the drawing and the BOQ window (z 50-60), below prompts and the
-// Subscribe screen. Printed too, so a browser print of the page carries it.
-const WM_CSS = `
-.pw-trial-wm{position:fixed; inset:0; z-index:70; pointer-events:none; background-repeat:repeat; background-position:center}
-html.dark .pw-trial-wm{filter:invert(1)}
-@media print{.pw-trial-wm{display:block !important; position:fixed; inset:0; z-index:2147483000; -webkit-print-color-adjust:exact; print-color-adjust:exact}}
 `;

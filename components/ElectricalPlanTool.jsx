@@ -23,7 +23,7 @@ import {
 } from "@/components/SheetParts";
 import { useApp } from "@/components/AppShell";
 import { DEFAULT_TITLEBLOCK } from "@/lib/titleBlock";
-import { useTryUsage, useTryPrompt, TryChip, TryPrompt, TrialWatermark, LOCKED, drawingSymbolCount } from "@/components/TryMode";
+import { useTryUsage, useTryPrompt, TryPill, TryPrompt, LOCKED, drawingSymbolCount } from "@/components/TryMode";
 import dynamic from "next/dynamic";
 const CadSketchPanel = dynamic(() => import("@/components/cad/CadSketch"), { ssr: false });
 import { useEditor } from "@/store/editorStore";
@@ -1848,6 +1848,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       {/* ==================== TOP BAR ==================== */}
       <TopBar
         meta={meta}
+        trialPill={access.isTry ? <TryPill used={tryUsage.used} limit={tryUsage.limit} onSubscribe={subscribeFromEditor} /> : null}
         onHome={leaveToDashboard}
         theme={theme}
         onToggleTheme={onToggleTheme}
@@ -2056,8 +2057,10 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
           )}
 
           {/* Status bar */}
-          <div className="absolute bottom-0 left-0 right-0 px-4 h-7 bg-white dark:bg-[#16202B] text-slate-500 dark:text-slate-400 text-[10px] tracking-wider flex justify-between items-center border-t border-slate-200 dark:border-[#263441]">
-            <div className="flex gap-5">
+          <div className="absolute bottom-0 left-0 right-0 px-4 h-7 bg-white dark:bg-[#16202B] text-slate-500 dark:text-slate-400 text-[10px] tracking-wider flex justify-between items-center gap-4 border-t border-slate-200 dark:border-[#263441]">
+            {/* min-w-0 + overflow-hidden: on a narrow screen a long tool hint is
+                clipped here rather than squashing the sheet info on the right. */}
+            <div className="flex items-center gap-5 min-w-0 overflow-hidden whitespace-nowrap">
               <span>SYMBOLS <span className="text-[#22808F] ml-1" style={{ fontFamily: "'JetBrains Mono', monospace" }}>{placed.length}</span></span>
               <span>WIRES <span className="text-[#22808F] ml-1" style={{ fontFamily: "'JetBrains Mono', monospace" }}>{wires.length}</span></span>
               <span>NOTES <span className="text-[#22808F] ml-1" style={{ fontFamily: "'JetBrains Mono', monospace" }}>{annotations.length}</span></span>
@@ -2067,7 +2070,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
               {tool === "wall" && <span className="text-[#22808F]">{wallDraft ? "click to set the end point" : "click to start a wall"}</span>}
               {spacePressed && <span className="text-[#22808F]">PAN</span>}
             </div>
-            <div className="text-slate-400" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+            <div className="text-slate-400 shrink-0 whitespace-nowrap" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
               SHEET A3 · {meta.scale}
             </div>
           </div>
@@ -2176,10 +2179,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         </div>
       )}
     </div>
-      {/* Try mode: watermark over the drawing and BOQ, the symbol count, and
-          the Subscribe prompt (components/TryMode.jsx). */}
-      {access.isTry && <TrialWatermark />}
-      {access.isTry && <TryChip used={tryUsage.used} limit={tryUsage.limit} onSubscribe={subscribeFromEditor} />}
+      {/* Try mode: the Subscribe prompt (components/TryMode.jsx). */}
       <TryPrompt open={Boolean(tryPrompt.prompt)} title={tryPrompt.prompt?.title} body={tryPrompt.prompt?.body}
         onSubscribe={subscribeFromEditor} onClose={tryPrompt.hide} />
     </ProjectTitleBlockContext.Provider>

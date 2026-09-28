@@ -15,6 +15,7 @@
  * ========================================================================= */
 
 import React from "react";
+import { TRIAL_DRAWING_NUMBER } from "@/components/TryMode";
 
 /* ----------------------------------------------------------------------------
  * TITLE BLOCK — masthead
@@ -159,7 +160,9 @@ function MastheadAccreditations({ logos }) {
  * The masthead. `editable` swaps plain text for the inline fields used on the
  * working sheet; everything else is identical, by construction.
  */
-export function Masthead({ tb, meta, editable = false, updateMeta, setSheet }) {
+// trial: Try mode on the working sheet (never the print sheet or the business
+// preview) -- the drawing-number chip reads TRIAL – NOT FOR ISSUE.
+export function Masthead({ tb, meta, editable = false, updateMeta, setSheet, trial = false }) {
   tb = tb || { details: [], logos: [] };
   // Index 0 is the company mark, on the panel. Anything after it is an
   // accreditation, and only those decide whether column 2 exists at all.
@@ -230,7 +233,13 @@ export function Masthead({ tb, meta, editable = false, updateMeta, setSheet }) {
           <div style={{ background: MH.teal, borderRadius: MH.chipRadius, padding: "4px 10px", minWidth: 0,
                         display: "flex", flexDirection: "column" }}>
             <MhLabel size={6.5} colour={MH.ink}>Drawing no.</MhLabel>
-            {field(meta.drawingNumber, (v) => upSheet({ drawingNumber: v }),
+            {/* Try mode: the chip reads TRIAL – NOT FOR ISSUE instead of the
+                number (which is kept, just not shown or editable). */}
+            {trial ? (
+              <div style={{ fontSize: 11, fontWeight: 700, color: MH.ink, fontFamily: MH_MONO, letterSpacing: ".04em", whiteSpace: "nowrap" }}>
+                {TRIAL_DRAWING_NUMBER}
+              </div>
+            ) : field(meta.drawingNumber, (v) => upSheet({ drawingNumber: v }),
                    { fontSize: 13, weight: 700, colour: MH.ink, family: MH_MONO,
                      placeholder: "WOE-0000-GF-L" })}
           </div>

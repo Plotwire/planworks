@@ -25,6 +25,7 @@ import { Masthead } from "@/components/TitleBlockMasthead";
 import { isTouchDevice, supersampleFactor } from "@/lib/touch";
 import { dataUrlToBlob, signPlanImage, signPlanImages } from "@/lib/planImages";
 import { BOQ_ESTIMATE_NOTICE } from "@/lib/legal";
+import { TrialSheetMark } from "@/components/TryMode";
 import { addDaysIso, QUOTE_VALID_DAYS, shownOnQuote, lineTotal as boqLineTotal, sectionTotal, boqTotals, outputSettings, materialsDoc, quoteDoc, docToCsv, QUOTE_DETAILS, hasQty, badNumberLines, parseNum, expiredValidUntil, fmtDate } from "@/lib/boqOutputs";
 import BoqDocPages from "@/components/BoqDocPages";
 
@@ -79,7 +80,7 @@ export function TopBar({
   meta, onHome, theme, onToggleTheme, onShowMeta, onImport, onUndo, onRedo, onSave, savedFlash, onShowProjects,
   onExportJSON, onPrint, colourMode, onToggleColour, onNormalise, normaliseFlash,
   snapEnabled, onToggleSnap, onShowBoq, onShowTitleBlock, onShowNotes,
-  sidebarHidden, onToggleSidebar,
+  sidebarHidden, onToggleSidebar, trialPill = null,
 }) {
   const projectLabel = meta.projectName || "Untitled Project";
   const sheetLabel = meta.sheetName || "Drawing";
@@ -109,6 +110,8 @@ export function TopBar({
           <span className="truncate max-w-[110px] sm:max-w-[220px]">{projectLabel}</span>
           <ChevronRight size={12} className="text-[color:var(--action-ink)] opacity-70 shrink-0"/>
         </button>
+        {/* Try mode: "Trial · N of 25 symbols" + Subscribe (components/TryMode.jsx). */}
+        {trialPill && <><div className="w-px h-5 bg-slate-200 dark:bg-[#2A3947]"/>{trialPill}</>}
       </div>
 
       <div className="flex items-center gap-1 ml-auto min-w-0 overflow-x-auto flex-nowrap [&::-webkit-scrollbar]:hidden" style={{ WebkitOverflowScrolling: "touch" }}>
@@ -586,6 +589,8 @@ export function Sheet({
   onWallMouseDown,
   startRotating,
 }) {
+  const { access = {} } = useApp();
+  const trial = Boolean(access.isTry);
   return (
     <div
       data-sheet-bg
@@ -642,6 +647,10 @@ export function Sheet({
 
       {/* TITLE BLOCK */}
       <TitleBlock meta={meta} updateMeta={updateMeta} onSheetField={onSheetField} />
+
+      {/* Try mode: one faint Plotwire logo centred on the sheet -- on the
+          sheet only, never over the toolbars or panels. */}
+      {trial && <TrialSheetMark />}
     </div>
   );
 }
@@ -1500,9 +1509,10 @@ function MastheadFrame({ children }) {
 
 function TitleBlock({ meta, updateMeta, onSheetField }) {
   const tb = useProjectTitleBlock() || DEFAULT_TITLEBLOCK;
+  const { access = {} } = useApp();
   return (
     <MastheadFrame>
-      <Masthead tb={tb} meta={meta} editable updateMeta={updateMeta} setSheet={onSheetField} />
+      <Masthead tb={tb} meta={meta} editable updateMeta={updateMeta} setSheet={onSheetField} trial={Boolean(access.isTry)} />
     </MastheadFrame>
   );
 }

@@ -6,6 +6,7 @@ import { listProjects, localProjectsPending, migrateLocalProjects, deleteProject
 import { signPlanImages } from "@/lib/planImages";
 import { useApp } from "@/components/AppShell";
 import { LEGAL_LINKS } from "@/lib/legal";
+import { TryPill } from "@/components/TryMode";
 
 /* Sheet geometry — must match ElectricalPlanTool */
 const SHEET = { width: 1587, height: 1123, margin: 18, legendWidth: 230, notesWidth: 280, titleHeight: 110 };
@@ -241,15 +242,13 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
               {subscription?.status === "trialing" && !subscription?.cancelAtPeriodEnd && (
                 <span className="trial-chip" title="You're on a free trial">Trial</span>
               )}
+              {/* Try mode: the same "Trial · N of 25 symbols" pill + Subscribe as
+                  the editor toolbar (components/TryMode.jsx). */}
               {isTry && cards !== null && (
-                <span className={`try-chip${symbolsUsed >= symbolLimit ? " is-full" : ""}`} title="Try Plotwire: symbols across all your saved drawings">
-                  {symbolsUsed} of {symbolLimit} trial symbols used
-                </span>
+                <TryPill used={symbolsUsed} limit={symbolLimit} onSubscribe={access.openSubscribe} />
               )}
-              {(isTry || readOnly) && (
-                <button className="billing-btn" onClick={access.openSubscribe}>
-                  {readOnly ? "Re-subscribe" : "Subscribe"}
-                </button>
+              {readOnly && (
+                <button className="billing-btn" onClick={access.openSubscribe}>Re-subscribe</button>
               )}
               {subscription?.cancelAtPeriodEnd && subscription?.cancelAt && (
                 <span className="cancel-chip" title="Your subscription is set to cancel. Undo it in Billing.">
@@ -516,8 +515,6 @@ const CSS = `
 .pw-home .account .sub{font-size:11px; color:var(--muted)}
 .pw-home .account .pic{width:32px; height:32px; border-radius:50%; background:var(--brand); color:#fff; display:grid; place-items:center; font-weight:600; font-size:12px; font-family:'Space Grotesk',sans-serif}
 .pw-home .trial-chip{font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:#08313a; background:#3FB7C9; padding:4px 8px; border-radius:999px; font-weight:600; white-space:nowrap}
-.pw-home .try-chip{font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:#08313a; background:#D8F0F4; border:1px solid #BFE7ED; padding:4px 9px; border-radius:999px; font-weight:600; white-space:nowrap}
-.pw-home .try-chip.is-full{color:#7A3E00; background:#FFE3C2; border-color:#F5C58A}
 .pw-home .theme-toggle{width:38px; height:38px; border-radius:10px; border:none; background:var(--action); color:var(--action-ink); display:grid; place-items:center; cursor:pointer; transition:background .16s}
 .pw-home .theme-toggle:hover{background:var(--action-hover)}
 .pw-home .theme-toggle svg{width:18px; height:18px}
@@ -560,7 +557,6 @@ html.dark .pw-home .card-foot .ct{background:#0E141B}
 html.dark .pw-home .migrate-banner{background:linear-gradient(120deg,#13343b,#152832); border-color:#235662}
 html.dark .pw-home .access-banner{background:linear-gradient(120deg,#13343b,#152832); border-color:#235662}
 html.dark .pw-home .access-banner.is-lapsed{background:#2a2114; border-color:#6b4a1f}
-html.dark .pw-home .try-chip{color:#CDEFF4; background:#13343b; border-color:#235662}
 .pw-home .scroll{flex:1; overflow-y:auto; padding:36px 40px 60px}
 .pw-home .legal-links{margin-top:48px; display:flex; flex-wrap:wrap; justify-content:center; gap:8px 20px; font-size:12.5px}
 .pw-home .legal-links a{color:var(--muted); text-decoration:none}
