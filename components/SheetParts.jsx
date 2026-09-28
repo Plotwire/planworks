@@ -1992,7 +1992,10 @@ export function BoqTemplateEditor({ saved, savedPrefs, onSave, onClose }) {
 }
 
 export function BillOfQuantities({ project, updateBoq, onClose }) {
-  const { boqTemplate, boqPrefs, saveBoqTemplate, companyBrand } = useApp();
+  const { boqTemplate, boqPrefs, saveBoqTemplate, companyBrand, access = {} } = useApp();
+  // Try mode: items and quantities only -- no prices, totals, quote choices
+  // or downloads (components/TryMode.jsx).
+  const priced = !access.isTry;
   const meta = project.meta || {};
   const [boq, setBoq] = useState(() => {
     const base = project.boq
@@ -2151,7 +2154,7 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
         {/* Off-screen print layout captured for PDF export */}
         <div aria-hidden style={{ position: "absolute", left: -10000, top: 0, width: 794, pointerEvents: "none" }}>
           <div ref={printRef}>
-            <BoqDocPages doc={doc} />
+            {priced && <BoqDocPages doc={doc} />}
           </div>
         </div>
 
@@ -2213,10 +2216,12 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
               <div className="flex items-center justify-between mb-2">
                 <input value={sec.title} onChange={(e) => setSectionTitle(si, e.target.value)}
                   className="text-[14px] font-bold text-slate-900 bg-transparent outline-none focus:bg-[#ECF8FA] rounded px-1"/>
-                <div className="text-right">
-                  <div className="text-[8px] uppercase tracking-wider text-slate-400">Subtotal</div>
-                  <div className="text-[14px] font-bold text-[#22808F] tabular-nums">{gbp(subtotal(sec))}</div>
-                </div>
+                {priced && (
+                  <div className="text-right">
+                    <div className="text-[8px] uppercase tracking-wider text-slate-400">Subtotal</div>
+                    <div className="text-[14px] font-bold text-[#22808F] tabular-nums">{gbp(subtotal(sec))}</div>
+                  </div>
+                )}
               </div>
               {sec.subtitle && <div className="text-[10px] text-slate-400 -mt-1 mb-1.5 px-1">{sec.subtitle}</div>}
               <table className="w-full border-collapse">
@@ -2226,9 +2231,9 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
                     <th className="py-1.5 pr-2">Item</th>
                     <th className="py-1.5 pr-2">Specification / Notes</th>
                     <th className="py-1.5 pr-2 w-14 text-right">Qty</th>
-                    <th className="py-1.5 pr-2 w-24 text-right">Unit Rate</th>
-                    <th className="py-1.5 w-24 text-right">Total</th>
-                    <th className="py-1.5 w-12 text-center" title="Show this line on the client quote. Hidden lines still count in the totals.">On quote</th>
+                    {priced && <th className="py-1.5 pr-2 w-24 text-right">Unit Rate</th>}
+                    {priced && <th className="py-1.5 w-24 text-right">Total</th>}
+                    {priced && <th className="py-1.5 w-12 text-center" title="Show this line on the client quote. Hidden lines still count in the totals.">On quote</th>}
                     <th className="w-6"></th>
                   </tr>
                 </thead>
@@ -2241,18 +2246,22 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
                       <td className="py-0.5 pr-1"><input value={it.qty} onChange={(e) => setItem(si, it.id, "qty", e.target.value)} inputMode="decimal"
                         title={badTitle(it.qty) || (!isDrawingLinked(it) ? undefined : it.qtyManual ? "Typed quantity. Kept when the BOQ reopens; clear it to use the drawing count." : "Counted from the drawing")}
                         className={`${cell} text-[12px] text-right tabular-nums ${isDrawingLinked(it) && it.qtyManual ? "italic" : ""}${badCell(it.qty)}`} placeholder="—"/></td>
+                      {priced && (
                       <td className="py-0.5 pr-1">
                         <div className="flex items-center justify-end gap-0.5">
                           <span className="text-slate-400 text-[11px]">£</span>
                           <input value={it.rate} onChange={(e) => setItem(si, it.id, "rate", e.target.value)} inputMode="decimal" title={badTitle(it.rate)} className={`${cell} text-[12px] text-right tabular-nums${badCell(it.rate)}`} placeholder="0.00"/>
                         </div>
                       </td>
-                      <td className="py-0.5 text-right tabular-nums text-[12px] font-semibold text-slate-900 pr-1">{lineTotal(it) ? gbp(lineTotal(it)) : "\u2014"}</td>
+                      )}
+                      {priced && <td className="py-0.5 text-right tabular-nums text-[12px] font-semibold text-slate-900 pr-1">{lineTotal(it) ? gbp(lineTotal(it)) : "\u2014"}</td>}
+                      {priced && (
                       <td className="py-0.5 text-center">
                         <input type="checkbox" checked={shownOnQuote(it)} onChange={(e) => setItem(si, it.id, "hideOnQuote", !e.target.checked)}
                           title={shownOnQuote(it) ? "Shown on the client quote" : "Hidden from the client quote (still counts in the totals)"}
                           aria-label="Show on client quote" className="accent-[var(--action)] w-3.5 h-3.5 cursor-pointer"/>
                       </td>
+                      )}
                       <td className="py-0.5 text-center">
                         <button onClick={() => removeItem(si, it.id)} aria-label="Delete line" className="opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 text-slate-300 hover:text-red-500"><X size={12}/></button>
                       </td>
@@ -2266,8 +2275,23 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
             </div>
           ))}
 
+          {/* Try mode: quantities only. Prices, totals, quotes and downloads
+              unlock with a subscription. */}
+          {!priced && (
+            <div className="rounded-xl ring-1 ring-[#BFE7ED] bg-[#ECF8FA] px-5 py-4 mt-2 flex flex-wrap items-center justify-between gap-3">
+              <div className="text-[12px] text-slate-700 max-w-xl">
+                <b className="text-slate-900">Prices, client quotes and materials lists come with a subscription.</b>{" "}
+                Every item and quantity from your drawing is here. Subscribe to price the job, send a quote and download it.
+              </div>
+              <button onClick={access.openSubscribe}
+                className="px-4 py-2 bg-[var(--action)] text-[color:var(--action-ink)] rounded-md text-[11px] font-semibold hover:bg-[var(--action-hover)]">
+                Subscribe
+              </button>
+            </div>
+          )}
+
           {/* Qty/Rate that isn't a number counts as zero -- say so. */}
-          {badLines.length > 0 && (
+          {priced && badLines.length > 0 && (
             <div role="alert" className="rounded-lg ring-1 ring-amber-300 bg-amber-50 px-4 py-2.5 mb-3 text-[11.5px] text-amber-900">
               <b>{badLines.length} line{badLines.length === 1 ? " has" : "s have"} a Qty or Rate that isn&rsquo;t a number</b>, so {badLines.length === 1 ? "it counts" : "they count"} as &pound;0:{" "}
               {badLines.slice(0, 5).map(l => `${l.item || "(no name)"} (${l.section})`).join(", ")}{badLines.length > 5 ? ", \u2026" : ""}.
@@ -2276,6 +2300,7 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
           )}
 
           {/* Totals */}
+          {priced && (
           <div className="rounded-xl ring-1 ring-slate-200 bg-slate-50/60 px-5 py-4 mt-2">
             <div className="text-[9px] uppercase tracking-wider text-slate-500 font-semibold mb-2">Totals</div>
             {boq.sections.map((sec, i) => (
@@ -2305,12 +2330,14 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
               </>
             )}
           </div>
+          )}
           {/* Permanent, not dismissible: see BOQ_ESTIMATE_NOTICE in lib/legal.js. */}
           <p className="text-[11px] leading-snug text-[#1A2530] mt-3">{BOQ_ESTIMATE_NOTICE}</p>
-          <div className="text-[10px] text-slate-400 mt-1">Unit rates are your selling prices. The materials list shows quantities only; the client quote shows prices.</div>
+          {priced && <div className="text-[10px] text-slate-400 mt-1">Unit rates are your selling prices. The materials list shows quantities only; the client quote shows prices.</div>}
         </div>
 
         {/* Output: which document Download PDF / CSV produce, and its options. */}
+        {priced && (
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2 px-6 py-2.5 border-t border-slate-200 bg-slate-50 shrink-0 text-[11px] text-slate-700">
           <div className="flex items-center gap-2">
             <span className="text-[9px] uppercase tracking-wider text-slate-500 font-semibold">Download</span>
@@ -2351,6 +2378,7 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
             </>
           )}
         </div>
+        )}
 
         {/* Footer */}
         <div className="flex items-center justify-between px-6 py-3 border-t border-slate-200 shrink-0">
@@ -2366,11 +2394,19 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
           </div>
           <div className="flex gap-2">
             <button onClick={onClose} className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-md text-[10px] uppercase tracking-wider">Close</button>
+            {!priced && (
+              <button onClick={access.openSubscribe}
+                className="px-4 py-2 bg-[var(--action)] text-[color:var(--action-ink)] rounded-md text-[10px] uppercase tracking-wider font-semibold hover:bg-[var(--action-hover)] flex items-center gap-1.5">
+                <Download size={12}/> Subscribe to download
+              </button>
+            )}
+            {priced && <>
             <button onClick={downloadCSV} className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-md text-[10px] uppercase tracking-wider font-semibold flex items-center gap-1.5"><Download size={12}/> CSV</button>
             <button onClick={downloadPDF} disabled={pdfBusy} style={pdfBusy ? { opacity: 0.6, cursor: "wait" } : undefined}
               className="px-4 py-2 bg-[var(--action)] text-[color:var(--action-ink)] rounded-md text-[10px] uppercase tracking-wider font-semibold hover:bg-[var(--action-hover)] flex items-center gap-1.5">
               <Download size={12}/> {pdfBusy ? "Building…" : "Download PDF"}
             </button>
+            </>}
           </div>
         </div>
       </div>

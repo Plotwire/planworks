@@ -8,6 +8,7 @@ import {
   ensureShareToken, regenerateShareToken, loadSharedPlanner,
 } from "@/lib/planner";
 import { useApp } from "@/components/AppShell";
+import { useTryPrompt, TryPrompt, LOCKED } from "@/components/TryMode";
 
 const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -86,7 +87,10 @@ const lbl = (P) => ({ fontFamily: COND, fontWeight: 600, fontSize: 12, letterSpa
 // viewer's own planner, even when they are signed in and the token is missing.
 export default function WorkPlanner({ sharedView = false, shared = null }) {
   const router = useRouter();
-  const { theme } = useApp();
+  const { theme, access = {} } = useApp();
+  // Try mode: no share link, no image share. Lapsed: no new share link (the
+  // database refuses it too), but the image is theirs to export.
+  const tryPrompt = useTryPrompt();
   const dark = theme === "dark";
   const readOnly = sharedView;
   const P = palette(dark);
@@ -202,6 +206,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
   };
 
   const openShare = async () => {
+    if (access.isTry || access.readOnly) { tryPrompt.show(LOCKED.share); return; }
     setSharePanel({ loading: true, url: "", copied: false });
     try {
       const token = await ensureShareToken();
@@ -225,6 +230,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
   };
 
   const exportImage = async () => {
+    if (access.isTry) { tryPrompt.show(LOCKED.share); return; }
     const card = cardRef.current;
     if (!card || exporting) return;
     setExporting(true);
@@ -576,6 +582,9 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
           </div>
         </div>
       )}
+
+      <TryPrompt open={Boolean(tryPrompt.prompt)} title={tryPrompt.prompt?.title} body={tryPrompt.prompt?.body}
+        onSubscribe={() => { tryPrompt.hide(); access.openSubscribe?.(); }} onClose={tryPrompt.hide} />
 
       {/* Share: view-only link */}
       {sharePanel && (
