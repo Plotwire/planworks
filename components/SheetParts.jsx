@@ -1992,7 +1992,7 @@ export function BoqTemplateEditor({ saved, savedPrefs, onSave, onClose }) {
 }
 
 export function BillOfQuantities({ project, updateBoq, onClose }) {
-  const { boqTemplate, boqPrefs, saveBoqTemplate } = useApp();
+  const { boqTemplate, boqPrefs, saveBoqTemplate, companyBrand } = useApp();
   const meta = project.meta || {};
   const [boq, setBoq] = useState(() => {
     const base = project.boq || buildInitialBoq(project, SYMBOL_META, findSymbol, boqTemplate, boqPrefs);
@@ -2019,7 +2019,18 @@ export function BillOfQuantities({ project, updateBoq, onClose }) {
   const badTitle = (v) => parseNum(v).bad ? "Not a number, so this counts as 0" : undefined;
   const setDetail = (detail) => setBoq(b => ({ ...b, quote: { ...(b.quote || {}), detail } }));
   const hiddenCount = boq.sections.reduce((n, sec) => n + sec.items.filter(it => !shownOnQuote(it) && hasQty(it)).length, 0);
-  const docOpts = { projectName: meta.projectName || "", company: meta.company || boq.meta.preparedBy || "" };
+  // Header branding from Business information: the company logo (data-URI,
+  // same cached copy the title block uses) and the contact lines under the
+  // name. Both are simply absent when the profile has none.
+  const brandDetails = companyBrand?.details || [];
+  const brandName = brandDetails.find(d => d.label === "Company")?.value || "";
+  const docOpts = {
+    projectName: meta.projectName || "",
+    company: meta.company || boq.meta.preparedBy || brandName,
+    logo: companyBrand?.logo || null,
+    companyLines: brandDetails.filter(d => ["Address", "Tel", "Email", "Web"].includes(d.label))
+      .map(d => (d.label === "Address" ? d.value : `${d.label} ${d.value}`)),
+  };
   // Materials list keeps the Plotwire estimate notice; the client quote uses
   // its own neutral wording (see quoteDoc).
   const doc = outSet.output === "quote"

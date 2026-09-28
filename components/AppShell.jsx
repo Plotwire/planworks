@@ -10,7 +10,7 @@ import { hasCompanyProfile, getCompanyProfile } from "@/lib/companyProfile";
 import { listCompanyLogos } from "@/lib/companyLogos";
 import { supabase, isConfigured } from "@/lib/supabase";
 import { getSettings, saveSettings } from "@/lib/db";
-import { DEFAULT_TITLEBLOCK, normaliseTitleBlock, companyProfileToTitleBlock, mergeTitleBlocks } from "@/lib/titleBlock";
+import { DEFAULT_TITLEBLOCK, normaliseTitleBlock, companyProfileToTitleBlock, companyLogoFrom, mergeTitleBlocks } from "@/lib/titleBlock";
 import { useSubscription } from "@/lib/useSubscription";
 import { openBillingPortal } from "@/lib/billingClient";
 import { LEGAL_LINKS } from "@/lib/legal";
@@ -77,6 +77,7 @@ function AppGates({ children }) {
   // company identity. null when the account hasn't filled one in, which is what
   // makes the legacy user_settings block a safe fallback below.
   const [companyBlock, setCompanyBlock] = useState(null);
+  const [companyLogo, setCompanyLogo] = useState(null); // company logo data-URI (BOQ documents)
   const [boqTemplate, setBoqTemplate] = useState(null); // null = use built-in default
   const [boqPrefs, setBoqPrefs] = useState(null);       // { vatOn } for new BOQs; null = defaults
   const settingsRef = useRef({}); // latest full settings blob, so saves merge
@@ -281,14 +282,16 @@ function AppGates({ children }) {
     try {
       const [profile, logos] = await Promise.all([getCompanyProfile(), listCompanyLogos()]);
       setCompanyBlock(companyProfileToTitleBlock(profile, logos));
+      setCompanyLogo(companyLogoFrom(profile, logos));
     } catch (err) {
       console.warn("company profile load failed:", err && err.message);
       setCompanyBlock(null);
+      setCompanyLogo(null);
     }
   }, []);
 
   useEffect(() => {
-    if (!session) { setCompanyBlock(null); return; }
+    if (!session) { setCompanyBlock(null); setCompanyLogo(null); return; }
     refreshCompany();
   }, [session, refreshCompany]);
 
@@ -357,6 +360,9 @@ function AppGates({ children }) {
       // or scheme logo it does not cover is carried through.
       titleBlock: mergeTitleBlocks(companyBlock, titleBlock) || DEFAULT_TITLEBLOCK, saveTitleBlock, refreshCompany,
       boqTemplate, boqPrefs, saveBoqTemplate,
+      // Business information, for document headers: the company logo alone and
+      // the profile's detail lines (name first).
+      companyBrand: { logo: companyLogo, details: companyBlock?.details || [] },
       subscription, manageBilling,
     }}>
       {profileStep === "needed" ? (

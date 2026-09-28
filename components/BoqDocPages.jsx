@@ -16,6 +16,8 @@ const INNER_W = PAGE_W - PAD_X * 2;
 // Usable height above the footer, with a little slack for rounding.
 const CONTENT_H = PAGE_H - PAD_TOP - PAD_BOTTOM - 12;
 const TEAL = "#22808F";
+// Company logo in the header: a fixed height, width to suit (wide logos capped).
+const LOGO_H = 56, LOGO_MAX_W = 170;
 
 const gbp = (n) => "£" + (Number(n) || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const th = { textAlign: "left", padding: "6px", fontSize: 8, letterSpacing: "0.06em", textTransform: "uppercase", color: "#64748b", borderBottom: "1px solid #cbd5e1" };
@@ -32,7 +34,20 @@ function Preamble({ doc }) {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 24, marginBottom: 26 }}>
-        <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>{doc.company || ""}</div>
+        {/* Company: logo (only when there is one -- no empty box) beside the
+            name and details. The logo box has a fixed height so the measured
+            layout doesn't change when the image decodes. */}
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 14, minWidth: 0 }}>
+          {doc.logo && (
+            <img src={doc.logo} alt="" style={{ height: LOGO_H, width: "auto", maxWidth: LOGO_MAX_W, objectFit: "contain", objectPosition: "left top", flexShrink: 0, display: "block" }} />
+          )}
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a", lineHeight: 1.2 }}>{doc.company || ""}</div>
+            {(doc.companyLines || []).map((line, i) => (
+              <div key={i} style={{ fontSize: 9.5, color: "#64748b", marginTop: i === 0 ? 4 : 1, whiteSpace: "pre-line", overflowWrap: "anywhere" }}>{line}</div>
+            ))}
+          </div>
+        </div>
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: 9, letterSpacing: "0.22em", textTransform: "uppercase", color: TEAL, fontWeight: 700 }}>{doc.heading}</div>
           <div style={{ fontSize: 22, fontWeight: 700, color: "#0f172a", marginTop: 2, lineHeight: 1.1 }}>{doc.title}</div>
