@@ -86,7 +86,17 @@ function PlanThumb({ project }) {
 }
 
 export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSketch, onPlanner, onBusiness, theme, onToggleTheme, user, onSignOut }) {
-  const { manageBilling, subscription } = useApp();
+  const { manageBilling, subscription, access = {} } = useApp();
+  // Try: 25 symbols across all saved drawings. Lapsed: read-only, so nothing
+  // new can be started (lib/access.js).
+  const isTry = Boolean(access.isTry);
+  const readOnly = Boolean(access.readOnly);
+  const symbolLimit = access.symbolLimit || 0;
+  // Lapsed accounts can't start new work; the start buttons open Subscribe.
+  const startNew = (fn) => (...args) => (readOnly ? access.openSubscribe?.() : fn?.(...args));
+  onNewProject = startNew(onNewProject);
+  onImport = startNew(onImport);
+  onSketch = startNew(onSketch);
   const [cards, setCards] = useState(null);
   const [pending, setPending] = useState(0);   // local jobs awaiting upload
   // The one drawing awaiting a confirmed delete (null = dialog closed). This
@@ -183,6 +193,8 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
     }).length;
     return { drawings: list.length, symbols, month };
   }, [cards]);
+  // Try mode counts the same thing: symbols across every saved drawing.
+  const symbolsUsed = stats.symbols;
 
   return (
     <div className="pw-home">
@@ -229,6 +241,16 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
               {subscription?.status === "trialing" && !subscription?.cancelAtPeriodEnd && (
                 <span className="trial-chip" title="You're on a free trial">Trial</span>
               )}
+              {isTry && cards !== null && (
+                <span className={`try-chip${symbolsUsed >= symbolLimit ? " is-full" : ""}`} title="Try Plotwire: symbols across all your saved drawings">
+                  {symbolsUsed} of {symbolLimit} trial symbols used
+                </span>
+              )}
+              {(isTry || readOnly) && (
+                <button className="billing-btn" onClick={access.openSubscribe}>
+                  {readOnly ? "Re-subscribe" : "Subscribe"}
+                </button>
+              )}
               {subscription?.cancelAtPeriodEnd && subscription?.cancelAt && (
                 <span className="cancel-chip" title="Your subscription is set to cancel. Undo it in Billing.">
                   Cancels on {new Date(subscription.cancelAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}
@@ -247,6 +269,24 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
           </header>
 
           <div className="scroll">
+            {readOnly && (
+              <div className="access-banner is-lapsed" role="status">
+                <div>
+                  <strong>Your subscription has ended.</strong>
+                  <span> You can still open, print and download your drawings, but not change them or start new ones. Re-subscribe to carry on where you left off.</span>
+                </div>
+                <button className="mg-primary" onClick={access.openSubscribe}>Re-subscribe</button>
+              </div>
+            )}
+            {isTry && (
+              <div className="access-banner" role="status">
+                <div>
+                  <strong>You&rsquo;re trying Plotwire.</strong>
+                  <span> Place up to {symbolLimit} symbols across your drawings to see how it works. Exports, printing and quotes unlock when you subscribe, and everything you draw is kept.</span>
+                </div>
+                <button className="mg-primary" onClick={access.openSubscribe}>Subscribe</button>
+              </div>
+            )}
             {pending > 0 && (
               <div className="migrate-banner">
                 <div>
@@ -476,6 +516,8 @@ const CSS = `
 .pw-home .account .sub{font-size:11px; color:var(--muted)}
 .pw-home .account .pic{width:32px; height:32px; border-radius:50%; background:var(--brand); color:#fff; display:grid; place-items:center; font-weight:600; font-size:12px; font-family:'Space Grotesk',sans-serif}
 .pw-home .trial-chip{font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:#08313a; background:#3FB7C9; padding:4px 8px; border-radius:999px; font-weight:600; white-space:nowrap}
+.pw-home .try-chip{font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:#08313a; background:#D8F0F4; border:1px solid #BFE7ED; padding:4px 9px; border-radius:999px; font-weight:600; white-space:nowrap}
+.pw-home .try-chip.is-full{color:#7A3E00; background:#FFE3C2; border-color:#F5C58A}
 .pw-home .theme-toggle{width:38px; height:38px; border-radius:10px; border:none; background:var(--action); color:var(--action-ink); display:grid; place-items:center; cursor:pointer; transition:background .16s}
 .pw-home .theme-toggle:hover{background:var(--action-hover)}
 .pw-home .theme-toggle svg{width:18px; height:18px}
@@ -485,6 +527,10 @@ const CSS = `
 .pw-home .billing-btn svg{width:18px; height:18px; flex-shrink:0}
 
 /* ---- Migration banner ---- */
+.pw-home .access-banner{display:flex; align-items:center; justify-content:space-between; gap:18px; flex-wrap:wrap; background:linear-gradient(120deg,#E8F7FA,#F0FBFC); border:1px solid #BFE7ED; border-radius:16px; padding:16px 20px; margin-bottom:22px}
+.pw-home .access-banner.is-lapsed{background:#FFF6EA; border-color:#F5C58A}
+.pw-home .access-banner strong{font-weight:600; color:var(--ink)}
+.pw-home .access-banner span{color:var(--ink-2)}
 .pw-home .migrate-banner{display:flex; align-items:center; justify-content:space-between; gap:18px; flex-wrap:wrap; background:linear-gradient(120deg,#E8F7FA,#F0FBFC); border:1px solid #BFE7ED; border-radius:16px; padding:16px 20px; margin-bottom:22px}
 .pw-home .migrate-banner strong{font-weight:600; color:var(--ink)}
 .pw-home .migrate-banner span{color:var(--ink-2)}
@@ -512,6 +558,9 @@ html.dark .pw-home .tpl:hover{border-color:var(--teal-600)}
 html.dark .pw-home .new-card{border-color:#2A3947}
 html.dark .pw-home .card-foot .ct{background:#0E141B}
 html.dark .pw-home .migrate-banner{background:linear-gradient(120deg,#13343b,#152832); border-color:#235662}
+html.dark .pw-home .access-banner{background:linear-gradient(120deg,#13343b,#152832); border-color:#235662}
+html.dark .pw-home .access-banner.is-lapsed{background:#2a2114; border-color:#6b4a1f}
+html.dark .pw-home .try-chip{color:#CDEFF4; background:#13343b; border-color:#235662}
 .pw-home .scroll{flex:1; overflow-y:auto; padding:36px 40px 60px}
 .pw-home .legal-links{margin-top:48px; display:flex; flex-wrap:wrap; justify-content:center; gap:8px 20px; font-size:12.5px}
 .pw-home .legal-links a{color:var(--muted); text-decoration:none}
