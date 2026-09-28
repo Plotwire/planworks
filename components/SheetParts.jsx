@@ -2949,7 +2949,9 @@ function withFreshLinks(bg, links) {
   return { ...bg, ...(src ? { src } : {}), ...(pdfSrc ? { pdfSrc } : {}) };
 }
 
-export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1, DRAW, onClose, onPrint }) {
+// notice / closeLabel: used when the preview is the whole view (a lapsed
+// subscription's read-only drawings) rather than a step from the editor.
+export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1, DRAW, onClose, onPrint, notice = null, closeLabel = null }) {
   const { meta, notes } = project;
   const projectSheets = project.sheets && project.sheets.length
     ? project.sheets
@@ -3276,6 +3278,7 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
         <div>
           <div className="pp-eyebrow">Save / Print</div>
           <div className="pp-title">{meta.projectName || "Project"} · {sheets.length} {sheets.length === 1 ? "drawing" : "drawings"}</div>
+          {notice && <div className="pp-notice" role="status">{notice}</div>}
         </div>
         <div className="pp-actions">
           <div className="pp-zoom">
@@ -3284,7 +3287,7 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
             <button onClick={() => adjustZoom(1.2)} aria-label="Zoom in">+</button>
           </div>
           <span className="pp-hint">Download the PDF, then attach it to your client email.</span>
-          <button onClick={onClose} className="pp-btn pp-btn-ghost">Close</button>
+          <button onClick={onClose} className="pp-btn pp-btn-ghost">{closeLabel || "Close"}</button>
           <button onClick={downloadBackup} className="pp-btn pp-btn-ghost" title="Download a re-importable backup of the whole project (.json)">Backup</button>
           <button onClick={emailClient} className="pp-btn pp-btn-email"><Mail size={12}/> Email client</button>
           <button onClick={onPrint} className="pp-btn pp-btn-email"><Printer size={12}/> Print</button>
@@ -3321,6 +3324,7 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
 
       <style>{`
         #print-root{position:fixed; inset:0; z-index:60; background:rgba(15,23,42,.5); overflow:auto; font-family:'Inter',system-ui,sans-serif}
+        #print-root .pp-notice{margin-top:4px; font-size:12px; font-weight:600; color:#7A3E00}
         #print-root .pp-chrome{position:sticky; top:0; z-index:2; background:#fff; border-bottom:1px solid #e2e8f0; padding:12px 20px; display:flex; align-items:center; justify-content:space-between; gap:16px}
         #print-root .pp-eyebrow{font-size:10px; letter-spacing:.3em; text-transform:uppercase; color:#64748b}
         #print-root .pp-title{font-size:14px; font-weight:600; margin-top:2px; color:#0f172a}

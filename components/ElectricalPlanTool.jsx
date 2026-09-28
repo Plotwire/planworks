@@ -501,6 +501,11 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const tryUsageRef = useRef(tryUsage);
   tryUsageRef.current = tryUsage;
   const tryPrompt = useTryPrompt();
+  // Lapsed subscription: read-only. Drawings open in the print preview (view,
+  // download, print) and nothing is saved.
+  const readOnly = Boolean(access.readOnly);
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
   const [floorPlanOpen, setFloorPlanOpen] = useState(false);
   const [floorPlanArgs, setFloorPlanArgs] = useState(null);
 
@@ -1551,6 +1556,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   // Quick-save: writes to the currently open project, or creates one if new.
   const saveProject = () => enqueueSave(projectRef.current, async ({ p, id, stillLoaded }) => {
     const name = p.meta?.projectName || "Untitled drawing";
+    if (readOnlyRef.current) return false; // lapsed: read-only
     // Try mode: the database would refuse a save over the limit; say so first.
     if (tryUsageRef.current.blocksSave(id || null)) { tryPrompt.show(LOCKED.limit); return false; }
     if (!id) return insertAsNewProject(p, name, { stillLoaded, rename: false });
@@ -1593,6 +1599,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   // Save As: store the current canvas as a new named project (new cloud row)
   // Try mode: a copy keeps the original, so its symbols count twice.
   const saveProjectAs = (name) => enqueueSave(projectRef.current, ({ p, stillLoaded }) => {
+    if (readOnlyRef.current) return false; // lapsed: read-only
     if (tryUsageRef.current.blocksSave(null)) { tryPrompt.show(LOCKED.limit); return false; }
     return insertAsNewProject(p, name || p.meta?.projectName || "Untitled drawing", { stillLoaded, rename: true });
   });
@@ -1814,6 +1821,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   // than silently creating or discarding anything.
   const leaveToDashboard = async () => {
     if (!onHome) return;
+    if (readOnlyRef.current) { onHome(); return; } // lapsed: nothing to save
     const p = projectRef.current;
     const hasWork = countPlaced(p) > 0 || (p?.sheets || []).some(s => s && s.bgImage);
     if (hasWork) {
@@ -2099,15 +2107,17 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       )}
 
       {/* ==================== PRINT PREVIEW ==================== */}
-      {printPreview && (
+      {(printPreview || readOnly) && (
         <PrintPreview
           project={project}
           legendItems={legendItems}
           colourMode={colourMode}
           symbolScale={symbolScale}
           DRAW={DRAW}
-          onClose={() => setPrintPreview(false)}
+          onClose={readOnly ? leaveToDashboard : () => setPrintPreview(false)}
           onPrint={printSheet}
+          notice={readOnly ? "Your subscription has ended, so this drawing is view-only. You can still download and print it." : null}
+          closeLabel={readOnly ? "Back to dashboard" : null}
         />
       )}
 
