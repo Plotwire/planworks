@@ -104,9 +104,9 @@ export function TopBar({
           Plot<span className="text-[#3FB7C9]">wire</span>
         </span>
         <button onClick={onShowMeta} title={`${projectLabel} — ${sheetLabel}`}
-          className="group h-8 flex items-center gap-1.5 px-2.5 rounded-lg bg-[var(--action)] hover:bg-[var(--action-hover)] text-[color:var(--action-ink)] transition-colors text-[11px] font-semibold min-w-0">
+          className="group h-8 flex items-center gap-1.5 px-2 min-[1300px]:px-2.5 rounded-lg bg-[var(--action)] hover:bg-[var(--action-hover)] text-[color:var(--action-ink)] transition-colors text-[11px] font-semibold min-w-0">
           <FileText size={14} className="opacity-70 shrink-0"/>
-          <span className="truncate max-w-[110px] min-[1300px]:max-w-[220px]">{projectLabel}</span>
+          <span className="truncate max-w-[100px] min-[1300px]:max-w-[220px]">{projectLabel}</span>
           <ChevronRight size={12} className="opacity-70 shrink-0"/>
         </button>
       </TbGroup>
@@ -128,7 +128,7 @@ export function TopBar({
       <TbGroup label="Drawing">
         <TbButton onClick={onShowNotes} icon={Type} label="Installation notes" shortLabel="Notes" title="Installation notes" />
         <TbButton onClick={onShowTitleBlock} icon={LayoutPanelTop} label="Title block" title="Title block" />
-        <TbButton onClick={onShowBoq} icon={ClipboardList} label="BOQ" title="Bill of quantities" />
+        <TbButton onClick={onShowBoq} icon={ClipboardList} label="Quote" title="Quote: materials list and client quote" />
       </TbGroup>
 
       {/* 5. View */}
@@ -165,7 +165,7 @@ function TbGroup({ first = false, label, children }) {
 function TbButton({ onClick, icon: Icon, label, shortLabel, title, iconOnly = false, flash = false, trailing = null, buttonProps = {} }) {
   return (
     <button type="button" onClick={onClick} title={title || label} aria-label={iconOnly ? title : undefined} {...buttonProps}
-      className={`h-8 shrink-0 flex items-center justify-center gap-1.5 rounded-lg text-[11px] font-semibold transition-colors ${iconOnly ? "w-8" : "px-2.5"} ${
+      className={`h-8 shrink-0 flex items-center justify-center gap-1.5 rounded-lg text-[11px] font-semibold transition-colors ${iconOnly ? "w-8" : "px-2 min-[1300px]:px-2.5"} ${
         flash ? "bg-emerald-500 text-white" : "bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)]"
       }`}>
       <Icon size={15} className="shrink-0" />
@@ -1992,13 +1992,13 @@ export function BoqTemplateEditor({ saved, savedPrefs, onSave, onClose }) {
       <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-2xl ring-1 ring-slate-200 w-full max-w-3xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
         <div className="flex items-center justify-between px-6 h-14 bg-[#2C3E50] shrink-0">
           <div>
-            <div className="text-[9px] tracking-[0.3em] uppercase text-[#9fd8e2]">BOQ Presets</div>
+            <div className="text-[9px] tracking-[0.3em] uppercase text-[#9fd8e2]">Quote presets</div>
             <div className="text-white font-semibold text-[15px] -mt-0.5" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>Default items &amp; specifications</div>
           </div>
           <button onClick={onClose} className="text-slate-300 hover:text-white"><X size={18}/></button>
         </div>
         <div className="px-6 py-2.5 bg-[#ECF8FA] border-b border-[#3FB7C9]/30 text-[11px] text-[#22808F]">
-          Edit the standard items, specs and section names used every time a new BOQ is created. Items marked <b>auto</b> still pull their quantity from the drawing.
+          Edit the standard items, specs and section names used every time a new quote is created. Items marked <b>auto</b> still pull their quantity from the drawing.
         </div>
         <div className="flex-1 overflow-y-auto px-6 py-4 text-slate-800">
           {tpl.map((sec, si) => (
@@ -2034,7 +2034,7 @@ export function BoqTemplateEditor({ saved, savedPrefs, onSave, onClose }) {
               <input type="checkbox" checked={vatOn} onChange={(e) => setVatOn(e.target.checked)} className="accent-[var(--action)]"/>
               Charge VAT (20%)
             </label>
-            <div className="text-[10px] text-slate-400">Presets apply to every new BOQ.</div>
+            <div className="text-[10px] text-slate-400">Presets apply to every new quote.</div>
           </div>
           <div className="flex gap-2">
             <button onClick={onClose} className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-md text-[10px] uppercase tracking-wider">Close</button>
@@ -2142,7 +2142,7 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
     setBoq(b => reconcileBoq(b, project, SYMBOL_META, findSymbol, { overrideTyped: true }));
   };
   const resetToTemplate = () => {
-    if (!window.confirm("Rebuild this BOQ from your saved presets and the current drawing? Quantities re-pull from the drawing and any rates you've typed will be cleared.")) return;
+    if (!window.confirm("Rebuild this quote from your saved presets and the current drawing? Quantities re-pull from the drawing and any rates you've typed will be cleared.")) return;
     setBoq(buildInitialBoq(project, SYMBOL_META, findSymbol, boqTemplate, boqPrefs));
   };
 
@@ -2230,7 +2230,7 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
         {/* Header */}
         <div className="flex items-center justify-between px-6 h-14 bg-[#2C3E50] shrink-0">
           <div>
-            <div className="text-[9px] tracking-[0.3em] uppercase text-[#9fd8e2]">Electrical Bill of Quantities</div>
+            <div className="text-[9px] tracking-[0.3em] uppercase text-[#9fd8e2]">Quote</div>
             <div className="text-white font-semibold text-[15px] -mt-0.5" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
               {boq.meta.development || meta.projectName || "Untitled Project"}
             </div>
@@ -2239,7 +2239,7 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
             {readOnly ? (
               <span className="px-2.5 py-1 rounded-md text-[10px] uppercase tracking-wider font-semibold bg-amber-100 text-amber-900">View only</span>
             ) : (
-              <button onClick={() => setShowTemplate(true)} title="Edit the default items/specs used for every BOQ"
+              <button onClick={() => setShowTemplate(true)} title="Edit the default items/specs used for every quote"
                 className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[10px] uppercase tracking-wider font-semibold bg-[#3FB7C9]/20 text-[#9fd8e2] ring-1 ring-[#3FB7C9]/50 hover:bg-[#3FB7C9]/30">
                 <SlidersHorizontal size={13}/> Presets
               </button>
@@ -2250,7 +2250,7 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
 
         {readOnly && (
           <div className="px-6 py-2 bg-amber-50 border-b border-amber-200 text-[11.5px] text-amber-900 shrink-0">
-            Your subscription has ended, so this BOQ is view-only. You can still download the materials list and client quote.
+            Your subscription has ended, so this quote is view-only. You can still download the materials list and client quote.
           </div>
         )}
 
@@ -2326,7 +2326,7 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
                       <td className="py-0.5 pr-1"><input value={it.item} onChange={(e) => setItem(si, it.id, "item", e.target.value)} className={`${cell} text-[12px] font-medium text-slate-800`} placeholder="Item"/></td>
                       <td className="py-0.5 pr-1"><input value={it.spec} onChange={(e) => setItem(si, it.id, "spec", e.target.value)} className={`${cell} text-[11px] text-slate-500`} placeholder="Spec / notes"/></td>
                       <td className="py-0.5 pr-1"><input value={it.qty} onChange={(e) => setItem(si, it.id, "qty", e.target.value)} inputMode="decimal"
-                        title={badTitle(it.qty) || (!isDrawingLinked(it) ? undefined : it.qtyManual ? "Typed quantity. Kept when the BOQ reopens; clear it to use the drawing count." : "Counted from the drawing")}
+                        title={badTitle(it.qty) || (!isDrawingLinked(it) ? undefined : it.qtyManual ? "Typed quantity. Kept when the quote reopens; clear it to use the drawing count." : "Counted from the drawing")}
                         className={`${cell} text-[12px] text-right tabular-nums ${isDrawingLinked(it) && it.qtyManual ? "italic" : ""}${badCell(it.qty)}`} placeholder="—"/></td>
                       <td className="py-0.5 pr-1">
                         <div className="flex items-center justify-end gap-0.5">
@@ -2450,7 +2450,7 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
               className="px-3 py-2 text-[10px] uppercase tracking-wider text-[#22808F] hover:bg-[#ECF8FA] rounded-md font-semibold flex items-center gap-1.5">
               <RotateCw size={12}/> Refresh from drawing
             </button>
-            <button onClick={resetToTemplate} title="Rebuild this BOQ from your saved presets"
+            <button onClick={resetToTemplate} title="Rebuild this quote from your saved presets"
               className="px-3 py-2 text-[10px] uppercase tracking-wider text-slate-400 hover:text-[#22808F] hover:bg-[#ECF8FA] rounded-md font-semibold">
               Reset to presets
             </button>
@@ -3348,8 +3348,8 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
           <span className="pp-hint">Download the PDF, then attach it to your client email.</span>
           <button onClick={onClose} className="pp-btn pp-btn-ghost">{closeLabel || "Close"}</button>
           {onShowBoq && (
-            <button onClick={onShowBoq} className="pp-btn pp-btn-ghost" title="View and download the bill of quantities">
-              <ClipboardList size={12}/> BOQ
+            <button onClick={onShowBoq} className="pp-btn pp-btn-ghost" title="View and download the quote">
+              <ClipboardList size={12}/> Quote
             </button>
           )}
           <button onClick={downloadBackup} className="pp-btn pp-btn-ghost" title="Download a re-importable backup of the whole project (.json)">Backup</button>

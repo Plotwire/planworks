@@ -2121,7 +2121,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
           DRAW={DRAW}
           onClose={readOnly ? leaveToDashboard : () => setPrintPreview(false)}
           onPrint={printSheet}
-          notice={readOnly ? "Your subscription has ended, so this drawing is view-only. You can still download and print it, and its BOQ." : null}
+          notice={readOnly ? "Your subscription has ended, so this drawing is view-only. You can still download and print it, and its quote." : null}
           onShowBoq={readOnly ? () => setShowBoq(true) : null}
           closeLabel={readOnly ? "Back to dashboard" : null}
         />

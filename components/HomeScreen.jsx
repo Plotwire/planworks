@@ -304,7 +304,7 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
                 <div>
                   <div className="eyebrow">Plotwire</div>
                   <h1>{greeting()}{displayName(user) ? `, ${displayName(user)}` : ""}</h1>
-                  <p>Pick up where you left off, or start a new layout. Everything you draw is counted into your bill of quantities automatically.</p>
+                  <p>Pick up where you left off, or start a new layout. Everything you draw is counted into your quote automatically.</p>
                 </div>
                 <div className="hero-actions">
                   <button className="btn btn-primary" onClick={onSketch}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M14 6l4 4"/></svg>Sketch a plan</button>

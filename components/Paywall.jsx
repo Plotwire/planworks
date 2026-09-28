@@ -6,7 +6,7 @@ import { PRICE_GBP_MONTHLY } from "@/lib/pricing";
 
 const FEATURES = [
   "Unlimited drawings & symbols",
-  "Automatic bill of quantities",
+  "Quotes built from your drawings",
   "Materials lists & client quotes",
   "Branded PDF export & printing",
   "All your jobs in one place",
