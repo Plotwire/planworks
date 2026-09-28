@@ -99,7 +99,7 @@ export default function Paywall({ user, onSignOut, onManageBilling, onBack, hasL
 }
 
 const CSS = `
-.pw-pay{position:fixed; inset:0; overflow:auto; font-family:'Inter',system-ui,sans-serif; color:#fff;
+.pw-pay{position:fixed; inset:0; z-index:2147482000; overflow:auto; font-family:'Inter',system-ui,sans-serif; color:#fff;
   background:linear-gradient(150deg,#1A2530 0%,#233241 55%,#2C4150 100%)}
 .pw-pay *{box-sizing:border-box; margin:0; padding:0}
 .pw-pay::before{content:""; position:fixed; inset:0; pointer-events:none;

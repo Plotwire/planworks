@@ -347,19 +347,19 @@ function AppGates({ children }) {
   if (BILLING_ENABLED) {
     if (subscription.loading) return <Splash />;
     if (activating && !subscription.isActive) return <Splash label="Activating your subscription…" />;
-    if (showSubscribe && level !== "full") {
-      return (
-        <Paywall
-          user={session?.user || null}
-          onSignOut={signOut}
-          onManageBilling={manageBilling}
-          onBack={() => setShowSubscribe(false)}
-          hasLapsed={level === "lapsed"}
-          notice={billingNotice}
-        />
-      );
-    }
   }
+  // Drawn OVER the app, not instead of it: swapping the app out would unmount
+  // an open drawing and lose unsaved work.
+  const subscribeScreen = BILLING_ENABLED && showSubscribe && level !== "full" ? (
+    <Paywall
+      user={session?.user || null}
+      onSignOut={signOut}
+      onManageBilling={manageBilling}
+      onBack={() => setShowSubscribe(false)}
+      hasLapsed={level === "lapsed"}
+      notice={billingNotice}
+    />
+  ) : null;
 
   // Waiting on the profile check -- brief, and only on a fresh sign-in.
   if (profileStep === "unknown") return <Splash />;
@@ -393,6 +393,7 @@ function AppGates({ children }) {
           onClose={() => setProfileStep("ok")}
         />
       ) : children}
+      {subscribeScreen}
     </AppCtx.Provider>
   );
 }

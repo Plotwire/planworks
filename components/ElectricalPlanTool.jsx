@@ -23,6 +23,7 @@ import {
 } from "@/components/SheetParts";
 import { useApp } from "@/components/AppShell";
 import { DEFAULT_TITLEBLOCK } from "@/lib/titleBlock";
+import { useTryUsage, useTryPrompt, TryChip, TryPrompt, TrialWatermark, LOCKED, drawingSymbolCount } from "@/components/TryMode";
 import dynamic from "next/dynamic";
 const CadSketchPanel = dynamic(() => import("@/components/cad/CadSketch"), { ssr: false });
 import { useEditor } from "@/store/editorStore";
@@ -339,7 +340,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   activeSheetIdRef.current = project.activeSheetId;
 
   // Title block: per-project, falling back to the account default for new jobs.
-  const { titleBlock: accountTitleBlock, saveTitleBlock } = useApp();
+  const { titleBlock: accountTitleBlock, saveTitleBlock, access = {} } = useApp();
   const effectiveTitleBlock = project.titleBlock || accountTitleBlock || DEFAULT_TITLEBLOCK;
 
   // Drawing-level fields live on the active sheet; everything else on the project.
@@ -493,6 +494,13 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const [showProjects, setShowProjects] = useState(false); // project manager modal
   const [projectList, setProjectList] = useState([]);   // saved projects index
   const [currentProjectId, setCurrentProjectId] = useState(null);
+  // Try mode (components/TryMode.jsx): the account-wide symbol count, and the
+  // "Subscribe to keep going" / locked-feature prompt. Callbacks that outlive a
+  // render read the latest count through the ref.
+  const tryUsage = useTryUsage({ enabled: access.isTry, limit: access.symbolLimit, currentProjectId, project });
+  const tryUsageRef = useRef(tryUsage);
+  tryUsageRef.current = tryUsage;
+  const tryPrompt = useTryPrompt();
   const [floorPlanOpen, setFloorPlanOpen] = useState(false);
   const [floorPlanArgs, setFloorPlanArgs] = useState(null);
 
@@ -942,6 +950,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       if (!place || mode !== "drag" || !findSymbol(symbolId)) return;
       const { x, y } = clientToDrawing(ev.clientX, ev.clientY);
       if (x < 0 || y < 0 || x > DRAW.w || y > DRAW.h) return; // released off the sheet → ignore
+      if (!tryUsageRef.current.canAdd(1)) { tryPrompt.show(LOCKED.limit); return; } // Try mode: at the limit
       snapshot();
       const newItem = {
         id: "p_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
@@ -970,6 +979,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     if (!symbolId || !findSymbol(symbolId)) return;
     const { x, y } = clientToDrawing(e.clientX, e.clientY);
     if (x < 0 || y < 0 || x > DRAW.w || y > DRAW.h) return;
+    if (!tryUsageRef.current.canAdd(1)) { tryPrompt.show(LOCKED.limit); return; } // Try mode: at the limit
     snapshot();
     const newItem = {
       id: "p_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
@@ -1444,7 +1454,11 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       else if ((e.metaKey || e.ctrlKey) && e.key === "z") { e.preventDefault(); undo(); }
       else if ((e.metaKey || e.ctrlKey) && (e.key === "y" || (e.shiftKey && e.key === "Z"))) { e.preventDefault(); redo(); }
       else if ((e.metaKey || e.ctrlKey) && e.key === "s") { e.preventDefault(); saveProject(); }
-      else if ((e.metaKey || e.ctrlKey) && e.key === "p") { e.preventDefault(); setPrintPreview(true); }
+      else if ((e.metaKey || e.ctrlKey) && e.key === "p") {
+        e.preventDefault();
+        if (tryUsageRef.current.enabled) tryPrompt.show(LOCKED.export); // Try mode: printing is locked
+        else setPrintPreview(true);
+      }
       else if (e.key === "v" || e.key === "V") setTool("select");
       else if (e.key === "w" || e.key === "W") setTool("wire");
       else if (e.key === "h" || e.key === "H") setTool("pan");
@@ -1529,6 +1543,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
 
   const confirmSaved = () => {
     refreshProjectList(); // not awaited: the list isn't part of the save
+    tryUsageRef.current.refresh(); // Try mode: the saved totals just changed
     setSavedFlash(true);
     setTimeout(() => setSavedFlash(false), 1500);
   };
@@ -1536,6 +1551,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   // Quick-save: writes to the currently open project, or creates one if new.
   const saveProject = () => enqueueSave(projectRef.current, async ({ p, id, stillLoaded }) => {
     const name = p.meta?.projectName || "Untitled drawing";
+    // Try mode: the database would refuse a save over the limit; say so first.
+    if (tryUsageRef.current.blocksSave(id || null)) { tryPrompt.show(LOCKED.limit); return false; }
     if (!id) return insertAsNewProject(p, name, { stillLoaded, rename: false });
     try {
       const safe = await readyToSave(p);
@@ -1574,8 +1591,11 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   };
 
   // Save As: store the current canvas as a new named project (new cloud row)
-  const saveProjectAs = (name) => enqueueSave(projectRef.current, ({ p, stillLoaded }) =>
-    insertAsNewProject(p, name || p.meta?.projectName || "Untitled drawing", { stillLoaded, rename: true }));
+  // Try mode: a copy keeps the original, so its symbols count twice.
+  const saveProjectAs = (name) => enqueueSave(projectRef.current, ({ p, stillLoaded }) => {
+    if (tryUsageRef.current.blocksSave(null)) { tryPrompt.show(LOCKED.limit); return false; }
+    return insertAsNewProject(p, name || p.meta?.projectName || "Untitled drawing", { stillLoaded, rename: true });
+  });
 
   // Insert `p` as a new project row named `name`. Used by Save As (rename:
   // true -- the editor takes the new name) and by the first Save of a new
@@ -1742,6 +1762,17 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   };
   const dismissDraft = () => setRecovery(null);
 
+  // Try mode's Subscribe: save the drawing first (when the save is allowed) so
+  // nothing is lost going through checkout, then open the Subscribe screen.
+  const subscribeFromEditor = async () => {
+    tryPrompt.hide();
+    const hasWork = currentProjectIdRef.current || drawingSymbolCount(projectRef.current) > 0;
+    if (hasWork && !tryUsageRef.current.blocksSave(currentProjectIdRef.current || null)) {
+      try { await saveProject(); } catch { /* the local draft still holds it */ }
+    }
+    access.openSubscribe?.();
+  };
+
   const exportJSON = () => {
     const data = JSON.stringify(project, null, 2);
     const blob = new Blob([data], { type: "application/json" });
@@ -1817,8 +1848,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         onUndo={undo} onRedo={redo}
         onSave={saveProject} savedFlash={savedFlash}
         onShowProjects={() => { refreshProjectList(); setShowProjects(true); }}
-        onExportJSON={exportJSON}
-        onPrint={() => setPrintPreview(true)}
+        onExportJSON={access.isTry ? () => tryPrompt.show(LOCKED.saveFile) : exportJSON}
+        onPrint={access.isTry ? () => tryPrompt.show(LOCKED.export) : () => setPrintPreview(true)}
         colourMode={colourMode}
         onToggleColour={() => setProject(p => ({ ...p, colourMode: ({ navy: "colour", colour: "red", red: "mono", mono: "navy" })[p.colourMode || "colour"] }))}
         onNormalise={normaliseSizes}
@@ -2134,6 +2165,12 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         </div>
       )}
     </div>
+      {/* Try mode: watermark over the drawing and BOQ, the symbol count, and
+          the Subscribe prompt (components/TryMode.jsx). */}
+      {access.isTry && <TrialWatermark />}
+      {access.isTry && <TryChip used={tryUsage.used} limit={tryUsage.limit} onSubscribe={subscribeFromEditor} />}
+      <TryPrompt open={Boolean(tryPrompt.prompt)} title={tryPrompt.prompt?.title} body={tryPrompt.prompt?.body}
+        onSubscribe={subscribeFromEditor} onClose={tryPrompt.hide} />
     </ProjectTitleBlockContext.Provider>
   );
 }
