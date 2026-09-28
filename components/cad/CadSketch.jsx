@@ -982,19 +982,19 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
 }
 
 const CSS = `
-.cadv{position:absolute; inset:0; display:flex; flex-direction:column; background:#fff; font-family:'Inter',system-ui,sans-serif; overflow:hidden}
+.cadv{position:absolute; inset:0; display:flex; flex-direction:column; background:#fff; font-family:var(--font-inter),system-ui,sans-serif; overflow:hidden}
 .cadv *{box-sizing:border-box}
 .cadv__top{position:relative; display:flex; align-items:center; gap:10px; padding:0 14px; height:56px; border-bottom:1px solid rgba(44,62,80,.1); flex:0 0 auto; background:#fff}
 .cadv__back{width:36px; height:36px; border:1px solid rgba(44,62,80,.12); background:#fff; border-radius:9px; font-size:20px; line-height:1; color:#3E4C59; cursor:pointer}
 .cadv__back:hover{background:#F4F6F9}
-.cadv__title .name{font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:15px; color:#18222D}
-.cadv__title .sub{font-family:'JetBrains Mono',monospace; font-size:11px; color:#6E7B88}
+.cadv__title .name{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:15px; color:#18222D}
+.cadv__title .sub{font-family:var(--font-jetbrains-mono),monospace; font-size:11px; color:#6E7B88}
 .cadv__body{flex:1; display:flex; min-height:0}
 .cadv__rail{flex:0 0 60px; width:60px; background:#F4F6F9; border-right:1px solid rgba(44,62,80,.1); display:flex; flex-direction:column; align-items:center; gap:4px; padding:10px 0}
 .cadv__tool{position:relative; width:42px; height:42px; border:1px solid transparent; border-radius:10px; background:transparent; color:#2C97A8; display:flex; align-items:center; justify-content:center; cursor:pointer; transition:background .14s,color .14s,border-color .14s}
 .cadv__tool:hover{background:#fff; color:#1C6F7C; border-color:rgba(44,62,80,.12)}
 .cadv__tool.on{background:#2C3E50; color:#3FB7C9; border-color:#2C3E50}
-.cadv__tool .key{position:absolute; right:4px; bottom:2px; font-family:'JetBrains Mono',monospace; font-size:8.5px; opacity:.55}
+.cadv__tool .key{position:absolute; right:4px; bottom:2px; font-family:var(--font-jetbrains-mono),monospace; font-size:8.5px; opacity:.55}
 .cadv__workspace{flex:1; position:relative; min-width:0; overflow:hidden; background:#FFFFFF}
 .cadv__svg{position:absolute; inset:0; width:100%; height:100%; display:block; touch-action:none}
 .cadv-ink{stroke:#16212B}
@@ -1008,31 +1008,31 @@ const CSS = `
 .cadv-dim{stroke:#2C3E50}
 .cadv-dim-crit{stroke:#C4564B}
 .cadv-boundary{stroke:#38B24A}
-.cadv-dim-txt{font-family:'JetBrains Mono',monospace; fill:#2C3E50}
+.cadv-dim-txt{font-family:var(--font-jetbrains-mono),monospace; fill:#2C3E50}
 .cadv-dim-txt.crit{fill:#C4564B}
-.cadv-room{font-family:'JetBrains Mono',monospace; fill:#2C3E50}
+.cadv-room{font-family:var(--font-jetbrains-mono),monospace; fill:#2C3E50}
 .cadv-room .nm{font-weight:600; letter-spacing:.08em}
 .cadv-room .ar{fill:#6E7B88}
-.cadv-tag-txt{font-family:'JetBrains Mono',monospace; fill:#16212B}
-.cadv-note{font-family:'JetBrains Mono',monospace; fill:#54616E}
-.cadv__hud{position:absolute; z-index:8; pointer-events:none; background:#1A2733; color:#EAF1F6; font-family:'JetBrains Mono',monospace; font-size:11.5px; padding:4px 8px; border-radius:6px; white-space:nowrap; transform:translate(14px,14px)}
+.cadv-tag-txt{font-family:var(--font-jetbrains-mono),monospace; fill:#16212B}
+.cadv-note{font-family:var(--font-jetbrains-mono),monospace; fill:#54616E}
+.cadv__hud{position:absolute; z-index:8; pointer-events:none; background:#1A2733; color:#EAF1F6; font-family:var(--font-jetbrains-mono),monospace; font-size:11.5px; padding:4px 8px; border-radius:6px; white-space:nowrap; transform:translate(14px,14px)}
 .cadv__hud b{color:#3FB7C9; font-weight:600}
 .cadv__zoom{position:absolute; right:16px; bottom:16px; display:flex; flex-direction:column; background:#fff; border:1px solid rgba(44,62,80,.1); border-radius:12px; overflow:hidden; box-shadow:0 6px 16px rgba(20,33,46,.09)}
 .cadv__zoom button{width:38px; height:38px; border:0; background:#fff; color:#3E4C59; font-size:17px; cursor:pointer}
 .cadv__zoom button:hover{background:#F4F6F9; color:#18222D}
 .cadv__zoom button+button{border-top:1px solid rgba(44,62,80,.1)}
-.cadv__chip{position:absolute; left:16px; bottom:16px; display:flex; align-items:center; gap:12px; background:rgba(255,255,255,.92); border:1px solid rgba(44,62,80,.1); border-radius:10px; padding:8px 12px; font-family:'JetBrains Mono',monospace; font-size:11px; color:#54616E}
+.cadv__chip{position:absolute; left:16px; bottom:16px; display:flex; align-items:center; gap:12px; background:rgba(255,255,255,.92); border:1px solid rgba(44,62,80,.1); border-radius:10px; padding:8px 12px; font-family:var(--font-jetbrains-mono),monospace; font-size:11px; color:#54616E}
 .cadv__chip .north{color:#3E4C59; font-weight:600}
 .cadv__chip .bar{display:inline-flex; height:6px; border:1px solid #6E7B88}
 .cadv__chip .bar i{width:20px; height:100%; background:#3E4C59}
 .cadv__chip .bar i.alt{background:#fff}
 .cadv__inspector{flex:0 0 278px; width:278px; background:#fff; border-left:1px solid rgba(44,62,80,.1); overflow-y:auto}
-.cadv__sect{padding:14px 16px 4px; font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:#8C97A3}
+.cadv__sect{padding:14px 16px 4px; font-family:var(--font-jetbrains-mono),monospace; font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:#8C97A3}
 .cadv__sect.first{padding-top:16px}
 .cadv-prop{display:flex; align-items:center; justify-content:space-between; gap:10px; padding:7px 16px}
 .cadv-prop .k{font-size:12.5px; color:#54616E}
 .cadv-prop .v{font-size:12.5px; color:#18222D; font-weight:540}
-.cadv-prop .v.mono{font-family:'JetBrains Mono',monospace}
+.cadv-prop .v.mono{font-family:var(--font-jetbrains-mono),monospace}
 .cadv-seg{display:flex; gap:4px; padding:4px 16px 8px}
 .cadv-seg button{flex:1; height:34px; border:1px solid rgba(44,62,80,.12); border-radius:9px; background:#fff; font:inherit; font-size:11.5px; font-weight:540; color:#54616E; cursor:pointer; transition:all .14s}
 .cadv-seg button:hover{border-color:rgba(44,62,80,.22); color:#18222D}
@@ -1043,7 +1043,7 @@ const CSS = `
 .cadv-btn.danger{color:#C4564B; border-color:rgba(196,86,75,.3)}
 .cadv-btn.danger:hover{background:rgba(196,86,75,.08)}
 .cadv-hint{margin:8px 16px 14px; padding:11px 12px; border-radius:10px; background:rgba(63,183,201,.12); border:1px solid rgba(63,183,201,.2); font-size:12px; line-height:1.45; color:#1C6F7C}
-.cadv__status{flex:0 0 auto; height:34px; display:flex; align-items:center; padding:0 6px; border-top:1px solid rgba(44,62,80,.1); background:#F4F6F9; font-family:'JetBrains Mono',monospace; font-size:11px; color:#6E7B88}
+.cadv__status{flex:0 0 auto; height:34px; display:flex; align-items:center; padding:0 6px; border-top:1px solid rgba(44,62,80,.1); background:#F4F6F9; font-family:var(--font-jetbrains-mono),monospace; font-size:11px; color:#6E7B88}
 .cadv__status .cell{padding:0 12px; display:flex; align-items:center; gap:7px; height:100%}
 .cadv__status .cell+.cell{border-left:1px solid rgba(44,62,80,.1)}
 .cadv__status .cmd{color:#3E4C59}
@@ -1057,10 +1057,10 @@ const CSS = `
 .cadv-layer .dot{width:9px; height:9px; border-radius:3px; border:1.5px solid #B5BEC7; background:transparent; flex:0 0 auto}
 .cadv-layer.on{color:#283643}
 .cadv-layer.on .dot{background:#3FB7C9; border-color:#3FB7C9}
-.cadv__name{flex:0 1 260px; min-width:120px; height:34px; border:1px solid transparent; border-radius:8px; padding:0 10px; font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:15px; color:#18222D; background:transparent}
+.cadv__name{flex:0 1 260px; min-width:120px; height:34px; border:1px solid transparent; border-radius:8px; padding:0 10px; font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:15px; color:#18222D; background:transparent}
 .cadv__name:hover{border-color:rgba(44,62,80,.12); background:#F8FAFB}
 .cadv__name:focus{outline:none; border-color:#3FB7C9; background:#fff}
-.cadv__save{font-family:'JetBrains Mono',monospace; font-size:10.5px; letter-spacing:.04em; color:#8C97A3; white-space:nowrap}
+.cadv__save{font-family:var(--font-jetbrains-mono),monospace; font-size:10.5px; letter-spacing:.04em; color:#8C97A3; white-space:nowrap}
 .cadv__save--saved{color:#1C6F7C}
 .cadv__save--saving{color:#3E4C59}
 .cadv__save--unsaved{color:#B06A1E}
@@ -1073,12 +1073,12 @@ const CSS = `
 .cadv__acts button.primary:hover{background:#22303d}
 .cadv__acts button:disabled{opacity:.5; cursor:default}
 .cadv__open{position:absolute; top:54px; right:14px; width:300px; max-height:340px; overflow-y:auto; background:#fff; border:1px solid rgba(44,62,80,.14); border-radius:12px; box-shadow:0 12px 30px rgba(20,33,46,.16); z-index:20; padding:6px}
-.cadv__open-head{padding:8px 10px 6px; font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:#8C97A3}
+.cadv__open-head{padding:8px 10px 6px; font-family:var(--font-jetbrains-mono),monospace; font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:#8C97A3}
 .cadv__open-empty{padding:10px; font-size:12.5px; color:#6E7B88}
 .cadv__open-row{display:flex; align-items:center; gap:8px; width:100%; text-align:left; padding:8px 10px; border:0; border-radius:8px; background:transparent; font:inherit; cursor:pointer}
 .cadv__open-row:hover{background:#F4F6F9}
 .cadv__open-row .nm{flex:1; font-size:13px; color:#18222D; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
-.cadv__open-row .dt{font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#8C97A3}
+.cadv__open-row .dt{font-family:var(--font-jetbrains-mono),monospace; font-size:10.5px; color:#8C97A3}
 .cadv__open-row .del{width:20px; height:20px; display:flex; align-items:center; justify-content:center; border-radius:6px; color:#A6AEB6; font-size:15px}
 .cadv__open-row .del:hover{background:rgba(196,86,75,.12); color:#C4564B}
 .cadv__acts button.accent{background:#2C97A8; border-color:#2C97A8; color:#fff}
@@ -1086,7 +1086,7 @@ const CSS = `
 .cadv__acts button.accent:disabled{opacity:.5; cursor:default}
 .cadv__modal-bg{position:fixed; inset:0; background:rgba(16,24,32,.5); display:flex; align-items:center; justify-content:center; z-index:50}
 .cadv__modal{width:420px; max-width:92vw; background:#fff; border-radius:16px; padding:22px; box-shadow:0 24px 60px rgba(16,24,32,.3)}
-.cadv__modal .h{font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:18px; color:#18222D; margin-bottom:8px}
+.cadv__modal .h{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:18px; color:#18222D; margin-bottom:8px}
 .cadv__modal p{font-size:13.5px; line-height:1.5; color:#54616E; margin:0 0 16px}
 .cadv__modal .m-btn{display:flex; flex-direction:column; align-items:flex-start; width:100%; text-align:left; padding:12px 14px; margin-bottom:10px; border:1px solid rgba(44,62,80,.16); border-radius:11px; background:#fff; font:inherit; font-size:14px; font-weight:600; color:#18222D; cursor:pointer}
 .cadv__modal .m-btn small{font-weight:400; font-size:12px; color:#8C97A3; margin-top:3px}

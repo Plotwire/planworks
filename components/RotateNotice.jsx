@@ -41,7 +41,7 @@ const CSS = `
 .pw-rotate{display:none}
 @media (hover: none) and (pointer: coarse) and (orientation: portrait) and (min-width: 600px){
   .pw-rotate{position:fixed; inset:0; z-index:2147483000; display:flex; align-items:center; justify-content:center;
-    padding:32px; background:#1A2530; color:#FFFFFF; font-family:'Inter',system-ui,sans-serif; touch-action:none}
+    padding:32px; background:#1A2530; color:#FFFFFF; font-family:var(--font-inter),system-ui,sans-serif; touch-action:none}
 }
 .pw-rotate-inner{max-width:340px; text-align:center}
 .pw-rotate-icon{width:88px; height:88px; margin:0 auto 22px; display:block}

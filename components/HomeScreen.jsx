@@ -485,7 +485,7 @@ const CSS = `
   --ink:#0E141B; --navy:#1A2530; --navy-2:#22303D; --navy-line:#314250;
   --brand:#2C3E50; --teal:#3FB7C9; --teal-600:#2C97A8; --teal-700:#22808F;
   --paper:#F4F6F9; --surface:#FFFFFF; --line:#E6EBF1; --line-2:#EEF2F6;
-  --ink-2:#3A4654; --muted:#697785; --muted-2:#9AA6B2; --blueprint:rgba(63,183,201,.14);  font-family:'Inter',system-ui,sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased;}
+  --ink-2:#3A4654; --muted:#697785; --muted-2:#9AA6B2; --blueprint:rgba(63,183,201,.14);  font-family:var(--font-inter),system-ui,sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased;}
 .pw-home *{box-sizing:border-box; margin:0; padding:0}
 .pw-home .pw-app{display:flex; height:100%; width:100%; background:var(--paper)}
 .pw-home .rail{width:74px; flex-shrink:0; background:var(--navy); display:flex; flex-direction:column; align-items:center; padding:18px 0; gap:6px; position:relative}
@@ -498,10 +498,10 @@ const CSS = `
 .pw-home .navitem.active{color:#fff; background:rgba(63,183,201,.16)}
 .pw-home .navitem.active::before{content:""; position:absolute; left:-18px; top:11px; bottom:11px; width:3px; border-radius:0 3px 3px 0; background:var(--teal)}
 .pw-home .rail-spacer{flex:1}
-.pw-home .rail-avatar{width:40px; height:40px; border-radius:50%; background:var(--navy-2); border:1.5px solid var(--navy-line); color:#cdd6e0; display:grid; place-items:center; font-weight:600; font-size:13px; cursor:pointer; font-family:'Space Grotesk',sans-serif; margin-top:6px}
+.pw-home .rail-avatar{width:40px; height:40px; border-radius:50%; background:var(--navy-2); border:1.5px solid var(--navy-line); color:#cdd6e0; display:grid; place-items:center; font-weight:600; font-size:13px; cursor:pointer; font-family:var(--font-space-grotesk),sans-serif; margin-top:6px}
 .pw-home .main{flex:1; display:flex; flex-direction:column; min-width:0}
 .pw-home .topbar{height:62px; flex-shrink:0; background:rgba(255,255,255,.85); backdrop-filter:saturate(1.4) blur(10px); border-bottom:1px solid var(--line); display:flex; align-items:center; gap:18px; padding:0 30px}
-.pw-home .wordmark{font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:17px; letter-spacing:-.01em}
+.pw-home .wordmark{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:17px; letter-spacing:-.01em}
 .pw-home .wordmark b{color:var(--teal-600)}
 .pw-home .search{margin-left:8px; flex:1; max-width:380px; height:38px; border-radius:10px; background:var(--paper); border:1px solid var(--line); display:flex; align-items:center; gap:9px; padding:0 13px; color:var(--muted); font-size:13.5px}
 .pw-home .search svg{width:16px; height:16px; flex-shrink:0}
@@ -513,12 +513,12 @@ const CSS = `
 .pw-home .account:hover{background:var(--paper)}
 .pw-home .account .nm{font-size:13px; font-weight:500; line-height:1.15}
 .pw-home .account .sub{font-size:11px; color:var(--muted)}
-.pw-home .account .pic{width:32px; height:32px; border-radius:50%; background:var(--brand); color:#fff; display:grid; place-items:center; font-weight:600; font-size:12px; font-family:'Space Grotesk',sans-serif}
-.pw-home .trial-chip{font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:#08313a; background:#3FB7C9; padding:4px 8px; border-radius:999px; font-weight:600; white-space:nowrap}
+.pw-home .account .pic{width:32px; height:32px; border-radius:50%; background:var(--brand); color:#fff; display:grid; place-items:center; font-weight:600; font-size:12px; font-family:var(--font-space-grotesk),sans-serif}
+.pw-home .trial-chip{font-family:var(--font-jetbrains-mono),monospace; font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:#08313a; background:#3FB7C9; padding:4px 8px; border-radius:999px; font-weight:600; white-space:nowrap}
 .pw-home .theme-toggle{width:38px; height:38px; border-radius:10px; border:none; background:var(--action); color:var(--action-ink); display:grid; place-items:center; cursor:pointer; transition:background .16s}
 .pw-home .theme-toggle:hover{background:var(--action-hover)}
 .pw-home .theme-toggle svg{width:18px; height:18px}
-.pw-home .cancel-chip{font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:#7A3E00; background:#FFE3C2; padding:4px 8px; border-radius:999px; font-weight:600; white-space:nowrap}
+.pw-home .cancel-chip{font-family:var(--font-jetbrains-mono),monospace; font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:#7A3E00; background:#FFE3C2; padding:4px 8px; border-radius:999px; font-weight:600; white-space:nowrap}
 .pw-home .billing-btn{height:38px; padding:0 14px 0 12px; border-radius:10px; border:none; background:var(--action); color:var(--action-ink); display:flex; align-items:center; gap:8px; font-weight:600; font-size:13px; cursor:pointer; white-space:nowrap; transition:background .16s}
 .pw-home .billing-btn:hover{background:var(--action-hover)}
 .pw-home .billing-btn svg{width:18px; height:18px; flex-shrink:0}
@@ -565,21 +565,21 @@ html.dark .pw-home .access-banner.is-lapsed{background:#2a2114; border-color:#6b
 .pw-home .hero::before{content:""; position:absolute; inset:0; background-image:linear-gradient(var(--blueprint) 1px,transparent 1px),linear-gradient(90deg,var(--blueprint) 1px,transparent 1px); background-size:26px 26px; -webkit-mask-image:linear-gradient(105deg,transparent 40%,#000 100%); mask-image:linear-gradient(105deg,transparent 40%,#000 100%)}
 .pw-home .hero-glow{position:absolute; right:-80px; top:-90px; width:340px; height:340px; border-radius:50%; background:radial-gradient(circle,rgba(63,183,201,.32),transparent 68%)}
 .pw-home .hero-inner{position:relative; display:flex; align-items:flex-end; justify-content:space-between; gap:24px; flex-wrap:wrap}
-.pw-home .eyebrow{font-family:'JetBrains Mono',monospace; font-size:11.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--teal); margin-bottom:12px}
-.pw-home .hero h1{font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:30px; letter-spacing:-.02em; line-height:1.08; margin-bottom:9px}
+.pw-home .eyebrow{font-family:var(--font-jetbrains-mono),monospace; font-size:11.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--teal); margin-bottom:12px}
+.pw-home .hero h1{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:30px; letter-spacing:-.02em; line-height:1.08; margin-bottom:9px}
 .pw-home .hero p{color:#aab8c6; font-size:14.5px; max-width:430px; line-height:1.55}
 .pw-home .hero-actions{display:flex; gap:11px}
-.pw-home .btn{height:46px; border-radius:12px; padding:0 20px; font-size:14px; font-weight:500; font-family:'Inter',sans-serif; display:inline-flex; align-items:center; gap:9px; cursor:pointer; border:none; transition:all .17s ease; white-space:nowrap}
+.pw-home .btn{height:46px; border-radius:12px; padding:0 20px; font-size:14px; font-weight:500; font-family:var(--font-inter),sans-serif; display:inline-flex; align-items:center; gap:9px; cursor:pointer; border:none; transition:all .17s ease; white-space:nowrap}
 .pw-home .btn svg{width:18px; height:18px}
 .pw-home .btn-primary{background:var(--action); color:var(--action-ink); font-weight:600}
 .pw-home .btn-primary:hover{background:var(--action-hover); transform:translateY(-1px); box-shadow:0 8px 22px -6px color-mix(in srgb, var(--action) 60%, transparent)}
 .pw-home .btn-ghost{background:rgba(255,255,255,.08); color:#e7eef4; border:1px solid rgba(255,255,255,.14)}
 .pw-home .btn-ghost:hover{background:rgba(255,255,255,.14)}
 .pw-home .stats{position:relative; display:flex; gap:34px; margin-top:26px; padding-top:22px; border-top:1px solid rgba(255,255,255,.1)}
-.pw-home .stat .n{font-family:'Space Grotesk',sans-serif; font-size:23px; font-weight:600}
+.pw-home .stat .n{font-family:var(--font-space-grotesk),sans-serif; font-size:23px; font-weight:600}
 .pw-home .stat .l{font-size:11.5px; color:#93a2b1; margin-top:2px}
 .pw-home .sec-head{display:flex; align-items:center; justify-content:space-between; margin:0 2px 16px}
-.pw-home .sec-head h2{font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:17px; letter-spacing:-.01em}
+.pw-home .sec-head h2{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:17px; letter-spacing:-.01em}
 .pw-home .muted-count{font-size:13px; color:var(--muted)}
 .pw-home .templates{display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:14px; margin-bottom:38px}
 .pw-home .tpl{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:16px; cursor:pointer; transition:all .18s ease; display:flex; align-items:center; gap:13px}
@@ -602,7 +602,7 @@ html.dark .pw-home .access-banner.is-lapsed{background:#2a2114; border-color:#6b
 .pw-home .thumb{height:152px; position:relative; background:#F8FAFB; border-bottom:1px solid var(--line-2); overflow:hidden}
 .pw-home .thumb::before{content:""; position:absolute; inset:0; background-image:linear-gradient(rgba(44,62,80,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(44,62,80,.05) 1px,transparent 1px); background-size:16px 16px}
 .pw-home .thumb svg{position:absolute; inset:0; width:100%; height:100%}
-.pw-home .badge{position:absolute; top:11px; left:11px; z-index:2; font-family:'JetBrains Mono',monospace; font-size:10.5px; font-weight:500; padding:3px 8px; border-radius:6px; background:rgba(26,37,48,.85); color:#cfeef3; letter-spacing:.02em}
+.pw-home .badge{position:absolute; top:11px; left:11px; z-index:2; font-family:var(--font-jetbrains-mono),monospace; font-size:10.5px; font-weight:500; padding:3px 8px; border-radius:6px; background:rgba(26,37,48,.85); color:#cfeef3; letter-spacing:.02em}
 /* Delete control: tucked into the thumb's bottom-right, away from the badges.
    Hidden until the card is hovered or the button is focused, so it can't be hit
    by accident; on touch (no hover) it stays faintly visible instead. */
@@ -621,7 +621,7 @@ html.dark .pw-home .access-banner.is-lapsed{background:#2a2114; border-color:#6b
 /* Delete confirmation dialog */
 .pw-modal-back{position:fixed; inset:0; z-index:60; background:rgba(11,17,23,.55); display:grid; place-items:center; padding:20px}
 .pw-modal{width:100%; max-width:420px; background:var(--surface); color:var(--ink); border:1px solid var(--line); border-radius:16px; padding:22px; box-shadow:0 24px 60px -12px rgba(11,17,23,.45)}
-.pw-modal-title{font-family:'Space Grotesk',system-ui,sans-serif; font-size:17px; font-weight:600; line-height:1.3; margin-bottom:8px; word-break:break-word}
+.pw-modal-title{font-family:var(--font-space-grotesk),system-ui,sans-serif; font-size:17px; font-weight:600; line-height:1.3; margin-bottom:8px; word-break:break-word}
 .pw-modal-warn{font-size:13px; line-height:1.5; color:var(--muted); margin-bottom:16px}
 .pw-modal-warn b{color:#c0392b; font-weight:600}
 .pw-modal-label{display:block; font-size:12px; font-weight:500; color:var(--ink-2); margin-bottom:6px}
@@ -646,7 +646,7 @@ html.dark .pw-home .access-banner.is-lapsed{background:#2a2114; border-color:#6b
 .pw-home .card-foot{margin-top:13px; padding-top:12px; border-top:1px solid var(--line-2); transition:border-color .2s cubic-bezier(.2,.7,.3,1); display:flex; align-items:center; justify-content:space-between}
 .pw-home .card-foot .dt{font-size:11.5px; color:var(--muted-2); transition:color .2s cubic-bezier(.2,.7,.3,1); display:flex; align-items:center; gap:5px}
 .pw-home .card-foot .dt svg{width:13px; height:13px}
-.pw-home .card-foot .ct{font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--ink-2); background:var(--paper); padding:3px 7px; border-radius:6px; transition:color .2s cubic-bezier(.2,.7,.3,1), background .2s cubic-bezier(.2,.7,.3,1)}
+.pw-home .card-foot .ct{font-family:var(--font-jetbrains-mono),monospace; font-size:11px; color:var(--ink-2); background:var(--paper); padding:3px 7px; border-radius:6px; transition:color .2s cubic-bezier(.2,.7,.3,1), background .2s cubic-bezier(.2,.7,.3,1)}
 
 /* Hover: the info strip turns Plotwire teal, and everything in it is lifted to
    white / near-white so the name, date and item count stay readable. Resting

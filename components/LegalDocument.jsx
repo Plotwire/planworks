@@ -49,19 +49,19 @@ export default function LegalDocument({ doc }) {
 }
 
 const CSS = `
-.legal-root{min-height:100vh; background:#F4F6F9; color:#1A2530; font-family:'Inter',system-ui,sans-serif}
+.legal-root{min-height:100vh; background:#F4F6F9; color:#1A2530; font-family:var(--font-inter),system-ui,sans-serif}
 .legal-top{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; padding:16px 24px; background:#fff; border-bottom:1px solid #E6EBF1}
-.legal-brand{display:flex; align-items:center; gap:10px; text-decoration:none; color:#1A2530; font-family:'Space Grotesk',sans-serif; font-size:19px; font-weight:500}
+.legal-brand{display:flex; align-items:center; gap:10px; text-decoration:none; color:#1A2530; font-family:var(--font-space-grotesk),sans-serif; font-size:19px; font-weight:500}
 .legal-brand b{color:#2C97A8; font-weight:700}
 .legal-nav{display:flex; gap:18px; flex-wrap:wrap}
 .legal-nav a{color:#3A4654; text-decoration:none; font-size:13.5px}
 .legal-nav a:hover{color:#22808F; text-decoration:underline}
 .legal-nav a[aria-current="page"]{color:#22808F; font-weight:600}
 .legal-main{max-width:760px; margin:0 auto; padding:40px 24px 72px}
-.legal-main h1{font-family:'Space Grotesk',sans-serif; font-size:30px; font-weight:600; letter-spacing:-.02em}
+.legal-main h1{font-family:var(--font-space-grotesk),sans-serif; font-size:30px; font-weight:600; letter-spacing:-.02em}
 .legal-version{margin-top:6px; color:#697785; font-size:13px}
 .legal-body{margin-top:28px; font-size:15px; line-height:1.7; color:#26313D}
-.legal-body h2{font-family:'Space Grotesk',sans-serif; font-size:19px; font-weight:600; margin:30px 0 8px; color:#1A2530}
+.legal-body h2{font-family:var(--font-space-grotesk),sans-serif; font-size:19px; font-weight:600; margin:30px 0 8px; color:#1A2530}
 .legal-body h3{font-size:16px; font-weight:600; margin:22px 0 6px}
 .legal-body p{margin:0 0 12px}
 .legal-body ul,.legal-body ol{margin:0 0 12px 22px}

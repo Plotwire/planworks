@@ -1845,7 +1845,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   return (
     <ProjectTitleBlockContext.Provider value={effectiveTitleBlock}>
     <div className="w-full h-screen flex flex-col bg-slate-100 text-slate-900 dark:bg-[#0E141B] dark:text-slate-100 overflow-hidden select-none"
-         style={{ height: "100dvh", fontFamily: "'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif" }}>
+         style={{ height: "100dvh", fontFamily: "var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif" }}>
 
       {/* ==================== TOP BAR ==================== */}
       <TopBar
@@ -2063,16 +2063,16 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
             {/* min-w-0 + overflow-hidden: on a narrow screen a long tool hint is
                 clipped here rather than squashing the sheet info on the right. */}
             <div className="flex items-center gap-5 min-w-0 overflow-hidden whitespace-nowrap">
-              <span>SYMBOLS <span className="text-[#22808F] ml-1" style={{ fontFamily: "'JetBrains Mono', monospace" }}>{placed.length}</span></span>
-              <span>WIRES <span className="text-[#22808F] ml-1" style={{ fontFamily: "'JetBrains Mono', monospace" }}>{wires.length}</span></span>
-              <span>NOTES <span className="text-[#22808F] ml-1" style={{ fontFamily: "'JetBrains Mono', monospace" }}>{annotations.length}</span></span>
+              <span>SYMBOLS <span className="text-[#22808F] ml-1" style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>{placed.length}</span></span>
+              <span>WIRES <span className="text-[#22808F] ml-1" style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>{wires.length}</span></span>
+              <span>NOTES <span className="text-[#22808F] ml-1" style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>{annotations.length}</span></span>
               <span>TOOL <span className="text-[#22808F] ml-1">{tool.toUpperCase()}</span></span>
               {tool === "wire" && wireStart && <span className="text-[#22808F] animate-pulse">→ click target</span>}
               {tool === "note" && <span className="text-[#22808F]">click drawing area to add</span>}
               {tool === "wall" && <span className="text-[#22808F]">{wallDraft ? "click to set the end point" : "click to start a wall"}</span>}
               {spacePressed && <span className="text-[#22808F]">PAN</span>}
             </div>
-            <div className="text-slate-400 shrink-0 whitespace-nowrap" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+            <div className="text-slate-400 shrink-0 whitespace-nowrap" style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>
               SHEET A3 · {meta.scale}
             </div>
           </div>

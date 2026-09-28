@@ -28,9 +28,9 @@ function statusStyle(k, dark) {
   return (dark ? D : L)[k] || (dark ? D.booked : L.booked);
 }
 
-const FONTS = "'Barlow', system-ui, sans-serif";
-const COND = "'Barlow Condensed', 'Barlow', sans-serif";
-const SEMI = "'Barlow Semi Condensed', 'Barlow', sans-serif";
+const FONTS = "var(--font-barlow), system-ui, sans-serif";
+const COND = "var(--font-barlow-condensed), var(--font-barlow), sans-serif";
+const SEMI = "var(--font-barlow-semi-condensed), var(--font-barlow), sans-serif";
 
 function palette(dark) {
   return dark
@@ -304,7 +304,6 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
   return (
     <div className="wp-page" style={{ minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", gap: 14, fontFamily: FONTS, background: P.page }}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Condensed:wght@500;600;700&family=Barlow+Semi+Condensed:wght@600;700&display=swap');
         .wp-page{padding:32px 30px 44px}
         .wp-cname{width:186px;flex:none}
         .wp-row{min-width:940px}

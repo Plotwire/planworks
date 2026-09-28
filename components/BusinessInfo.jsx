@@ -299,7 +299,7 @@ const CSS = `
   --teal:#3FB7C9; --teal-600:#2C97A8; --teal-700:#22808F; --navy:#1A2530;
   --paper:#F4F6F9; --surface:#FFFFFF; --line:#E6EBF1; --ink:#0E141B; --ink-2:#3A4654; --muted:#697785;
   background:var(--paper); color:var(--ink);
-  font-family:'Inter',system-ui,sans-serif; -webkit-font-smoothing:antialiased}
+  font-family:var(--font-inter),system-ui,sans-serif; -webkit-font-smoothing:antialiased}
 .pw-biz *{box-sizing:border-box; margin:0; padding:0}
 html.dark .pw-biz{--paper:#0E141B; --surface:#16202B; --line:#263441; --ink:#E7EDF3; --ink-2:#C3CEDA; --muted:#8B99A8}
 
@@ -308,7 +308,7 @@ html.dark .pw-biz{--paper:#0E141B; --surface:#16202B; --line:#263441; --ink:#E7E
 .pw-biz .biz-head-l{display:flex; align-items:center; gap:13px}
 .pw-biz .biz-ic{width:40px; height:40px; border-radius:10px; display:flex; align-items:center; justify-content:center; flex:none; background:var(--teal-600); color:var(--navy)}
 .pw-biz .biz-ic svg{display:block}
-.pw-biz h1{font-family:'Space Grotesk',system-ui,sans-serif; font-size:18px; font-weight:600; letter-spacing:-.01em}
+.pw-biz h1{font-family:var(--font-space-grotesk),system-ui,sans-serif; font-size:18px; font-weight:600; letter-spacing:-.01em}
 .pw-biz .biz-head p{font-size:12.5px; color:var(--muted); margin-top:2px}
 .pw-biz .biz-close{width:40px; height:40px; flex:none; padding:0; border:0; line-height:0; border-radius:10px; display:flex; align-items:center; justify-content:center; background:var(--teal-600); color:var(--navy); cursor:pointer; transition:background .15s ease}
 .pw-biz .biz-close:hover{background:var(--teal-700)}

@@ -56,8 +56,8 @@ const MH_RULE = {
   backgroundPosition: "right center",
   backgroundRepeat: "no-repeat",
 };
-const MH_GROTESK = "'Space Grotesk', system-ui, sans-serif";
-const MH_MONO = "'JetBrains Mono', ui-monospace, monospace";
+const MH_GROTESK = "var(--font-space-grotesk), system-ui, sans-serif";
+const MH_MONO = "var(--font-jetbrains-mono), ui-monospace, monospace";
 
 /** Section label: teal, 600, 0.12em tracking. */
 function MhLabel({ children, size = 7.5, colour = MH.teal }) {

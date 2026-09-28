@@ -277,19 +277,19 @@ export function AuthFrame({ children }) {
 }
 
 const CSS = `
-.login-root{position:fixed; inset:0; display:flex; font-family:'Inter',system-ui,sans-serif; color:#0E141B; background:#F4F6F9}
+.login-root{position:fixed; inset:0; display:flex; font-family:var(--font-inter),system-ui,sans-serif; color:#0E141B; background:#F4F6F9}
 .login-root *{box-sizing:border-box; margin:0; padding:0}
 .login-rail{width:42%; max-width:520px; background:linear-gradient(150deg,#1A2530 0%,#233241 60%,#2C4150 100%); color:#fff; padding:48px 44px; display:flex; flex-direction:column; position:relative; overflow:hidden}
 .login-rail::before{content:""; position:absolute; inset:0; background-image:linear-gradient(rgba(63,183,201,.10) 1px,transparent 1px),linear-gradient(90deg,rgba(63,183,201,.10) 1px,transparent 1px); background-size:26px 26px; -webkit-mask-image:linear-gradient(150deg,#000,transparent 75%); mask-image:linear-gradient(150deg,#000,transparent 75%)}
 .login-rail .brandmark{width:48px; height:48px; border-radius:13px; background:linear-gradient(150deg,#3FB7C9,#22808F); display:grid; place-items:center; box-shadow:0 8px 20px -6px rgba(63,183,201,.55); position:relative}
 .login-rail .brandmark svg{width:24px; height:24px}
-.login-rail .wordmark{font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:24px; letter-spacing:-.01em; margin-top:22px; position:relative}
+.login-rail .wordmark{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:24px; letter-spacing:-.01em; margin-top:22px; position:relative}
 .login-rail .wordmark b{color:#3FB7C9}
 .login-rail .tag{color:#aab8c6; font-size:15px; line-height:1.6; margin-top:14px; max-width:320px; position:relative}
-.login-rail .rail-foot{margin-top:auto; font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:#7e8ea0; position:relative}
+.login-rail .rail-foot{margin-top:auto; font-family:var(--font-jetbrains-mono),monospace; font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:#7e8ea0; position:relative}
 .login-main{flex:1; display:flex; align-items:center; justify-content:center; padding:32px}
 .login-card{width:100%; max-width:380px}
-.login-card h1{font-family:'Space Grotesk',sans-serif; font-size:26px; font-weight:600; letter-spacing:-.02em}
+.login-card h1{font-family:var(--font-space-grotesk),sans-serif; font-size:26px; font-weight:600; letter-spacing:-.02em}
 .login-card .sub{color:#697785; font-size:14px; margin-top:6px; margin-bottom:26px; line-height:1.55}
 .field{display:block; margin-bottom:16px}
 .field span{display:block; font-size:12.5px; font-weight:500; color:#3A4654; margin-bottom:6px}

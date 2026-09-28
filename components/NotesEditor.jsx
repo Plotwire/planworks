@@ -142,7 +142,7 @@ export default function NotesEditor({ notes, updateNotes, onClose }) {
         onMouseDown={(e) => e.stopPropagation()}>
 
         <div className="flex items-center justify-between px-5 h-12 bg-[#2C3E50] shrink-0">
-          <div className="text-white font-semibold tracking-wide" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>Installation Notes</div>
+          <div className="text-white font-semibold tracking-wide" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>Installation Notes</div>
           <button onClick={onClose} className="text-slate-300 hover:text-white transition-colors" aria-label="Close"><X size={18}/></button>
         </div>
 

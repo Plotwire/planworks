@@ -100,7 +100,7 @@ export function TopBar({
       <TbGroup first>
         {onHome && <TbButton onClick={onHome} icon={ChevronLeft} label="Dashboard" title="Back to dashboard" />}
         <span className="hidden min-[1600px]:inline font-semibold text-[15px] tracking-tight px-1 text-slate-900 dark:text-white"
-          style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
+          style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>
           Plot<span className="text-[#3FB7C9]">wire</span>
         </span>
         <button onClick={onShowMeta} title={`${projectLabel} — ${sheetLabel}`}
@@ -270,7 +270,7 @@ export function SheetTabs({ sheets, activeId, onSwitch, onAdd, onRename, onDelet
     <div className="flex items-stretch gap-1.5 px-3 h-11 bg-[#2C3E50] border-b border-black/25 shadow-sm shrink-0 overflow-x-auto
                     [&::-webkit-scrollbar]:h-0">
       <div className="flex items-center pr-1 text-[9px] font-medium tracking-wider text-slate-300/75 uppercase shrink-0"
-           style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+           style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>
         Drawings
       </div>
       {sheets.map(s => {
@@ -391,8 +391,8 @@ export function Palette({ onPalettePointerDown, onFurniturePointerDown, symbolSc
   return (
     <aside className="w-64 bg-[#EBEFF6] dark:bg-[#1A2530] border-r border-slate-200 dark:border-[#263441] flex flex-col">
       <div className="px-4 h-11 flex items-center justify-between bg-[#2C3E50] border-b border-black/25 shadow-sm">
-        <div className="text-[15px] font-semibold text-white" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>{floor ? "Floor Plan" : "Symbols"}</div>
-        <div className="text-[9px] tracking-wider text-slate-300/70 font-medium" style={{ fontFamily: "'JetBrains Mono', monospace" }}>{floor ? "LAYOUT" : "MEP LEGEND"}</div>
+        <div className="text-[15px] font-semibold text-white" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>{floor ? "Floor Plan" : "Symbols"}</div>
+        <div className="text-[9px] tracking-wider text-slate-300/70 font-medium" style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>{floor ? "LAYOUT" : "MEP LEGEND"}</div>
       </div>
 
       {!floor && (
@@ -1575,7 +1575,7 @@ export function Inspector({
   return (
     <aside className="w-64 bg-[#EBEFF6] dark:bg-[#1A2530] border-l border-slate-200 dark:border-[#263441] flex flex-col">
       <div className="pl-4 pr-2 h-11 flex items-center justify-between border-b border-slate-200 dark:border-[#263441]">
-        <div className="text-[15px] font-semibold text-slate-900 dark:text-slate-100" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>Inspector</div>
+        <div className="text-[15px] font-semibold text-slate-900 dark:text-slate-100" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>Inspector</div>
         {onCollapse && (
           <button onClick={onCollapse} title="Hide inspector"
             className="w-8 h-8 flex items-center justify-center rounded-md text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-200/70 dark:hover:bg-[#263441]">
@@ -1817,7 +1817,7 @@ export function ZoomControls({ zoom, onIn, onOut, onFit }) {
       <button onClick={onOut} className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/10 transition-colors">
         <ZoomOut size={14}/>
       </button>
-      <div className="px-3 self-center text-[11px] text-slate-700 dark:text-slate-200 tabular-nums border-x border-slate-200 dark:border-[#2A3947] min-w-[56px] text-center" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+      <div className="px-3 self-center text-[11px] text-slate-700 dark:text-slate-200 tabular-nums border-x border-slate-200 dark:border-[#2A3947] min-w-[56px] text-center" style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>
         {Math.round(zoom*100)}%
       </div>
       <button onClick={onIn} className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/10 transition-colors">
@@ -1993,7 +1993,7 @@ export function BoqTemplateEditor({ saved, savedPrefs, onSave, onClose }) {
         <div className="flex items-center justify-between px-6 h-14 bg-[#2C3E50] shrink-0">
           <div>
             <div className="text-[9px] tracking-[0.3em] uppercase text-[#9fd8e2]">Quote presets</div>
-            <div className="text-white font-semibold text-[15px] -mt-0.5" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>Default items &amp; specifications</div>
+            <div className="text-white font-semibold text-[15px] -mt-0.5" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>Default items &amp; specifications</div>
           </div>
           <button onClick={onClose} className="text-slate-300 hover:text-white"><X size={18}/></button>
         </div>
@@ -2231,7 +2231,7 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
         <div className="flex items-center justify-between px-6 h-14 bg-[#2C3E50] shrink-0">
           <div>
             <div className="text-[9px] tracking-[0.3em] uppercase text-[#9fd8e2]">Quote</div>
-            <div className="text-white font-semibold text-[15px] -mt-0.5" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
+            <div className="text-white font-semibold text-[15px] -mt-0.5" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>
               {boq.meta.development || meta.projectName || "Untitled Project"}
             </div>
           </div>
@@ -3388,7 +3388,7 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
       </div>
 
       <style>{`
-        #print-root{position:fixed; inset:0; z-index:60; background:rgba(15,23,42,.5); overflow:auto; font-family:'Inter',system-ui,sans-serif}
+        #print-root{position:fixed; inset:0; z-index:60; background:rgba(15,23,42,.5); overflow:auto; font-family:var(--font-inter),system-ui,sans-serif}
         #print-root .pp-notice{margin-top:4px; font-size:12px; font-weight:600; color:#7A3E00}
         #print-root .pp-chrome{position:sticky; top:0; z-index:2; background:#fff; border-bottom:1px solid #e2e8f0; padding:12px 20px; display:flex; align-items:center; justify-content:space-between; gap:16px}
         #print-root .pp-eyebrow{font-size:10px; letter-spacing:.3em; text-transform:uppercase; color:#64748b}

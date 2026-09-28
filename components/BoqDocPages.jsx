@@ -230,7 +230,7 @@ export default function BoqDocPages({ doc }) {
   return (
     <>
       {/* Hidden measuring layout: same widths and styles as a page. */}
-      <div ref={measureRef} aria-hidden style={{ position: "absolute", top: 0, left: 0, width: INNER_W, visibility: "hidden", fontFamily: "Inter, system-ui, sans-serif" }}>
+      <div ref={measureRef} aria-hidden style={{ position: "absolute", top: 0, left: 0, width: INNER_W, visibility: "hidden", fontFamily: "var(--font-inter), system-ui, sans-serif" }}>
         <div data-m="pre"><Preamble doc={doc} /></div>
         {doc.sections.map((sec, si) => (
           <div key={si}>
@@ -248,7 +248,7 @@ export default function BoqDocPages({ doc }) {
       </div>
 
       {pages.map((pg, pi) => (
-        <div key={pi} className="boq-page" style={{ width: PAGE_W, height: PAGE_H, background: "#fff", padding: `${PAD_TOP}px ${PAD_X}px ${PAD_BOTTOM}px`, boxSizing: "border-box", color: "#1e293b", fontFamily: "Inter, system-ui, sans-serif", position: "relative", overflow: "hidden" }}>
+        <div key={pi} className="boq-page" style={{ width: PAGE_W, height: PAGE_H, background: "#fff", padding: `${PAD_TOP}px ${PAD_X}px ${PAD_BOTTOM}px`, boxSizing: "border-box", color: "#1e293b", fontFamily: "var(--font-inter), system-ui, sans-serif", position: "relative", overflow: "hidden" }}>
           {pg.preamble && <Preamble doc={doc} />}
           {pg.chunks.map((ch, ci) => {
             const sec = doc.sections[ch.si];

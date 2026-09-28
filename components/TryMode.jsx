@@ -74,12 +74,12 @@ const PILL_ROW = { display: "inline-flex", alignItems: "center", gap: 8, flex: "
 const PILL = {
   display: "inline-flex", alignItems: "center", boxSizing: "border-box", height: 32, padding: "0 12px",
   borderRadius: 999, fontSize: 12, lineHeight: 1, fontWeight: 600, whiteSpace: "nowrap",
-  fontFamily: "Inter, system-ui, sans-serif", fontVariantNumeric: "tabular-nums",
+  fontFamily: "var(--font-inter), system-ui, sans-serif", fontVariantNumeric: "tabular-nums",
 };
 const PILL_BTN = {
   boxSizing: "border-box", height: 32, padding: "0 14px", border: 0, borderRadius: 10,
   fontSize: 12, lineHeight: 1, fontWeight: 600, cursor: "pointer", flex: "none", whiteSpace: "nowrap",
-  fontFamily: "Inter, system-ui, sans-serif",
+  fontFamily: "var(--font-inter), system-ui, sans-serif",
 };
 export function TryPill({ used, limit, onSubscribe, subscribeLabel = "Subscribe" }) {
   const full = used >= limit;
@@ -106,7 +106,9 @@ export function TrialSheetMark() {
       <svg width="520" height="150" viewBox="0 0 520 150" fill="none">
         <rect x="0" y="15" width="120" height="120" rx="30" fill="#1A2530" />
         <path d="M68 38 38 80h22l-5 33 32-45H65l3-30z" fill="#ffffff" />
-        <text x="148" y="104" fontFamily="'Space Grotesk', Inter, system-ui, sans-serif" fontSize="84" fontWeight="700" letterSpacing="-2" fill="#1A2530">
+        {/* Font via style, not the fontFamily attribute: CSS variables aren't
+            reliable in SVG presentation attributes. */}
+        <text x="148" y="104" style={{ fontFamily: "var(--font-space-grotesk), var(--font-inter), system-ui, sans-serif" }} fontSize="84" fontWeight="700" letterSpacing="-2" fill="#1A2530">
           Plotwire
         </text>
       </svg>
@@ -167,12 +169,12 @@ html.dark .pw-try-pill-count{color:#E7EDF3}
 
 const PROMPT_CSS = `
 .pw-try-prompt{position:fixed; inset:0; z-index:2147481000; background:rgba(15,23,42,.5); backdrop-filter:blur(3px); display:flex; align-items:center; justify-content:center; padding:16px}
-.pw-try-prompt .box{width:100%; max-width:420px; background:#fff; border-radius:16px; padding:24px 24px 20px; box-shadow:0 24px 60px -20px rgba(0,0,0,.45); font-family:Inter,system-ui,sans-serif; color:#0E141B}
-.pw-try-prompt .eyebrow{font:600 10px/1 'JetBrains Mono',monospace; letter-spacing:.14em; text-transform:uppercase; color:#22808F; margin-bottom:10px}
+.pw-try-prompt .box{width:100%; max-width:420px; background:#fff; border-radius:16px; padding:24px 24px 20px; box-shadow:0 24px 60px -20px rgba(0,0,0,.45); font-family:var(--font-inter),system-ui,sans-serif; color:#0E141B}
+.pw-try-prompt .eyebrow{font:600 10px/1 var(--font-jetbrains-mono),monospace; letter-spacing:.14em; text-transform:uppercase; color:#22808F; margin-bottom:10px}
 .pw-try-prompt h2{font-size:19px; font-weight:700; margin:0 0 8px}
 .pw-try-prompt p{font-size:13.5px; line-height:1.55; color:#3A4654; margin:0 0 20px}
 .pw-try-prompt .actions{display:flex; justify-content:flex-end; gap:8px}
-.pw-try-prompt button{height:40px; padding:0 16px; border-radius:10px; font:600 13px Inter,system-ui,sans-serif; cursor:pointer}
+.pw-try-prompt button{height:40px; padding:0 16px; border-radius:10px; font:600 13px var(--font-inter),system-ui,sans-serif; cursor:pointer}
 .pw-try-prompt .ghost{background:#F1F5F9; border:0; color:#1A2530}
 .pw-try-prompt .primary{background:var(--action,#2C97A8); color:var(--action-ink,#1A2530); border:0}
 .pw-try-prompt .primary:hover{background:var(--action-hover,#22808F)}
