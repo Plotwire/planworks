@@ -10,6 +10,7 @@ import { hasCompanyProfile, getCompanyProfile } from "@/lib/companyProfile";
 import { listCompanyLogos } from "@/lib/companyLogos";
 import { supabase, isConfigured } from "@/lib/supabase";
 import { getSettings, saveSettings } from "@/lib/db";
+import { clearSignedOutDeviceData } from "@/lib/deviceData";
 import { DEFAULT_TITLEBLOCK, normaliseTitleBlock, companyProfileToTitleBlock, companyLogoFrom, mergeTitleBlocks } from "@/lib/titleBlock";
 import { useSubscription } from "@/lib/useSubscription";
 import { TRY_SYMBOL_LIMIT } from "@/lib/pricing";
@@ -205,7 +206,12 @@ function AppGates({ children }) {
     const failed = "Couldn't log out. Check your connection and try again.";
     try {
       const { error } = (await supabase?.auth.signOut()) || {};
-      return error ? failed : "";
+      if (error) return failed;
+      // Signed out: don't leave client details or per-user flags on this
+      // device (lib/deviceData.js). Only on success -- a failed sign-out keeps
+      // the session, so it keeps the crash-recovery draft too.
+      clearSignedOutDeviceData();
+      return "";
     } catch {
       return failed;
     }
