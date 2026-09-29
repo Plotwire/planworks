@@ -17,7 +17,13 @@ export const LEGAL_DOCS = {
 
 export default function LegalDocument({ doc }) {
   const { file, title } = LEGAL_DOCS[doc];
-  const markdown = fs.readFileSync(path.join(process.cwd(), "content", "legal", file), "utf8");
+  let markdown = fs.readFileSync(path.join(process.cwd(), "content", "legal", file), "utf8");
+  // The page prints the title itself, so a file that opens with the same
+  // "# Title" line would show it twice -- drop that line. Likewise the
+  // "Version ..." line: shown from the file when it has one, else from
+  // LEGAL_VERSION.
+  markdown = markdown.replace(/^﻿?\s*#\s+(.+?)\s*\r?\n/, (line, h) => (h === title ? "" : line));
+  const hasOwnVersion = /^\s*Version\s/.test(markdown);
   // Our own files, not user input, so rendering their HTML is safe.
   const html = marked.parse(markdown, { async: false });
 
@@ -41,7 +47,7 @@ export default function LegalDocument({ doc }) {
 
       <main className="legal-main">
         <h1>{title}</h1>
-        <p className="legal-version">Version {LEGAL_VERSION}</p>
+        {!hasOwnVersion && <p className="legal-version">Version {LEGAL_VERSION}</p>}
         <article className="legal-body" dangerouslySetInnerHTML={{ __html: html }} />
       </main>
     </div>
