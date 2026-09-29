@@ -1,10 +1,11 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { supabase, isConfigured } from "@/lib/supabase";
 import TermsCheckboxes from "@/components/TermsCheckboxes";
 import { LEGAL_LINKS } from "@/lib/legal";
 import { signupTermsMetadata } from "@/lib/termsAcceptance";
+import Turnstile, { TURNSTILE_SITE_KEY, isCaptchaError, CAPTCHA_MESSAGE, captchaPending } from "@/components/Turnstile";
 
 export default function LoginScreen({ recovery = false, onRecovered }) {
   const [mode, setMode] = useState("signin"); // "signin" | "signup" | "forgot"
@@ -21,6 +22,17 @@ export default function LoginScreen({ recovery = false, onRecovered }) {
   const [agreed, setAgreed] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
   const consentGiven = agreed && acknowledged;
+  // Security check (components/Turnstile.jsx). The token goes to Supabase as
+  // captchaToken; with no site key it stays unset and nothing changes.
+  const turnstile = useRef(null);
+  const [captchaToken, setCaptchaToken] = useState(null);
+  const [captchaStatus, setCaptchaStatus] = useState(TURNSTILE_SITE_KEY ? "pending" : "off");
+  const waitingForCheck = captchaPending(captchaStatus);
+  const captcha = captchaToken ? { captchaToken } : {};
+  // Each token works once, so every attempt gets a fresh check.
+  const afterAttempt = () => turnstile.current?.reset();
+  const authError = (error, fallback) =>
+    isCaptchaError(error) ? CAPTCHA_MESSAGE : (error.message || fallback);
 
   const switchMode = (m) => {
     setMode(m);
@@ -32,10 +44,13 @@ export default function LoginScreen({ recovery = false, onRecovered }) {
   const signIn = async (e) => {
     e?.preventDefault();
     if (!isConfigured) { setError("This app isn't linked to the cloud yet."); return; }
+    if (waitingForCheck) { setError("Wait for the security check to finish."); return; }
     setBusy(true); setError("");
-    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+    const { error } = await supabase.auth.signInWithPassword({
+      email: email.trim(), password, options: { ...captcha },
+    });
     setBusy(false);
-    if (error) setError(error.message || "Couldn't sign in. Check your email and password.");
+    if (error) { afterAttempt(); setError(authError(error, "Couldn't sign in. Check your email and password.")); }
   };
 
   const signUp = async (e) => {
@@ -45,6 +60,7 @@ export default function LoginScreen({ recovery = false, onRecovered }) {
     if (password.length < 8) { setError("Use a password of at least 8 characters."); return; }
     if (password !== confirm) { setError("Those two passwords don't match."); return; }
     if (!consentGiven) { setError("Please tick both boxes to create your account."); return; }
+    if (waitingForCheck) { setError("Wait for the security check to finish."); return; }
     setBusy(true); setError("");
     const { data, error } = await supabase.auth.signUp({
       email: email.trim(),
@@ -55,10 +71,12 @@ export default function LoginScreen({ recovery = false, onRecovered }) {
         // record is written on first sign-in (see lib/termsAcceptance.js).
         data: { name: name.trim(), ...signupTermsMetadata() },
         emailRedirectTo: typeof window !== "undefined" ? window.location.origin : undefined,
+        ...captcha,
       },
     });
     setBusy(false);
-    if (error) { setError(error.message || "Couldn't create your account."); return; }
+    afterAttempt();
+    if (error) { setError(authError(error, "Couldn't create your account.")); return; }
     if (data?.user && !data?.session) { setSentTo(email.trim()); setSentKind("confirm"); return; }
     // confirmation off -> session live; AppShell takes over.
   };
@@ -67,12 +85,15 @@ export default function LoginScreen({ recovery = false, onRecovered }) {
     e?.preventDefault();
     if (!isConfigured) { setError("This app isn't linked to the cloud yet."); return; }
     if (!email.trim()) { setError("Enter the email address for your account."); return; }
+    if (waitingForCheck) { setError("Wait for the security check to finish."); return; }
     setBusy(true); setError("");
     const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
       redirectTo: typeof window !== "undefined" ? window.location.origin : undefined,
+      ...captcha,
     });
     setBusy(false);
-    if (error) { setError(error.message || "Couldn't send the reset email."); return; }
+    afterAttempt();
+    if (error) { setError(authError(error, "Couldn't send the reset email.")); return; }
     setSentTo(email.trim()); setSentKind("reset");
   };
 
@@ -219,11 +240,15 @@ export default function LoginScreen({ recovery = false, onRecovered }) {
           />
         )}
 
+        <Turnstile ref={turnstile} action="auth" onToken={setCaptchaToken} onStatus={setCaptchaStatus} />
+
         {error && <div className="err">{error}</div>}
 
-        <button type="submit" className="submit" disabled={busy || (mode === "signup" && !consentGiven)}>
+        <button type="submit" className="submit"
+                disabled={busy || waitingForCheck || (mode === "signup" && !consentGiven)}>
           {busy
             ? (mode === "signin" ? "Signing in…" : mode === "signup" ? "Creating account…" : "Sending…")
+            : waitingForCheck ? "Running security check…"
             : (mode === "signin" ? "Sign in" : mode === "signup" ? "Create account" : "Send reset link")}
         </button>
 

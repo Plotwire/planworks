@@ -7,6 +7,7 @@ import { signPlanImages } from "@/lib/planImages";
 import { useApp } from "@/components/AppShell";
 import { LEGAL_LINKS } from "@/lib/legal";
 import { TryPill } from "@/components/TryMode";
+import Turnstile, { TURNSTILE_SITE_KEY, captchaPending } from "@/components/Turnstile";
 
 /* Sheet geometry — must match ElectricalPlanTool */
 const SHEET = { width: 1587, height: 1123, margin: 18, legendWidth: 230, notesWidth: 280, titleHeight: 110 };
@@ -415,6 +416,11 @@ function DeleteDrawingDialog({ card, onCancel, onDeleted }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const inputRef = useRef(null);
+  // The password check signs in again, so it needs the security check too
+  // once CAPTCHA is on in Supabase (components/Turnstile.jsx).
+  const turnstile = useRef(null);
+  const [captchaToken, setCaptchaToken] = useState(null);
+  const [captchaStatus, setCaptchaStatus] = useState(TURNSTILE_SITE_KEY ? "pending" : "off");
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
@@ -430,7 +436,8 @@ function DeleteDrawingDialog({ card, onCancel, onDeleted }) {
     if (busy) return;
     setBusy(true); setError("");
     // 1. Password first. A wrong one never reaches the delete.
-    const check = await verifyPassword(password);
+    const check = await verifyPassword(password, captchaToken);
+    turnstile.current?.reset();
     if (!check.ok) {
       setBusy(false); setPassword(""); setError(check.message);
       inputRef.current?.focus();
@@ -467,10 +474,13 @@ function DeleteDrawingDialog({ card, onCancel, onDeleted }) {
             onChange={(e) => { setPassword(e.target.value); if (error) setError(""); }}
             className="pw-modal-input"
           />
+          <div style={{ marginTop: 12 }}>
+            <Turnstile ref={turnstile} action="delete" onToken={setCaptchaToken} onStatus={setCaptchaStatus} />
+          </div>
           {error && <div className="pw-modal-error" role="alert">{error}</div>}
           <div className="pw-modal-actions">
             <button type="button" className="pw-btn-cancel" onClick={onCancel} disabled={busy}>Cancel</button>
-            <button type="submit" className="pw-btn-danger" disabled={busy || !password}>
+            <button type="submit" className="pw-btn-danger" disabled={busy || !password || captchaPending(captchaStatus)}>
               {busy ? "Deleting…" : "Delete drawing"}
             </button>
           </div>
