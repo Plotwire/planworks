@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
-import { bearer, userFromToken, APP_URL, isMissingCustomer } from "@/lib/billing";
+import { bearer, userFromToken, returnOrigin, isMissingCustomer } from "@/lib/billing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,7 +23,7 @@ export async function POST(req) {
 
     const session = await getStripe().billingPortal.sessions.create({
       customer: customerId,
-      return_url: `${APP_URL}/`,
+      return_url: `${returnOrigin(req)}/`,
     });
 
     return NextResponse.json({ url: session.url });

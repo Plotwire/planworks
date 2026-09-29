@@ -1,7 +1,7 @@
 ﻿import { NextResponse } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
-import { bearer, userFromToken, STRIPE_PRICE, APP_URL, LIVE_STATUSES, isMissingCustomer } from "@/lib/billing";
+import { bearer, userFromToken, STRIPE_PRICE, returnOrigin, LIVE_STATUSES, isMissingCustomer } from "@/lib/billing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,6 +35,7 @@ export async function POST(req) {
 
     // Reuse an existing Stripe customer if this user has subscribed before.
     const customerId = current?.stripe_customer_id || null;
+    const origin = returnOrigin(req);
 
     const params = {
       mode: "subscription",
@@ -46,8 +47,8 @@ export async function POST(req) {
       subscription_data: {
         metadata: { user_id: user.id },
       },
-      success_url: `${APP_URL}/?checkout=success`,
-      cancel_url: `${APP_URL}/?checkout=cancelled`,
+      success_url: `${origin}/?checkout=success`,
+      cancel_url: `${origin}/?checkout=cancelled`,
     };
 
     let session;
