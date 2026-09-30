@@ -12,8 +12,8 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
-  T_EXT, T_INT, DOOR_W, WIN_W, wallPoly, wallFaces, ptStr, hyp, segLen, snap, fmtMM,
-  nearestWall, hitTest, SAMPLE_PLAN,
+  T_EXT, T_INT, DOOR_W, WIN_W, ptStr, hyp, segLen, snap, fmtMM,
+  nearestWall, hitTest, joinWalls, pocheD, outlinePathD,
 } from "@/lib/cad/plan";
 import { listSketches, getSketchData, insertSketch, updateSketch, deleteSketch } from "@/lib/cad/sketchStore";
 import { insertProject, getProjectData, updateProjectRow } from "@/lib/db";
@@ -31,17 +31,20 @@ const SHEET = { x: -6000, y: -6000, w: 28000, h: 28000 };
 const SCALE_MIN = 0.02, SCALE_MAX = 0.6;
 
 // ------------------------- node renderers -------------------------
-function WallNode({ s, selected }) {
-  const t = s.type === "external" ? T_EXT : T_INT;
-  const cls = selected ? "cadv-sel" : "cadv-ink";
-  const sw = selected ? 2 : (s.type === "external" ? 1.4 : 1.1);
+// Every wall drawn as one joined solid: a single poche path, then the outline
+// of the union (mitred corners, T-junctions and crossings with no seams). The
+// selected wall is outlined on top in the accent colour.
+function WallsNode({ joined, selId }) {
+  const selPoly = selId ? joined.polys[selId] : null;
   return (
     <g>
-      <polygon points={ptStr(wallPoly(s, t))} className="cadv-poche" stroke="none" />
-      {wallFaces(s, t).map((f, i) => (
-        <line key={i} x1={f[0][0]} y1={f[0][1]} x2={f[1][0]} y2={f[1][1]}
-          className={cls} strokeWidth={sw} vectorEffect="non-scaling-stroke" strokeLinecap="square" />
-      ))}
+      <path d={pocheD(joined.polys)} className="cadv-poche" fillRule="nonzero" stroke="none" />
+      <path d={outlinePathD(joined.outline)} className="cadv-ink" fill="none" strokeWidth={1.3}
+        strokeLinejoin="miter" strokeMiterlimit={12} strokeLinecap="square" vectorEffect="non-scaling-stroke" />
+      {selPoly && (
+        <polygon points={ptStr(selPoly)} className="cadv-sel cadv-sel-fill" strokeWidth={2}
+          strokeLinejoin="miter" strokeMiterlimit={12} vectorEffect="non-scaling-stroke" />
+      )}
     </g>
   );
 }
@@ -256,8 +259,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       const map = { v: "select", e: "ext", i: "int", d: "door", w: "window", m: "dim", r: "room", t: "text", h: "pan" };
       const k = e.key.toLowerCase();
       if (map[k]) { setTool(map[k]); setDraftPts([]); setDimP1(null); }
-      else if (e.key === "Escape") { setDraftPts([]); setDimP1(null); setSel(null); }
-      else if (e.key === "Enter") { setDraftPts([]); }
+      else if (e.key === "Escape") { setDraftPts([]); setDimP1(null); setSel(null); setTool("select"); }
       else if (e.key === "Delete" || e.key === "Backspace") { deleteSel(); }
     };
     window.addEventListener("keydown", onKey);
@@ -429,6 +431,9 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     const seg = { id: "w" + Date.now() + Math.round(Math.random() * 1e4), type: tool === "ext" ? "external" : "internal", x1: a.x, y1: a.y, x2: b.x, y2: b.y };
     setModel((m) => ({ ...m, walls: m.walls.concat([seg]) }));
   };
+  // One action per tool pick: once a wall, door, window, dimension, room label
+  // or note is placed, drop back to Select. Pick the tool again for the next one.
+  const finishAction = () => { setDraftPts([]); setDimP1(null); setTool("select"); };
   const handleClick = (e) => {
     if (suppressClickRef.current) { suppressClickRef.current = false; return; }
     if (panRef.current) return;
@@ -436,8 +441,10 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     if (isWallTool) {
       const from = draftPts.length ? draftPts[draftPts.length - 1] : null;
       const p = snapPt(raw, from);
-      if (draftPts.length) commitWallSeg(draftPts[draftPts.length - 1], p);
-      setDraftPts(draftPts.concat([p]));
+      if (!from) { setDraftPts([p]); return; }
+      if (p.x === from.x && p.y === from.y) return; // zero length: keep waiting for the end point
+      commitWallSeg(from, p);
+      finishAction();
       return;
     }
     if (tool === "door" || tool === "window") {
@@ -451,6 +458,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
         const wn = { id: "W" + Date.now(), x: Math.round(nw.cx), y: Math.round(nw.cy), dir: nw.dir, w: settings.winW, t, escape: false, ref: "" };
         setModel((m) => ({ ...m, windows: m.windows.concat([wn]) }));
       }
+      finishAction();
       return;
     }
     if (tool === "dim") {
@@ -460,7 +468,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
         const horiz = Math.abs(pp.x - dimP1.x) >= Math.abs(pp.y - dimP1.y);
         const nd = { id: "M" + Date.now(), x1: dimP1.x, y1: dimP1.y, x2: pp.x, y2: pp.y, side: horiz ? "top" : "left", off: 700 };
         setModel((m) => ({ ...m, dims: m.dims.concat([nd]) }));
-        setDimP1(null);
+        finishAction();
       }
       return;
     }
@@ -469,6 +477,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       if (!nm) return;
       if (tool === "room") setModel((m) => ({ ...m, rooms: m.rooms.concat([{ name: nm, area: 0, x: Math.round(raw.x), y: Math.round(raw.y) }]) }));
       else setModel((m) => ({ ...m, notes: m.notes.concat([{ text: nm, x: Math.round(raw.x), y: Math.round(raw.y) }]) }));
+      finishAction();
       return;
     }
     if (tool === "select") {
@@ -476,7 +485,6 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       setSel(op || hitTest(model.walls, raw.x, raw.y));
     }
   };
-  const handleDouble = () => { if (draftPts.length) setDraftPts([]); };
 
   const openingAt = (px, py) => {
     let best = null, bd = Infinity;
@@ -669,6 +677,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const joined = useMemo(() => joinWalls(model.walls), [model.walls]);
   const planEls = useMemo(() => {
     const g = [];
     g.push(<rect key="sheet" x={SHEET.x} y={SHEET.y} width={SHEET.w} height={SHEET.h} fill="none" stroke="#2C97A8" strokeWidth={2.5} vectorEffect="non-scaling-stroke" />);
@@ -678,7 +687,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
         <rect x={rl.x} y={rl.y} width={rl.w} height={rl.h} fill="none" className="cadv-ink" strokeWidth={0.8} strokeDasharray="20 14" vectorEffect="non-scaling-stroke" opacity={0.6} />
         <text x={rl.x + rl.w / 2} y={rl.y + rl.h / 2} className="cadv-note" fontSize={150} textAnchor="middle" fontWeight={600}>{rl.ref}</text>
       </g>));
-    if (layers.walls) g.push(<g key="walls">{model.walls.map((s) => <WallNode key={s.id} s={s} selected={sel && sel.kind === "wall" && sel.id === s.id} />)}</g>);
+    if (layers.walls) g.push(<WallsNode key="walls" joined={joined} selId={sel && sel.kind === "wall" ? sel.id : null} />);
     if (layers.openings) {
       g.push(<g key="doors">{model.doors.map((d) => <DoorNode key={d.id} d={d} selected={sel && sel.kind === "door" && sel.id === d.id} />)}</g>);
       g.push(<g key="wins">{model.windows.map((wn) => <WindowNode key={wn.id} wn={wn} selected={sel && sel.kind === "window" && sel.id === wn.id} />)}</g>);
@@ -701,7 +710,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       g.push(<g key="tags">{tags}</g>);
     }
     return g;
-  }, [model, sel, layers]);
+  }, [model, sel, layers, joined]);
 
   // overlay: draft + rubber-band + vertices + crosshair + snap dot
   const overlay = [];
@@ -739,8 +748,8 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const selWin = sel && sel.kind === "window" ? model.windows.find((w) => w.id === sel.id) : null;
   const hint = {
     select: "Click a wall to select. Hold Shift and drag to pan.",
-    ext: draftPts.length ? "Click the next corner - double-click or Esc to finish" : "Click the start point of an external wall",
-    int: draftPts.length ? "Click the next corner - double-click or Esc to finish" : "Click the start point of an internal wall",
+    ext: draftPts.length ? "Click the end point - Esc to cancel" : "Click the start point of an external wall",
+    int: draftPts.length ? "Click the end point - Esc to cancel" : "Click the start point of an internal wall",
     door: "Click on a wall to place a door",
     window: "Click on a wall to place a window",
     dim: dimP1 ? "Click the second measure point" : "Click the first measure point",
@@ -810,7 +819,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
           <div ref={gridRef} className="cadv__grid" style={{ position: "absolute", inset: 0, pointerEvents: "none", transformOrigin: "0 0", willChange: PROMOTE, ...gridStyle }} />
           <svg ref={svgRef} className="cadv__svg" width="100%" height="100%" style={{ cursor: svgCursor, transformOrigin: "0 0", willChange: PROMOTE }}
             onPointerDown={handleDown} onPointerMove={handleMove} onPointerUp={handleUp} onPointerCancel={handleUp}
-            onClick={handleClick} onDoubleClick={handleDouble}
+            onClick={handleClick}
             onPointerLeave={() => setCur((c) => ({ ...c, on: false }))}>
             <g ref={gRef}>
               {planEls}
@@ -1001,6 +1010,7 @@ const CSS = `
 .cadv-poche{fill:#C9D0D8}
 .cadv-paper{fill:#FFFFFF}
 .cadv-sel{stroke:#3FB7C9}
+.cadv-sel-fill{fill:rgba(63,183,201,.18)}
 .cadv-active{stroke:#3FB7C9}
 .cadv-cross{stroke:#2C3E50}
 .cadv-grid-minor{stroke:#AAC6CE; opacity:.4}
