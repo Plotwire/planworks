@@ -22,12 +22,12 @@ import { computeFrame, renderModelToPng } from "@/lib/cad/sketchToImage";
 import { isTouchDevice } from "@/lib/touch";
 import {
   ChevronLeft, FolderOpen, FilePlus, Save, Send, Undo2, Redo2, SlidersHorizontal, Grid3x3, Magnet, Compass,
-  Maximize2, Trash2, BrickWall, DoorOpen, Tag as TagIcon, Type, MousePointer2, Hand, PencilRuler,
+  Maximize2, Trash2, Eye, EyeOff, BrickWall, DoorOpen, Tag as TagIcon, Type, MousePointer2, Hand, PencilRuler,
 } from "lucide-react";
 import {
   TopBarShell, TbGroup, TbButton, TbBrand, TbProjectPill, TbTrialSlot, TbMenu, TbMenuItem, TbPanelsItem, TbThemeItem,
-  SidePanel, CollapsedPanel, Stat, PANEL_LABEL, panelChoice, PANEL_BTN, PANEL_BTN_DANGER,
-  FloatingToolbar, WallTypeChooser, ZoomControls, StatusBar, StatusCount, SheetTabs,
+  SidePanel, CollapsedPanel, PANEL_LABEL, PANEL_HELP, SectionLabel, ChoiceGroup, ToggleRow, ScheduleRows, PanelAction,
+  FloatingToolbar, ZoomControls, StatusBar, StatusCount, SheetTabs,
 } from "@/components/SheetParts";
 import { useApp } from "@/components/AppShell";
 import { TryPill, useTryUsage } from "@/components/TryMode";
@@ -38,7 +38,6 @@ import { TryPill, useTryUsage } from "@/components/TryMode";
 // smooth panning on a drawing.
 const PROMOTE = isTouchDevice() ? "auto" : "transform";
 
-const SHEET = { x: -6000, y: -6000, w: 28000, h: 28000 };
 const SCALE_MIN = 0.02, SCALE_MAX = 0.6;
 
 // ------------------------- node renderers -------------------------
@@ -193,8 +192,7 @@ const LAYER_LIST = [
 
 const SAVE_LABEL = { idle: "NOT SAVED", unsaved: "UNSAVED CHANGES", saving: "SAVING…", saved: "SAVED", error: "SAVE FAILED" };
 
-// The editor's workspace surround and grid (components/SheetParts.jsx).
-const SURROUND = "radial-gradient(circle at 50% 50%, #e2e8f0, #cbd5e1 90%)";
+// The editor's grid (components/SheetParts.jsx).
 const GRID_LINE = "rgba(37,99,235,0.18)";
 const GRID_MM = 500;
 
@@ -756,7 +754,6 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const joined = useMemo(() => joinWalls(model.walls), [model.walls]);
   const planEls = useMemo(() => {
     const g = [];
-    g.push(<rect key="sheet" x={SHEET.x} y={SHEET.y} width={SHEET.w} height={SHEET.h} fill="none" stroke="#B8C3CF" strokeWidth={1} vectorEffect="non-scaling-stroke" />);
     if (layers.boundary && model.boundary) g.push(<polyline key="bnd" points={ptStr(model.boundary)} className="cadv-boundary" fill="none" strokeWidth={1.4} strokeDasharray="14 10" vectorEffect="non-scaling-stroke" />);
     if (layers.stairs) (model.rooflights || []).forEach((rl) => g.push(
       <g key={rl.ref}>
@@ -801,8 +798,8 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     overlay.push(<line key="dimrb" x1={dimP1.x} y1={dimP1.y} x2={cur.x} y2={cur.y} className="cadv-active" strokeWidth={1.2} strokeDasharray="8 6" vectorEffect="non-scaling-stroke" />);
   }
   if (drawingTool && cur.on) {
-    overlay.push(<line key="chx" x1={SHEET.x} y1={cur.y} x2={SHEET.x + SHEET.w} y2={cur.y} className="cadv-cross" strokeWidth={0.9} opacity={0.6} vectorEffect="non-scaling-stroke" />);
-    overlay.push(<line key="chy" x1={cur.x} y1={SHEET.y} x2={cur.x} y2={SHEET.y + SHEET.h} className="cadv-cross" strokeWidth={0.9} opacity={0.6} vectorEffect="non-scaling-stroke" />);
+    overlay.push(<line key="chx" x1={-1e6} y1={cur.y} x2={1e6} y2={cur.y} className="cadv-cross" strokeWidth={0.9} opacity={0.6} vectorEffect="non-scaling-stroke" />);
+    overlay.push(<line key="chy" x1={cur.x} y1={-1e6} x2={cur.x} y2={1e6} className="cadv-cross" strokeWidth={0.9} opacity={0.6} vectorEffect="non-scaling-stroke" />);
     overlay.push(<circle key="cdot" cx={cur.x} cy={cur.y} r={70} className="cadv-active" fill="#fff" strokeWidth={1.4} vectorEffect="non-scaling-stroke" />);
     if (isWallTool && cur.ep) overlay.push(<rect key="ep" x={cur.x - 9 / view.s} y={cur.y - 9 / view.s} width={18 / view.s} height={18 / view.s} fill="none" className="cadv-active" strokeWidth={2} vectorEffect="non-scaling-stroke" />);
   }
@@ -852,10 +849,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
 
   const svgCursor = tool === "pan" ? "grab" : (drawingTool ? "crosshair" : "default");
   const gridSz = GRID_MM * view.s;
-  const sL = view.tx + SHEET.x * view.s, sT = view.ty + SHEET.y * view.s;
-  const sR = view.tx + (SHEET.x + SHEET.w) * view.s, sB = view.ty + (SHEET.y + SHEET.h) * view.s;
-  const clipRect = `polygon(${sL}px ${sT}px, ${sR}px ${sT}px, ${sR}px ${sB}px, ${sL}px ${sB}px)`;
-  // White sheet (like the editor's paper) with the editor's grid over it.
+  // White paper with the editor's grid over it, edge to edge.
   const gridStyle = {
     backgroundColor: "#FFFFFF",
     backgroundImage: layers.grid
@@ -863,15 +857,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       : "none",
     backgroundSize: `${gridSz}px ${gridSz}px`,
     backgroundPosition: `${view.tx}px ${view.ty}px`,
-    clipPath: clipRect, WebkitClipPath: clipRect,
   };
-  const choiceRow = (opts, value, set, fmt = (v) => v) => (
-    <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${opts.length}, minmax(0, 1fr))` }}>
-      {opts.map((v) => <button key={v} onClick={() => set(v)} className={panelChoice(value === v)}>{fmt(v)}</button>)}
-    </div>
-  );
-  const rule = "pt-3 border-t border-slate-200 dark:border-[#263441]";
-
   return (
     <div className="cadv absolute inset-0 flex flex-col bg-slate-100 text-slate-900 dark:bg-[#0E141B] dark:text-slate-100 overflow-hidden select-none"
          style={{ fontFamily: "var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif" }}>
@@ -947,33 +933,33 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
         {/* ==================== LEFT PANEL ==================== */}
         {!panelsHidden && (
           <SidePanel side="left" title="Floor plan" eyebrow="SKETCH">
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
-              <div>
-                <div className={`${PANEL_LABEL} mb-2`}>Snap grid</div>
-                {choiceRow([50, 100, 250], settings.grid, (v) => setSettings((s) => ({ ...s, grid: v })), (v) => v + " mm")}
-              </div>
-              <div className={rule}>
-                <div className={`${PANEL_LABEL} mb-2`}>Drawing aids</div>
-                <div className="grid grid-cols-2 gap-1">
-                  <button onClick={() => setFlags((f) => ({ ...f, ortho: !f.ortho }))} className={panelChoice(flags.ortho)}>Lock angles</button>
-                  <button onClick={() => setFlags((f) => ({ ...f, gridSnap: !f.gridSnap }))} className={panelChoice(flags.gridSnap)}>Snap</button>
-                </div>
-              </div>
-              <div className={rule}>
-                <div className={`${PANEL_LABEL} mb-1.5`}>Layers</div>
-                <div className="flex flex-col">
-                  {LAYER_LIST.map(([id, label]) => (
-                    <button key={id} onClick={() => setLayers((l) => ({ ...l, [id]: !l[id] }))}
-                      className={`flex items-center gap-2.5 px-2 h-8 rounded-md text-[12px] text-left transition-colors hover:bg-slate-200/60 dark:hover:bg-white/5 ${layers[id] ? "text-slate-800 dark:text-slate-100" : "text-slate-400 dark:text-slate-500"}`}>
-                      <span className={`w-2.5 h-2.5 rounded-[3px] shrink-0 ring-1 ${layers[id] ? "bg-[#3FB7C9] ring-[#3FB7C9]" : "bg-transparent ring-slate-300 dark:ring-slate-600"}`} />
-                      {label}
+            <div className="flex-1 overflow-y-auto px-3 py-3">
+              <section className="mb-5">
+                <SectionLabel>Snap grid</SectionLabel>
+                <ChoiceGroup label="Snap grid" value={settings.grid} onChange={(v) => setSettings((s) => ({ ...s, grid: v }))}
+                  options={[50, 100, 250].map((v) => ({ value: v, label: v + " mm" }))} />
+              </section>
+              <section className="mb-5">
+                <SectionLabel className="mb-1">Drawing aids</SectionLabel>
+                <ToggleRow label="Lock angles" hint="Walls run at 0°, 45° or 90°" checked={flags.ortho}
+                  onChange={(v) => setFlags((f) => ({ ...f, ortho: v }))} />
+                <ToggleRow label="Snap to grid" hint={`Points land on the ${settings.grid} mm grid`} checked={flags.gridSnap}
+                  onChange={(v) => setFlags((f) => ({ ...f, gridSnap: v }))} />
+              </section>
+              <section>
+                <SectionLabel className="mb-1">Layers</SectionLabel>
+                {LAYER_LIST.map(([id, label]) => {
+                  const on = layers[id];
+                  return (
+                    <button key={id} type="button" role="switch" aria-checked={on} title={on ? `Hide ${label.toLowerCase()}` : `Show ${label.toLowerCase()}`}
+                      onClick={() => setLayers((l) => ({ ...l, [id]: !l[id] }))}
+                      className="w-full flex items-center gap-2.5 px-1.5 h-9 rounded-lg text-left hover:bg-slate-200/60 dark:hover:bg-white/5 transition-colors">
+                      <span className={`flex-1 text-[13px] font-medium ${on ? "text-slate-800 dark:text-slate-100" : "text-slate-500 dark:text-slate-400 line-through decoration-slate-400/60"}`}>{label}</span>
+                      {on ? <Eye size={17} className="shrink-0 text-[#1C6F7C] dark:text-[#5FD0E0]" /> : <EyeOff size={17} className="shrink-0 text-slate-500 dark:text-slate-400" />}
                     </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <div className="border-t border-slate-200 dark:border-[#263441] px-4 py-3 bg-[#E3EAF3] dark:bg-[#141C24] text-[9px] text-slate-500 leading-relaxed">
-              A tool stays on until you press Esc or pick Select. Esc once cancels what you're drawing; again leaves the tool.
+                  );
+                })}
+              </section>
             </div>
           </SidePanel>
         )}
@@ -984,7 +970,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
             onSwitch={() => {}} onDelete={() => {}}
             onRename={(_, nm) => { if (nm !== sketchName) { setSketchName(nm); setSaveState((st) => (st === "saving" ? st : "unsaved")); } }} />
           <div className="relative flex-1 overflow-hidden">
-          <div ref={wrapRef} className="absolute inset-0 overflow-hidden" style={{ background: SURROUND }}>
+          <div ref={wrapRef} className="absolute inset-0 overflow-hidden bg-white">
             <div ref={gridRef} style={{ position: "absolute", inset: 0, pointerEvents: "none", transformOrigin: "0 0", willChange: PROMOTE, ...gridStyle }} />
             <svg ref={svgRef} className="cadv__svg" width="100%" height="100%" style={{ cursor: svgCursor, transformOrigin: "0 0", willChange: PROMOTE }}
               onPointerDown={handleDown} onPointerMove={handleMove} onPointerUp={handleUp} onPointerCancel={handleUp}
@@ -999,13 +985,8 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
           </div>
 
           <FloatingToolbar tool={tool} setTool={pickTool} tools={CANVAS_TOOLS} />
-          {isWallTool && (
-            <WallTypeChooser className="top-4 left-16" value={tool === "int" ? "internal" : "external"}
-              onChange={(t) => pickTool(t === "internal" ? "int" : "ext")}
-              hint={draftPts.length ? "click end · Esc cancels" : `click start · click end · Esc exits · ${tool === "int" ? T_INT : T_EXT} mm`} />
-          )}
           <ZoomControls zoom={view.s / 0.08} onIn={() => zoomBy(1.2)} onOut={() => zoomBy(1 / 1.2)} onFit={() => fit()} />
-          <div className="absolute left-4 bottom-11 z-20 flex items-center gap-3 px-3 h-8 bg-white dark:bg-[#16202B] rounded-xl ring-1 ring-slate-200/70 dark:ring-[#2A3947] shadow-[0_10px_30px_-10px_rgba(16,28,40,0.22)] text-[10px] text-slate-600 dark:text-slate-300"
+          <div className="absolute left-4 bottom-11 z-20 flex items-center gap-3 px-3 h-8 bg-white dark:bg-[#16202B] rounded-xl ring-1 ring-slate-200/70 dark:ring-[#2A3947] shadow-[0_10px_30px_-10px_rgba(16,28,40,0.22)] text-[11px] text-slate-700 dark:text-slate-200"
                style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>
             <span className="font-semibold">N &#8593;</span>
             <span className="inline-flex h-1.5 ring-1 ring-slate-400"><i className="w-5 bg-slate-600 dark:bg-slate-300" /><i className="w-5 bg-white dark:bg-[#16202B]" /><i className="w-5 bg-slate-600 dark:bg-slate-300" /></span>
@@ -1013,9 +994,6 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
           </div>
 
           <StatusBar right={<>X {Math.round(cur.x)} Y {Math.round(cur.y)} · GRID {settings.grid}MM · <span className={saveState === "unsaved" || saveState === "error" ? "text-amber-600" : ""}>{SAVE_LABEL[saveState]}</span></>}>
-            <StatusCount label="WALLS" value={model.walls.length} />
-            <StatusCount label="DOORS" value={model.doors.length} />
-            <StatusCount label="WINDOWS" value={model.windows.length} />
             <span>TOOL <span className="text-[#22808F] ml-1">{TOOL_NAME[tool].toUpperCase()}</span></span>
             <span className="text-[#22808F]">{hint}</span>
           </StatusBar>
@@ -1027,102 +1005,64 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
           <CollapsedPanel onExpand={() => setInspectorHidden(false)} />
         ) : (
           <SidePanel side="right" title="Inspector" onCollapse={() => setInspectorHidden(true)}>
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div className="flex-1 overflow-y-auto p-4">
               {selWall ? (
                 <>
-                  <div>
-                    <div className={`${PANEL_LABEL} mb-2`}>Wall</div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <Stat label="Length" value={fmtMM(segLen(selWall)) + " mm"} />
-                      <Stat label="Thickness" value={(selWall.type === "external" ? T_EXT : T_INT) + " mm"} />
-                    </div>
-                  </div>
-                  <div className={rule}>
-                    <div className={`${PANEL_LABEL} mb-2`}>Type</div>
-                    <div className="grid grid-cols-2 gap-1">
-                      {["external", "internal"].map((t) => (
-                        <button key={t} onClick={() => selWall.type !== t && convertSel()} className={panelChoice(selWall.type === t)}>{t === "external" ? "External" : "Internal"}</button>
-                      ))}
-                    </div>
-                  </div>
-                  <div className={rule}>
-                    <button onClick={deleteSel} className={`w-full ${PANEL_BTN_DANGER}`}><Trash2 size={12} /> Delete wall</button>
-                  </div>
+                  <div className="text-[15px] font-semibold text-slate-900 dark:text-slate-100" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>Wall</div>
+                  <div className={`mt-1 mb-4 ${PANEL_HELP}`}>Change its type, or delete it.</div>
+                  <ScheduleRows rows={[["Length", fmtMM(segLen(selWall)) + " mm"], ["Thickness", (selWall.type === "external" ? T_EXT : T_INT) + " mm"]]} />
+                  <SectionLabel className="mt-5 mb-2">Wall type</SectionLabel>
+                  <ChoiceGroup label="Wall type" value={selWall.type} onChange={(t) => selWall.type !== t && convertSel()}
+                    options={[{ value: "external", label: "External" }, { value: "internal", label: "Internal" }]} />
+                  <PanelAction danger onClick={deleteSel} className="w-full mt-5"><Trash2 size={14} /> Delete wall</PanelAction>
                 </>
               ) : selDoor ? (
                 <>
-                  <div>
-                    <div className={`${PANEL_LABEL} mb-2`}>Door</div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <Stat label="Width" value={selDoor.w + " mm"} />
-                      <Stat label="Wall" value={selDoor.t === T_EXT ? "External" : "Internal"} />
-                    </div>
+                  <div className="text-[15px] font-semibold text-slate-900 dark:text-slate-100" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>Door</div>
+                  <div className={`mt-1 mb-4 ${PANEL_HELP}`}>Flip side swaps which room it opens into; flip hinge swaps the hinged edge.</div>
+                  <ScheduleRows rows={[["Width", selDoor.w + " mm"], ["Wall", selDoor.t === T_EXT ? "External" : "Internal"]]} />
+                  <SectionLabel className="mt-5 mb-2">Swing</SectionLabel>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <PanelAction onClick={flipSwing}>Flip side</PanelAction>
+                    <PanelAction onClick={flipHinge}>Flip hinge</PanelAction>
                   </div>
-                  <div className={rule}>
-                    <div className={`${PANEL_LABEL} mb-2`}>Swing</div>
-                    <div className="flex gap-2">
-                      <button onClick={flipSwing} className={`flex-1 ${PANEL_BTN}`}>Flip side</button>
-                      <button onClick={flipHinge} className={`flex-1 ${PANEL_BTN}`}>Flip hinge</button>
-                    </div>
-                    <div className="text-[10px] text-slate-600 dark:text-slate-300 mt-2 leading-relaxed">Flip side swaps which room the door opens into; flip hinge swaps the hinged edge. Between them you get all four swings.</div>
-                  </div>
-                  <div className={rule}>
-                    <button onClick={deleteSel} className={`w-full ${PANEL_BTN_DANGER}`}><Trash2 size={12} /> Delete door</button>
-                  </div>
+                  <PanelAction danger onClick={deleteSel} className="w-full mt-5"><Trash2 size={14} /> Delete door</PanelAction>
                 </>
               ) : selWin ? (
                 <>
-                  <div>
-                    <div className={`${PANEL_LABEL} mb-2`}>Window</div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <Stat label="Width" value={selWin.w + " mm"} />
-                      <Stat label="Wall" value={selWin.t === T_EXT ? "External" : "Internal"} />
-                    </div>
-                  </div>
-                  <div className={rule}>
-                    <div className={`${PANEL_LABEL} mb-2`}>Marking</div>
-                    <button onClick={toggleEscape} className={`w-full ${panelChoice(selWin.escape)}`}>Escape window</button>
-                  </div>
-                  <div className={rule}>
-                    <button onClick={deleteSel} className={`w-full ${PANEL_BTN_DANGER}`}><Trash2 size={12} /> Delete window</button>
-                  </div>
+                  <div className="text-[15px] font-semibold text-slate-900 dark:text-slate-100" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>Window</div>
+                  <div className={`mt-1 mb-4 ${PANEL_HELP}`}>Mark it as an escape window if it's the fire escape route.</div>
+                  <ScheduleRows rows={[["Width", selWin.w + " mm"], ["Wall", selWin.t === T_EXT ? "External" : "Internal"]]} />
+                  <div className="mt-4"><ToggleRow label="Escape window" checked={!!selWin.escape} onChange={() => toggleEscape()} /></div>
+                  <PanelAction danger onClick={deleteSel} className="w-full mt-5"><Trash2 size={14} /> Delete window</PanelAction>
                 </>
               ) : (
                 <>
-                  <div>
-                    <div className={`${PANEL_LABEL} mb-2`}>Tool</div>
-                    <div className="text-sm font-medium text-slate-900 dark:text-slate-100">{TOOL_NAME[tool]}</div>
-                    <div className="text-[10px] text-slate-600 dark:text-slate-300 mt-1.5 leading-relaxed">{hint}</div>
-                  </div>
+                  <div className="text-[15px] font-semibold text-slate-900 dark:text-slate-100" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>{TOOL_NAME[tool]}</div>
+                  <div className={`mt-1 ${PANEL_HELP}`}>{hint}</div>
                   {isWallTool && (
-                    <div className={rule}>
-                      <div className={`${PANEL_LABEL} mb-2`}>Wall type</div>
-                      <div className="grid grid-cols-2 gap-1">
-                        <button onClick={() => pickTool("ext")} className={panelChoice(tool === "ext")}>External · {T_EXT}</button>
-                        <button onClick={() => pickTool("int")} className={panelChoice(tool === "int")}>Internal · {T_INT}</button>
-                      </div>
-                    </div>
+                    <>
+                      <SectionLabel className="mt-5 mb-2">Wall type</SectionLabel>
+                      <ChoiceGroup label="Wall type" value={tool === "int" ? "int" : "ext"} onChange={pickTool}
+                        options={[{ value: "ext", label: `External ${T_EXT}` }, { value: "int", label: `Internal ${T_INT}` }]} />
+                    </>
                   )}
                   {tool === "door" && (
-                    <div className={rule}>
-                      <div className={`${PANEL_LABEL} mb-2`}>Door width</div>
-                      {choiceRow([760, 850, 960], settings.doorW, (v) => setSettings((s) => ({ ...s, doorW: v })))}
-                    </div>
+                    <>
+                      <SectionLabel className="mt-5 mb-2">Door width</SectionLabel>
+                      <ChoiceGroup label="Door width" value={settings.doorW} onChange={(v) => setSettings((s) => ({ ...s, doorW: v }))}
+                        options={[760, 850, 960].map((v) => ({ value: v, label: String(v) }))} />
+                    </>
                   )}
                   {tool === "window" && (
-                    <div className={rule}>
-                      <div className={`${PANEL_LABEL} mb-2`}>Window width</div>
-                      {choiceRow([600, 900, 1200], settings.winW, (v) => setSettings((s) => ({ ...s, winW: v })))}
-                    </div>
+                    <>
+                      <SectionLabel className="mt-5 mb-2">Window width</SectionLabel>
+                      <ChoiceGroup label="Window width" value={settings.winW} onChange={(v) => setSettings((s) => ({ ...s, winW: v }))}
+                        options={[600, 900, 1200].map((v) => ({ value: v, label: String(v) }))} />
+                    </>
                   )}
-                  <div className={rule}>
-                    <div className={`${PANEL_LABEL} mb-2`}>Plan</div>
-                    <div className="grid grid-cols-3 gap-2">
-                      <Stat label="Walls" value={model.walls.length} />
-                      <Stat label="Doors" value={model.doors.length} />
-                      <Stat label="Windows" value={model.windows.length} />
-                    </div>
-                  </div>
+                  <SectionLabel className="mt-6 mb-1">Plan</SectionLabel>
+                  <ScheduleRows rows={[["Walls", model.walls.length], ["Doors", model.doors.length], ["Windows", model.windows.length], ["Rooms", model.rooms.length], ["Dimensions", model.dims.length]]} />
                 </>
               )}
             </div>

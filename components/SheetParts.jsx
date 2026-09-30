@@ -486,7 +486,7 @@ export function Palette({ onPalettePointerDown, onFurniturePointerDown, symbolSc
               if (!items.length) return null;
               return (
                 <section key={grp} className="mb-4 last:mb-1">
-                  <div className="px-0.5 mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">{grp}</div>
+                  <div className={`px-0.5 mb-2 ${SECTION_LABEL}`}>{grp}</div>
                   <div className="grid grid-cols-2 gap-2.5">
                     {items.map((item) => <FurnTile key={item.id} item={item} />)}
                   </div>
@@ -505,7 +505,7 @@ export function Palette({ onPalettePointerDown, onFurniturePointerDown, symbolSc
         ) : (
           groups.map((g) => (
             <section key={g.label} className="mb-4 last:mb-1">
-              <div className="px-0.5 mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">{g.label}</div>
+              <div className={`px-0.5 mb-2 ${SECTION_LABEL}`}>{g.label}</div>
               <div className="grid grid-cols-2 gap-2.5">
                 {g.items.map(({ sym, meta }) => <Tile key={sym.id} sym={sym} meta={meta} />)}
               </div>
@@ -585,6 +585,85 @@ export const panelChoice = (on) => `px-1 py-1 text-[9px] tracking-wider rounded-
 }`;
 export const PANEL_BTN = "px-3 py-2 bg-slate-50 ring-1 ring-slate-200 hover:bg-slate-100 dark:bg-[#22303D] dark:ring-[#2A3947] dark:hover:bg-[#283643] text-slate-800 dark:text-slate-200 rounded-md text-[10px] uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all";
 export const PANEL_BTN_DANGER = "px-3 py-2 bg-slate-50 ring-1 ring-slate-200 dark:bg-[#22303D] dark:ring-[#2A3947] hover:bg-red-500/[0.1] hover:text-red-300 text-slate-800 dark:text-slate-200 rounded-md text-[10px] uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all";
+
+/* Panel section label -- "SOCKETS & DATA" in the symbol palette, and the
+ * section labels in the Sketch a plan panels. slate-600 / slate-400 keep it
+ * AA on the panel colours in light and dark. */
+export const SECTION_LABEL = "text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600 dark:text-slate-400";
+export function SectionLabel({ children, className = "mb-2" }) {
+  return <div className={`px-0.5 ${className} ${SECTION_LABEL}`}>{children}</div>;
+}
+
+// Readable panel body / helper text (13px / 12px, AA in both themes).
+export const PANEL_TEXT = "text-[13px] leading-snug text-slate-800 dark:text-slate-100";
+export const PANEL_HELP = "text-[12px] leading-relaxed text-slate-600 dark:text-slate-300";
+
+/* Pick-one control. Selected = the app's solid teal button (navy text);
+ * unselected = white with a thin border. Obvious at a glance which is on. */
+export function ChoiceGroup({ options, value, onChange, label }) {
+  return (
+    <div role="radiogroup" aria-label={label} className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}>
+      {options.map((o) => {
+        const on = o.value === value;
+        return (
+          <button key={String(o.value)} type="button" role="radio" aria-checked={on} onClick={() => onChange(o.value)}
+            className={`h-9 px-1.5 rounded-lg text-[13px] font-semibold whitespace-nowrap transition-colors ${
+              on ? "bg-[var(--action)] text-[color:var(--action-ink)] ring-1 ring-[var(--action)] hover:bg-[var(--action-hover)]"
+                 : "bg-white text-[#1A2530] ring-1 ring-slate-300 hover:bg-slate-50 dark:bg-[#0E141B] dark:text-slate-100 dark:ring-[#2A3947] dark:hover:bg-[#16202B]"
+            }`}>
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// A settings row: label (and optional helper line) left, on/off switch right.
+export function ToggleRow({ label, hint = null, checked, onChange }) {
+  return (
+    <button type="button" role="switch" aria-checked={checked} onClick={() => onChange(!checked)}
+      className="w-full flex items-center gap-3 py-1.5 text-left">
+      <span className="flex-1 min-w-0">
+        <span className={`block font-medium ${PANEL_TEXT}`}>{label}</span>
+        {hint && <span className={`block ${PANEL_HELP}`}>{hint}</span>}
+      </span>
+      <span aria-hidden className={`relative shrink-0 w-10 h-6 rounded-full transition-colors ${checked ? "bg-[var(--action)]" : "bg-slate-300 dark:bg-[#2A3947]"}`}>
+        <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${checked ? "translate-x-4" : ""}`} />
+      </span>
+    </button>
+  );
+}
+
+// Schedule-style list: label left, teal number / value right (as the editor's
+// Inspector schedule).
+export function ScheduleRows({ rows }) {
+  return (
+    <table className="w-full tabular-nums">
+      <tbody>
+        {rows.map(([name, v]) => (
+          <tr key={name} className="border-b border-slate-200 dark:border-[#263441] last:border-0">
+            <td className={`py-2 ${PANEL_TEXT}`}>{name}</td>
+            <td className="py-2 text-right text-[13px] text-[#1C6F7C] dark:text-[#5FD0E0] font-semibold">{v}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+// Readable panel button (13px). danger = delete.
+export function PanelAction({ onClick, children, danger = false, className = "" }) {
+  return (
+    <button type="button" onClick={onClick}
+      className={`h-9 px-3 rounded-lg text-[13px] font-semibold flex items-center justify-center gap-1.5 ring-1 transition-colors ${className} ${
+        danger ? "bg-white text-red-700 ring-red-300 hover:bg-red-50 dark:bg-[#0E141B] dark:text-red-300 dark:ring-red-400/40 dark:hover:bg-red-500/10"
+               : "bg-white text-[#1A2530] ring-slate-300 hover:bg-slate-50 dark:bg-[#0E141B] dark:text-slate-100 dark:ring-[#2A3947] dark:hover:bg-[#16202B]"
+      }`}>
+      {children}
+    </button>
+  );
+}
 
 /* ============================================================================
  * WORKSPACE — the dark surround + the sheet inside it
