@@ -17,7 +17,7 @@ import {
 import { findFurniture, furnitureScale, FURNITURE_VIEWBOX, FURNITURE_COLOUR } from "@/lib/furniture.jsx";
 import {
   TopBar, Palette as PalettePanel, Workspace, Inspector,
-  FloatingToolbar, ZoomControls, MetaEditor, PrintPreview, BillOfQuantities,
+  FloatingToolbar, ZoomControls, WallTypeChooser, StatusBar, StatusCount, CollapsedPanel, MetaEditor, PrintPreview, BillOfQuantities,
   ProjectManager, SheetTabs, TitleBlockEditor, NotesEditor,
   ProjectTitleBlockContext,
 } from "@/components/SheetParts";
@@ -1999,20 +1999,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
           )}
 
           {/* Wall-type chooser — only while the wall tool is active */}
-          {tool === "wall" && (
-            <div className="absolute top-4 left-44 z-20 flex items-center gap-1 bg-white dark:bg-[#16202B] rounded-xl ring-1 ring-slate-200/70 dark:ring-[#2A3947] shadow-[0_10px_30px_-10px_rgba(16,28,40,0.22)] p-1">
-              {["external", "internal"].map((t) => (
-                <button key={t} onClick={() => setWallType(t)}
-                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold uppercase tracking-wide transition-colors ${
-                    wallType === t ? "bg-[#3FB7C9]/15 text-[#1C6E7B] ring-1 ring-[#3FB7C9]/45" : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/10"
-                  }`}>
-                  {t === "external" ? "External" : "Internal"}
-                </button>
-              ))}
-              <div className="w-px h-5 bg-slate-200 dark:bg-[#2A3947] mx-0.5"/>
-              <span className="px-1.5 text-[10px] text-slate-500 dark:text-slate-400 whitespace-nowrap">click start · click end</span>
-            </div>
-          )}
+          {tool === "wall" && <WallTypeChooser value={wallType} onChange={setWallType} />}
 
           {/* Floating zoom toolbar */}
           <ZoomControls
@@ -2059,35 +2046,23 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
           )}
 
           {/* Status bar */}
-          <div className="absolute bottom-0 left-0 right-0 px-4 h-7 bg-white dark:bg-[#16202B] text-slate-500 dark:text-slate-400 text-[10px] tracking-wider flex justify-between items-center gap-4 border-t border-slate-200 dark:border-[#263441]">
-            {/* min-w-0 + overflow-hidden: on a narrow screen a long tool hint is
-                clipped here rather than squashing the sheet info on the right. */}
-            <div className="flex items-center gap-5 min-w-0 overflow-hidden whitespace-nowrap">
-              <span>SYMBOLS <span className="text-[#22808F] ml-1" style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>{placed.length}</span></span>
-              <span>WIRES <span className="text-[#22808F] ml-1" style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>{wires.length}</span></span>
-              <span>NOTES <span className="text-[#22808F] ml-1" style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>{annotations.length}</span></span>
-              <span>TOOL <span className="text-[#22808F] ml-1">{tool.toUpperCase()}</span></span>
-              {tool === "wire" && wireStart && <span className="text-[#22808F] animate-pulse">→ click target</span>}
-              {tool === "note" && <span className="text-[#22808F]">click drawing area to add</span>}
-              {tool === "wall" && <span className="text-[#22808F]">{wallDraft ? "click to set the end point" : "click to start a wall"}</span>}
-              {spacePressed && <span className="text-[#22808F]">PAN</span>}
-            </div>
-            <div className="text-slate-400 shrink-0 whitespace-nowrap" style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>
-              SHEET A3 · {meta.scale}
-            </div>
-          </div>
+          <StatusBar right={<>SHEET A3 · {meta.scale}</>}>
+            <StatusCount label="SYMBOLS" value={placed.length} />
+            <StatusCount label="WIRES" value={wires.length} />
+            <StatusCount label="NOTES" value={annotations.length} />
+            <span>TOOL <span className="text-[#22808F] ml-1">{tool.toUpperCase()}</span></span>
+            {tool === "wire" && wireStart && <span className="text-[#22808F] animate-pulse">→ click target</span>}
+            {tool === "note" && <span className="text-[#22808F]">click drawing area to add</span>}
+            {tool === "wall" && <span className="text-[#22808F]">{wallDraft ? "click to set the end point" : "click to start a wall"}</span>}
+            {spacePressed && <span className="text-[#22808F]">PAN</span>}
+          </StatusBar>
           </div>
         </main>
 
         {/* ==================== RIGHT INSPECTOR ==================== */}
         {!sidebarHidden && (
           inspectorHidden ? (
-            <div className="w-9 bg-[#EBEFF6] dark:bg-[#1A2530] border-l border-slate-200 dark:border-[#263441] flex flex-col items-center pt-1.5">
-              <button onClick={() => setInspectorHidden(false)} title="Show inspector"
-                className="w-8 h-8 flex items-center justify-center rounded-md text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-200/70 dark:hover:bg-[#263441]">
-                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
-              </button>
-            </div>
+            <CollapsedPanel onExpand={() => setInspectorHidden(false)} />
           ) : (
             <Inspector
               selectedItem={selectedItem}

@@ -95,20 +95,12 @@ export function TopBar({
   const projectLabel = meta.projectName || "Untitled Project";
   const sheetLabel = meta.sheetName || "Drawing";
   return (
-    <header className="relative z-30 flex items-center px-3 h-12 bg-white dark:bg-[#16202B] border-b border-slate-200 dark:border-[#263441] whitespace-nowrap">
+    <TopBarShell>
       {/* 1. Back + project */}
       <TbGroup first>
         {onHome && <TbButton onClick={onHome} icon={ChevronLeft} label="Dashboard" title="Back to dashboard" />}
-        <span className="hidden min-[1600px]:inline font-semibold text-[15px] tracking-tight px-1 text-slate-900 dark:text-white"
-          style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>
-          Plot<span className="text-[#3FB7C9]">wire</span>
-        </span>
-        <button onClick={onShowMeta} title={`${projectLabel} — ${sheetLabel}`}
-          className="group h-8 flex items-center gap-1.5 px-2 min-[1300px]:px-2.5 rounded-lg bg-[var(--action)] hover:bg-[var(--action-hover)] text-[color:var(--action-ink)] transition-colors text-[11px] font-semibold min-w-0">
-          <FileText size={14} className="opacity-70 shrink-0"/>
-          <span className="truncate max-w-[100px] min-[1300px]:max-w-[220px]">{projectLabel}</span>
-          <ChevronRight size={12} className="opacity-70 shrink-0"/>
-        </button>
+        <TbBrand />
+        <TbProjectPill label={projectLabel} title={`${projectLabel} — ${sheetLabel}`} onClick={onShowMeta} />
       </TbGroup>
 
       {/* 2. File */}
@@ -143,14 +135,54 @@ export function TopBar({
       </TbGroup>
 
       {/* 6. Try mode: Trial pill + Subscribe, far right */}
-      {trialPill && <div className="ml-auto pl-4 flex items-center shrink-0">{trialPill}</div>}
+      <TbTrialSlot>{trialPill}</TbTrialSlot>
+    </TopBarShell>
+  );
+}
+
+/* The toolbar parts below are shared with the Sketch a plan tool
+ * (components/cad/CadSketch.jsx) so the two screens stay one app. */
+
+// The bar itself: 48px, white / navy, one row.
+export function TopBarShell({ children }) {
+  return (
+    <header className="relative z-30 flex items-center px-3 h-12 bg-white dark:bg-[#16202B] border-b border-slate-200 dark:border-[#263441] whitespace-nowrap">
+      {children}
     </header>
   );
 }
 
+// Plotwire wordmark: only from 1600px, where there is room for it.
+export function TbBrand() {
+  return (
+    <span className="hidden min-[1600px]:inline font-semibold text-[15px] tracking-tight px-1 text-slate-900 dark:text-white"
+      style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>
+      Plot<span className="text-[#3FB7C9]">wire</span>
+    </span>
+  );
+}
+
+// The project / sketch name pill; truncates sooner under 1300px.
+export function TbProjectPill({ label, title, onClick, icon: Icon = FileText }) {
+  return (
+    <button type="button" onClick={onClick} title={title || label}
+      className="group h-8 flex items-center gap-1.5 px-2 min-[1300px]:px-2.5 rounded-lg bg-[var(--action)] hover:bg-[var(--action-hover)] text-[color:var(--action-ink)] transition-colors text-[11px] font-semibold min-w-0">
+      <Icon size={14} className="opacity-70 shrink-0"/>
+      <span className="truncate max-w-[100px] min-[1300px]:max-w-[220px]">{label}</span>
+      <ChevronRight size={12} className="opacity-70 shrink-0"/>
+    </button>
+  );
+}
+
+// Far right: the Try mode Trial pill + Subscribe (nothing otherwise).
+export function TbTrialSlot({ children }) {
+  if (!children) return null;
+  return <div className="ml-auto pl-4 flex items-center shrink-0">{children}</div>;
+}
+
 // One toolbar group: a subtle divider with 8px either side (16px + 1px
 // between groups), then the group's buttons 6px apart.
-function TbGroup({ first = false, label, children }) {
+export function TbGroup({ first = false, label, children }) {
   return (
     <>
       {!first && <div aria-hidden className="w-px h-6 bg-slate-200 dark:bg-[#2A3947] mx-2 shrink-0" />}
@@ -161,15 +193,21 @@ function TbGroup({ first = false, label, children }) {
 
 // The standard action button: solid teal, navy icon and label. iconOnly for
 // Undo/Redo (the title is the tooltip and the accessible name). shortLabel
-// replaces the label under 1300px.
-function TbButton({ onClick, icon: Icon, label, shortLabel, title, iconOnly = false, flash = false, trailing = null, buttonProps = {} }) {
+// replaces the label under 1300px; collapse drops the label under 1300px
+// (icon only, the title is the tooltip). active marks the tool in use:
+// navy with a teal ring and icon, the teal button inverted.
+export function TbButton({ onClick, icon: Icon, label, shortLabel, title, iconOnly = false, collapse = false, active = false, flash = false, disabled = false, trailing = null, buttonProps = {} }) {
+  const size = iconOnly ? "w-8" : collapse ? "w-8 min-[1300px]:w-auto min-[1300px]:px-2.5" : "px-2 min-[1300px]:px-2.5";
+  const tone = flash ? "bg-emerald-500 text-white"
+    : active ? "bg-[#1A2530] text-[#5FD0E0] ring-2 ring-inset ring-[#3FB7C9] dark:bg-[#0B1117]"
+    : "bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)]";
   return (
-    <button type="button" onClick={onClick} title={title || label} aria-label={iconOnly ? title : undefined} {...buttonProps}
-      className={`h-8 shrink-0 flex items-center justify-center gap-1.5 rounded-lg text-[11px] font-semibold transition-colors ${iconOnly ? "w-8" : "px-2 min-[1300px]:px-2.5"} ${
-        flash ? "bg-emerald-500 text-white" : "bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)]"
-      }`}>
+    <button type="button" onClick={onClick} title={title || label} disabled={disabled}
+      aria-label={iconOnly || collapse ? (title || label) : undefined}
+      aria-pressed={active ? true : undefined} {...buttonProps}
+      className={`h-8 shrink-0 flex items-center justify-center gap-1.5 rounded-lg text-[11px] font-semibold transition-colors disabled:opacity-50 disabled:cursor-default ${size} ${tone}`}>
       <Icon size={15} className="shrink-0" />
-      {!iconOnly && (shortLabel ? (
+      {!iconOnly && (collapse ? <span className="hidden min-[1300px]:inline">{label}</span> : shortLabel ? (
         <>
           <span className="hidden min-[1300px]:inline">{label}</span>
           <span className="min-[1300px]:hidden">{shortLabel}</span>
@@ -180,11 +218,15 @@ function TbButton({ onClick, icon: Icon, label, shortLabel, title, iconOnly = fa
   );
 }
 
-// "View" dropdown: Grid, Reset sizes, colour mode, Hide panels, Light/dark.
-// Stays open while you try options; closes on Escape or a click elsewhere.
-function ViewMenu({ snapEnabled, onToggleSnap, onNormalise, normaliseFlash, colourMode, onToggleColour,
-                    sidebarHidden, onToggleSidebar, theme, onToggleTheme }) {
-  const [open, setOpen] = useState(false);
+// A toolbar dropdown: a TbButton with a chevron and a menu under it. Stays
+// open while you try options; closes on Escape or a click elsewhere. `open`
+// and `onOpenChange` are optional, for a menu that is opened from elsewhere.
+// children may be a function of close().
+export const TB_MENU_ITEM = "w-full flex items-center gap-2.5 px-3 h-9 rounded-lg text-[12px] font-medium text-slate-700 dark:text-slate-200 hover:bg-[#ECF8FA] dark:hover:bg-white/10 text-left";
+export function TbMenu({ icon, label, title, open: openProp, onOpenChange, width = "w-60", children }) {
+  const [openState, setOpenState] = useState(false);
+  const open = openProp ?? openState;
+  const setOpen = (v) => { const n = typeof v === "function" ? v(open) : v; setOpenState(n); onOpenChange && onOpenChange(n); };
   const ref = useRef(null);
   useEffect(() => {
     if (!open) return;
@@ -193,47 +235,65 @@ function ViewMenu({ snapEnabled, onToggleSnap, onNormalise, normaliseFlash, colo
     document.addEventListener("pointerdown", away);
     document.addEventListener("keydown", esc);
     return () => { document.removeEventListener("pointerdown", away); document.removeEventListener("keydown", esc); };
-  }, [open]);
-  const colourLabel = colourMode === "navy" ? "Navy" : colourMode === "red" ? "PB Red" : colourMode === "colour" ? "Colour" : "Mono";
-  const item = "w-full flex items-center gap-2.5 px-3 h-9 rounded-lg text-[12px] font-medium text-slate-700 dark:text-slate-200 hover:bg-[#ECF8FA] dark:hover:bg-white/10 text-left";
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div ref={ref} className="relative">
-      <TbButton onClick={() => setOpen(o => !o)} icon={SlidersHorizontal} label="View" title="View options"
+      <TbButton onClick={() => setOpen(o => !o)} icon={icon} label={label} title={title}
         trailing={<ChevronDown size={13} className={`shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />}
         buttonProps={{ "aria-haspopup": "menu", "aria-expanded": open }} />
       {open && (
-        <div role="menu" aria-label="View" className="absolute left-0 top-full mt-1.5 w-60 p-1.5 rounded-xl bg-white dark:bg-[#16202B] ring-1 ring-slate-200 dark:ring-[#2A3947] shadow-[0_16px_40px_-12px_rgba(15,23,42,0.35)] z-50">
-          <button type="button" role="menuitemcheckbox" aria-checked={Boolean(snapEnabled)} onClick={onToggleSnap} className={item}>
-            <Grid3x3 size={15} className="shrink-0 text-[#22808F]" /> <span className="flex-1">Grid</span>
-            {snapEnabled && <Check size={14} className="text-[#22808F]" />}
-          </button>
-          <button type="button" role="menuitem" onClick={onNormalise} className={item} title="Make all symbols the same size">
-            <Ruler size={15} className="shrink-0 text-[#22808F]" /> <span className="flex-1">{normaliseFlash ? "Sizes reset ✓" : "Reset sizes"}</span>
-          </button>
-          <button type="button" role="menuitem" onClick={onToggleColour} className={item} title="Cycle the symbol colours">
-            <PaletteIcon size={15} className="shrink-0 text-[#22808F]" /> <span className="flex-1">Colours</span>
-            <span className="text-[11px] font-semibold text-[#22808F]">{colourLabel}</span>
-          </button>
-          <button type="button" role="menuitem" onClick={onToggleSidebar} className={item}>
-            {sidebarHidden ? <PanelLeftOpen size={15} className="shrink-0 text-[#22808F]" /> : <PanelLeftClose size={15} className="shrink-0 text-[#22808F]" />}
-            <span className="flex-1">{sidebarHidden ? "Show panels" : "Hide panels"}</span>
-          </button>
-          {onToggleTheme && (
-            <button type="button" role="menuitem" onClick={onToggleTheme} className={item}>
-              {theme === "dark" ? <Sun size={15} className="shrink-0 text-[#22808F]" /> : <Moon size={15} className="shrink-0 text-[#22808F]" />}
-              <span className="flex-1">{theme === "dark" ? "Light mode" : "Dark mode"}</span>
-            </button>
-          )}
+        <div role="menu" aria-label={label} className={`absolute left-0 top-full mt-1.5 ${width} p-1.5 rounded-xl bg-white dark:bg-[#16202B] ring-1 ring-slate-200 dark:ring-[#2A3947] shadow-[0_16px_40px_-12px_rgba(15,23,42,0.35)] z-50`}>
+          {typeof children === "function" ? children(() => setOpen(false)) : children}
         </div>
       )}
     </div>
   );
 }
 
+// One row of a TbMenu. checked !== undefined makes it a checkbox item.
+export function TbMenuItem({ icon: Icon, label, onClick, title, checked, right = null }) {
+  const isCheck = checked !== undefined;
+  return (
+    <button type="button" role={isCheck ? "menuitemcheckbox" : "menuitem"} aria-checked={isCheck ? Boolean(checked) : undefined}
+      onClick={onClick} className={TB_MENU_ITEM} title={title}>
+      <Icon size={15} className="shrink-0 text-[#22808F]" /> <span className="flex-1">{label}</span>
+      {right}
+      {isCheck && checked && <Check size={14} className="text-[#22808F]" />}
+    </button>
+  );
+}
+
+// "View" dropdown: Grid, Reset sizes, colour mode, Hide panels, Light/dark.
+function ViewMenu({ snapEnabled, onToggleSnap, onNormalise, normaliseFlash, colourMode, onToggleColour,
+                    sidebarHidden, onToggleSidebar, theme, onToggleTheme }) {
+  const colourLabel = colourMode === "navy" ? "Navy" : colourMode === "red" ? "PB Red" : colourMode === "colour" ? "Colour" : "Mono";
+  return (
+    <TbMenu icon={SlidersHorizontal} label="View" title="View options">
+      <TbMenuItem icon={Grid3x3} label="Grid" checked={Boolean(snapEnabled)} onClick={onToggleSnap} />
+      <TbMenuItem icon={Ruler} label={normaliseFlash ? "Sizes reset ✓" : "Reset sizes"} onClick={onNormalise} title="Make all symbols the same size" />
+      <TbMenuItem icon={PaletteIcon} label="Colours" onClick={onToggleColour} title="Cycle the symbol colours"
+        right={<span className="text-[11px] font-semibold text-[#22808F]">{colourLabel}</span>} />
+      <TbPanelsItem hidden={sidebarHidden} onClick={onToggleSidebar} />
+      <TbThemeItem theme={theme} onClick={onToggleTheme} />
+    </TbMenu>
+  );
+}
+
+export function TbPanelsItem({ hidden, onClick }) {
+  return <TbMenuItem icon={hidden ? PanelLeftOpen : PanelLeftClose} label={hidden ? "Show panels" : "Hide panels"} onClick={onClick} />;
+}
+
+export function TbThemeItem({ theme, onClick }) {
+  if (!onClick) return null;
+  return <TbMenuItem icon={theme === "dark" ? Sun : Moon} label={theme === "dark" ? "Light mode" : "Dark mode"} onClick={onClick} />;
+}
+
 /* ============================================================================
  * SHEET TABS — switch between the drawings (floors) in a project
  * ========================================================================= */
-export function SheetTabs({ sheets, activeId, onSwitch, onAdd, onRename, onDelete }) {
+// Also the strip over the Sketch a plan canvas: one tab (the sketch), label
+// "Plan", no onAdd so there is no Add floor button.
+export function SheetTabs({ sheets, activeId, onSwitch, onAdd, onRename, onDelete, label = "Drawings" }) {
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState("");
   // Escape closes the input, and some browsers fire blur when a focused element
@@ -271,7 +331,7 @@ export function SheetTabs({ sheets, activeId, onSwitch, onAdd, onRename, onDelet
                     [&::-webkit-scrollbar]:h-0">
       <div className="flex items-center pr-1 text-[9px] font-medium tracking-wider text-slate-300/75 uppercase shrink-0"
            style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>
-        Drawings
+        {label}
       </div>
       {sheets.map(s => {
         const active = s.id === activeId;
@@ -321,12 +381,14 @@ export function SheetTabs({ sheets, activeId, onSwitch, onAdd, onRename, onDelet
           </div>
         );
       })}
+      {onAdd && (
       <button
         onClick={onAdd}
         title="Add another drawing (e.g. First floor)"
         className="flex items-center gap-1 px-2.5 my-1.5 rounded-lg text-[11px] font-medium text-[#5fd0e0] hover:bg-white/10 transition-colors shrink-0">
         <Plus size={13}/> Add floor
       </button>
+      )}
     </div>
   );
 }
@@ -389,11 +451,7 @@ export function Palette({ onPalettePointerDown, onFurniturePointerDown, symbolSc
 
   const floor = false; // Floor-plan furniture retired: the sketch is now the floor-plan tool
   return (
-    <aside className="w-64 bg-[#EBEFF6] dark:bg-[#1A2530] border-r border-slate-200 dark:border-[#263441] flex flex-col">
-      <div className="px-4 h-11 flex items-center justify-between bg-[#2C3E50] border-b border-black/25 shadow-sm">
-        <div className="text-[15px] font-semibold text-white" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>{floor ? "Floor Plan" : "Symbols"}</div>
-        <div className="text-[9px] tracking-wider text-slate-300/70 font-medium" style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>{floor ? "LAYOUT" : "MEP LEGEND"}</div>
-      </div>
+    <SidePanel side="left" title={floor ? "Floor Plan" : "Symbols"} eyebrow={floor ? "LAYOUT" : "MEP LEGEND"}>
 
       {!floor && (
       <div className="px-3 py-3 border-b border-slate-200 dark:border-[#263441]">
@@ -471,9 +529,62 @@ export function Palette({ onPalettePointerDown, onFurniturePointerDown, symbolSc
         Select a piece on the plan to move, rotate or delete it.
       </div>
       )}
+    </SidePanel>
+  );
+}
+
+/* ============================================================================
+ * SIDE PANELS — shared with the Sketch a plan tool
+ * ----------------------------------------------------------------------------
+ * The left panel has the navy header (title + mono eyebrow); the right one
+ * (Inspector) a plain header with an optional collapse arrow.
+ * ========================================================================= */
+export function SidePanel({ side = "left", title, eyebrow = null, onCollapse = null, children }) {
+  const left = side === "left";
+  return (
+    <aside className={`w-64 bg-[#EBEFF6] dark:bg-[#1A2530] ${left ? "border-r" : "border-l"} border-slate-200 dark:border-[#263441] flex flex-col`}>
+      {left ? (
+        <div className="px-4 h-11 flex items-center justify-between bg-[#2C3E50] border-b border-black/25 shadow-sm">
+          <div className="text-[15px] font-semibold text-white" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>{title}</div>
+          {eyebrow && <div className="text-[9px] tracking-wider text-slate-300/70 font-medium" style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>{eyebrow}</div>}
+        </div>
+      ) : (
+        <div className="pl-4 pr-2 h-11 flex items-center justify-between border-b border-slate-200 dark:border-[#263441]">
+          <div className="text-[15px] font-semibold text-slate-900 dark:text-slate-100" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>{title}</div>
+          {onCollapse && (
+            <button onClick={onCollapse} title={`Hide ${String(title).toLowerCase()}`}
+              className="w-8 h-8 flex items-center justify-center rounded-md text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-200/70 dark:hover:bg-[#263441]">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+            </button>
+          )}
+        </div>
+      )}
+      {children}
     </aside>
   );
 }
+
+// A collapsed right panel: a thin strip with the arrow to bring it back.
+export function CollapsedPanel({ onExpand, title = "Show inspector" }) {
+  return (
+    <div className="w-9 bg-[#EBEFF6] dark:bg-[#1A2530] border-l border-slate-200 dark:border-[#263441] flex flex-col items-center pt-1.5">
+      <button onClick={onExpand} title={title}
+        className="w-8 h-8 flex items-center justify-center rounded-md text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-200/70 dark:hover:bg-[#263441]">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+    </div>
+  );
+}
+
+// Inspector building blocks: the small uppercase section label, a choice chip
+// (on / off) and the slate panel button.
+export const PANEL_LABEL = "text-[9px] tracking-[0.2em] uppercase text-slate-500 dark:text-slate-400";
+export const panelChoice = (on) => `px-1 py-1 text-[9px] tracking-wider rounded-md transition-all ${
+  on ? "bg-[#D8F0F4] text-[#22808F] ring-1 ring-[#3FB7C9]/30 dark:bg-[#3FB7C9]/15 dark:text-[#5FD0E0] dark:ring-[#3FB7C9]/40"
+     : "bg-slate-50 text-slate-600 dark:text-slate-300 ring-1 ring-slate-200 hover:bg-slate-100 dark:bg-[#22303D] dark:ring-[#2A3947] dark:hover:bg-[#283643]"
+}`;
+export const PANEL_BTN = "px-3 py-2 bg-slate-50 ring-1 ring-slate-200 hover:bg-slate-100 dark:bg-[#22303D] dark:ring-[#2A3947] dark:hover:bg-[#283643] text-slate-800 dark:text-slate-200 rounded-md text-[10px] uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all";
+export const PANEL_BTN_DANGER = "px-3 py-2 bg-slate-50 ring-1 ring-slate-200 dark:bg-[#22303D] dark:ring-[#2A3947] hover:bg-red-500/[0.1] hover:text-red-300 text-slate-800 dark:text-slate-200 rounded-md text-[10px] uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all";
 
 /* ============================================================================
  * WORKSPACE — the dark surround + the sheet inside it
@@ -1573,16 +1684,7 @@ export function Inspector({
   rotateSelected, deleteSelected, placed, onCollapse,
 }) {
   return (
-    <aside className="w-64 bg-[#EBEFF6] dark:bg-[#1A2530] border-l border-slate-200 dark:border-[#263441] flex flex-col">
-      <div className="pl-4 pr-2 h-11 flex items-center justify-between border-b border-slate-200 dark:border-[#263441]">
-        <div className="text-[15px] font-semibold text-slate-900 dark:text-slate-100" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>Inspector</div>
-        {onCollapse && (
-          <button onClick={onCollapse} title="Hide inspector"
-            className="w-8 h-8 flex items-center justify-center rounded-md text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-200/70 dark:hover:bg-[#263441]">
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6"/></svg>
-          </button>
-        )}
-      </div>
+    <SidePanel side="right" title="Inspector" onCollapse={onCollapse}>
 
       {selectedItem ? (
         <SymbolInspector
@@ -1604,7 +1706,7 @@ export function Inspector({
       ) : (
         <EmptyInspector placed={placed} />
       )}
-    </aside>
+    </SidePanel>
   );
 }
 
@@ -1618,7 +1720,7 @@ function SymbolInspector({ item, updateLabel, setRotation, setItemScale, rotateS
                     [&::-webkit-scrollbar-thumb]:bg-white/10
                     [&::-webkit-scrollbar-thumb]:rounded-full">
       <div>
-        <div className="text-[9px] tracking-[0.2em] uppercase text-slate-500 dark:text-slate-400 mb-2">Type</div>
+        <div className={`${PANEL_LABEL} mb-2`}>Type</div>
         <div className="flex items-center gap-3">
           <svg viewBox={VIEWBOX} width="44" height="44"
                style={{ color: cols.body, "--feeder": cols.feeder, filter: `drop-shadow(0 0 8px ${cols.body}50)` }}
@@ -1636,7 +1738,7 @@ function SymbolInspector({ item, updateLabel, setRotation, setItemScale, rotateS
       </div>
 
       <div>
-        <div className="text-[9px] tracking-[0.2em] uppercase text-slate-500 dark:text-slate-400 mb-1.5">Label / Reference</div>
+        <div className={`${PANEL_LABEL} mb-1.5`}>Label / Reference</div>
         <input
           type="text"
           value={item.label}
@@ -1654,7 +1756,7 @@ function SymbolInspector({ item, updateLabel, setRotation, setItemScale, rotateS
 
       <div className="pt-3 border-t border-slate-200">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-[9px] tracking-[0.2em] uppercase text-slate-500 dark:text-slate-400">Rotation</span>
+          <span className={PANEL_LABEL}>Rotation</span>
           <span className="tabular-nums text-slate-800 dark:text-slate-200 text-[10px]">{Math.round(item.rotation)}°</span>
         </div>
         <input type="range" min="0" max="359" step="1" value={item.rotation}
@@ -1663,18 +1765,14 @@ function SymbolInspector({ item, updateLabel, setRotation, setItemScale, rotateS
         <div className="grid grid-cols-4 gap-1">
           {[0, 90, 180, 270].map(deg => (
             <button key={deg} onClick={() => setRotation(deg)}
-              className={`px-1 py-1 text-[9px] tracking-wider rounded-md transition-all ${
-                Math.round(item.rotation) === deg
-                  ? "bg-[#D8F0F4] text-[#22808F] ring-1 ring-[#3FB7C9]/30"
-                  : "bg-slate-50 text-slate-600 dark:text-slate-300 ring-1 ring-slate-200 hover:bg-slate-100"
-              }`}>{deg}°</button>
+              className={panelChoice(Math.round(item.rotation) === deg)}>{deg}°</button>
           ))}
         </div>
       </div>
 
       <div className="pt-3 border-t border-slate-200">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-[9px] tracking-[0.2em] uppercase text-slate-500 dark:text-slate-400">Scale</span>
+          <span className={PANEL_LABEL}>Scale</span>
           <span className="tabular-nums text-slate-800 dark:text-slate-200 text-[10px]">{Math.round((item.scale ?? 1)*100)}%</span>
         </div>
         <input type="range" min="0.4" max="3" step="0.05" value={item.scale ?? 1}
@@ -1688,11 +1786,11 @@ function SymbolInspector({ item, updateLabel, setRotation, setItemScale, rotateS
 
       <div className="flex gap-2 pt-3 border-t border-slate-200">
         <button onClick={rotateSelected}
-          className="flex-1 px-3 py-2 bg-slate-50 ring-1 ring-slate-200 hover:bg-slate-100 text-slate-800 dark:text-slate-200 rounded-md text-[10px] uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all">
+          className={`flex-1 ${PANEL_BTN}`}>
           <RotateCw size={12}/> +15°
         </button>
         <button onClick={deleteSelected}
-          className="flex-1 px-3 py-2 bg-slate-50 ring-1 ring-slate-200 hover:bg-red-500/[0.1] hover:text-red-300 text-slate-800 dark:text-slate-200 rounded-md text-[10px] uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all">
+          className={`flex-1 ${PANEL_BTN_DANGER}`}>
           <Trash2 size={12}/> Delete
         </button>
       </div>
@@ -1704,13 +1802,13 @@ function AnnoInspector({ anno, updateAnnoText, deleteSelected }) {
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-4">
       <div>
-        <div className="text-[9px] tracking-[0.2em] uppercase text-slate-500 dark:text-slate-400 mb-2">Annotation</div>
+        <div className={`${PANEL_LABEL} mb-2`}>Annotation</div>
         <div className="text-[10px] text-slate-600 dark:text-slate-300 leading-relaxed mb-3">
           Edit the note text below. Drag the box to move it. Drag the amber dot at the arrow tip to point it elsewhere.
         </div>
       </div>
       <div>
-        <div className="text-[9px] tracking-[0.2em] uppercase text-slate-500 dark:text-slate-400 mb-1.5">Text</div>
+        <div className={`${PANEL_LABEL} mb-1.5`}>Text</div>
         <textarea
           value={anno.text}
           onChange={(e) => updateAnnoText(e.target.value)}
@@ -1719,7 +1817,7 @@ function AnnoInspector({ anno, updateAnnoText, deleteSelected }) {
         />
       </div>
       <button onClick={deleteSelected}
-        className="w-full px-3 py-2 bg-slate-50 ring-1 ring-slate-200 hover:bg-red-500/[0.1] hover:text-red-300 text-slate-800 dark:text-slate-200 rounded-md text-[10px] uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all">
+        className={`w-full ${PANEL_BTN_DANGER}`}>
         <Trash2 size={12}/> Delete Annotation
       </button>
     </div>
@@ -1730,13 +1828,13 @@ function WireInspector({ deleteSelected }) {
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-4">
       <div>
-        <div className="text-[9px] tracking-[0.2em] uppercase text-slate-500 dark:text-slate-400 mb-2">Wire</div>
+        <div className={`${PANEL_LABEL} mb-2`}>Wire</div>
         <div className="text-[10px] text-slate-600 dark:text-slate-300 leading-relaxed mb-3">
           This line connects two symbols. Remove it below, or press Delete / Backspace.
         </div>
       </div>
       <button onClick={deleteSelected}
-        className="w-full px-3 py-2 bg-slate-50 ring-1 ring-slate-200 hover:bg-red-500/[0.1] hover:text-red-300 text-slate-800 dark:text-slate-200 rounded-md text-[10px] uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all">
+        className={`w-full ${PANEL_BTN_DANGER}`}>
         <Trash2 size={12}/> Delete Wire
       </button>
     </div>
@@ -1776,7 +1874,7 @@ function EmptyInspector({ placed }) {
   );
 }
 
-function Stat({ label, value }) {
+export function Stat({ label, value }) {
   return (
     <div className="bg-slate-50 dark:bg-[#22303D] rounded-lg ring-1 ring-slate-200 dark:ring-[#2A3947] px-2.5 py-2">
       <div className="text-slate-500 dark:text-slate-400 uppercase tracking-wider text-[8.5px] mb-0.5">{label}</div>
@@ -1788,10 +1886,13 @@ function Stat({ label, value }) {
 /* ============================================================================
  * FLOATING TOOLBARS
  * ========================================================================= */
-export function FloatingToolbar({ tool, setTool }) {
+// tools: the TOOLS keys to show, or [key, { icon, label, hint }] pairs (the
+// Sketch a plan tool passes its own Select and Pan).
+export function FloatingToolbar({ tool, setTool, tools = ["select", "wire"] }) {
+  const list = tools.map((t) => (Array.isArray(t) ? t : [t, TOOLS[t]]));
   return (
     <div className="absolute top-4 left-4 z-20 flex flex-col bg-white dark:bg-[#16202B] rounded-2xl ring-1 ring-slate-200/70 dark:ring-[#2A3947] shadow-[0_10px_30px_-10px_rgba(16,28,40,0.22)] overflow-hidden">
-      {Object.entries(TOOLS).filter(([key]) => key === "select" || key === "wire").map(([key, info]) => {
+      {list.map(([key, info]) => {
         const Icon = info.icon;
         const active = tool === key;
         return (
@@ -1809,6 +1910,41 @@ export function FloatingToolbar({ tool, setTool }) {
       })}
     </div>
   );
+}
+
+// External / internal wall chooser, floated over the canvas while a wall tool
+// is active. `className` places it (it sits beside other floating controls).
+export function WallTypeChooser({ value, onChange, hint = "click start · click end", className = "top-4 left-44" }) {
+  return (
+    <div className={`absolute ${className} z-20 flex items-center gap-1 bg-white dark:bg-[#16202B] rounded-xl ring-1 ring-slate-200/70 dark:ring-[#2A3947] shadow-[0_10px_30px_-10px_rgba(16,28,40,0.22)] p-1`}>
+      {["external", "internal"].map((t) => (
+        <button key={t} onClick={() => onChange(t)}
+          className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold uppercase tracking-wide transition-colors ${
+            value === t ? "bg-[#3FB7C9]/15 text-[#1C6E7B] dark:text-[#5FD0E0] ring-1 ring-[#3FB7C9]/45" : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/10"
+          }`}>
+          {t === "external" ? "External" : "Internal"}
+        </button>
+      ))}
+      <div className="w-px h-5 bg-slate-200 dark:bg-[#2A3947] mx-0.5"/>
+      <span className="px-1.5 text-[10px] text-slate-500 dark:text-slate-400 whitespace-nowrap">{hint}</span>
+    </div>
+  );
+}
+
+// The strip along the bottom of the canvas: counts and the tool hint on the
+// left (clipped, never wrapping), sheet / view info on the right.
+export function StatusBar({ children, right = null }) {
+  return (
+    <div className="absolute bottom-0 left-0 right-0 px-4 h-7 bg-white dark:bg-[#16202B] text-slate-500 dark:text-slate-400 text-[10px] tracking-wider flex justify-between items-center gap-4 border-t border-slate-200 dark:border-[#263441]">
+      <div className="flex items-center gap-5 min-w-0 overflow-hidden whitespace-nowrap">{children}</div>
+      <div className="text-slate-400 shrink-0 whitespace-nowrap" style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>{right}</div>
+    </div>
+  );
+}
+
+// One "LABEL value" count in the status bar.
+export function StatusCount({ label, value }) {
+  return <span>{label} <span className="text-[#22808F] ml-1" style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>{value}</span></span>;
 }
 
 export function ZoomControls({ zoom, onIn, onOut, onFit }) {

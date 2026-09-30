@@ -20,6 +20,17 @@ import { insertProject, getProjectData, updateProjectRow } from "@/lib/db";
 import { uploadPlanImage, dataUrlToBlob } from "@/lib/planImages";
 import { computeFrame, renderModelToPng } from "@/lib/cad/sketchToImage";
 import { isTouchDevice } from "@/lib/touch";
+import {
+  ChevronLeft, FolderOpen, FilePlus, Save, Send, Undo2, Redo2, SlidersHorizontal, Grid3x3, Magnet, Compass,
+  Maximize2, Trash2, BrickWall, DoorOpen, Tag as TagIcon, Type, MousePointer2, Hand, PencilRuler,
+} from "lucide-react";
+import {
+  TopBarShell, TbGroup, TbButton, TbBrand, TbProjectPill, TbTrialSlot, TbMenu, TbMenuItem, TbPanelsItem, TbThemeItem,
+  SidePanel, CollapsedPanel, Stat, PANEL_LABEL, panelChoice, PANEL_BTN, PANEL_BTN_DANGER,
+  FloatingToolbar, WallTypeChooser, ZoomControls, StatusBar, StatusCount, SheetTabs,
+} from "@/components/SheetParts";
+import { useApp } from "@/components/AppShell";
+import { TryPill, useTryUsage } from "@/components/TryMode";
 
 // A composited layer for a canvas this size rasterises at reduced resolution on
 // iOS Safari, which is why doing the zoom as an SVG <g> transform here was no
@@ -141,37 +152,34 @@ function Tag({ refTxt, x, y }) {
   );
 }
 
-// tool rail glyphs
-function Glyph({ name }) {
-  const paths = {
-    select: <path d="M5 4l14 6-6 2-2 6z" />,
-    ext: <g><path d="M4 8h16M4 16h16" /></g>,
-    int: <g><path d="M4 9h16M4 15h16" /></g>,
-    door: <g><path d="M5 20V5h7" /><path d="M12 5a8 8 0 0 1 8 8" /></g>,
-    window: <g><rect x="4" y="7" width="16" height="10" /><path d="M4 12h16M12 7v10" /></g>,
-    dim: <g><path d="M4 12h16M4 9v6M20 9v6" /></g>,
-    room: <path d="M4 8h11l4 4-4 4H4z" />,
-    text: <g><path d="M5 6h14M12 6v12" /></g>,
-    pan: <path d="M9 11V5.5a1.5 1.5 0 0 1 3 0V10m0-1.5a1.5 1.5 0 0 1 3 0V11m0-.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-1a6 6 0 0 1-5-3l-2.5-4a1.6 1.6 0 0 1 2.7-1.6L9 14" />,
-  };
+// Plan glyphs for the toolbar, drawn like lucide icons (24 grid, currentColor)
+// so they sit in the shared TbButton next to lucide ones.
+const glyph = (body) => function PlanGlyph({ size = 15, className = "" }) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={name === "ext" ? 2.4 : name === "int" ? 1.4 : 1.7} strokeLinecap="round" strokeLinejoin="round" style={{ width: 22, height: 22 }}>
-      {paths[name]}
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={className}>
+      {body}
     </svg>
   );
-}
+};
+const WindowIcon = glyph(<g><rect x="3" y="7" width="18" height="10" /><path d="M3 12h18" /></g>);
+const DimIcon = glyph(<g><path d="M4 12h16M4 8v8M20 8v8" /><path d="M7 10l-3 2 3 2M17 10l3 2-3 2" /></g>);
 
-const TOOLS = [
-  ["select", "Select", "V"],
-  ["ext", "External wall", "E"],
-  ["int", "Internal wall", "I"],
-  ["door", "Door", "D"],
-  ["window", "Window", "W"],
-  ["dim", "Dimension", "M"],
-  ["room", "Room label", "R"],
-  ["text", "Note", "T"],
-  ["pan", "Pan", "H"],
+// Draw tools in the top bar (Select and Pan float on the canvas, as in the
+// editor). Walls are one button; External / Internal is chosen beside the
+// canvas while it is active.
+const DRAW_TOOLS = [
+  { id: "wall", icon: BrickWall, label: "Wall", key: "E / I" },
+  { id: "door", icon: DoorOpen, label: "Door", key: "D" },
+  { id: "window", icon: WindowIcon, label: "Window", key: "W" },
+  { id: "dim", icon: DimIcon, label: "Dimension", key: "M" },
+  { id: "room", icon: TagIcon, label: "Room label", key: "R" },
+  { id: "text", icon: Type, label: "Note", key: "T" },
 ];
+const CANVAS_TOOLS = [
+  ["select", { icon: MousePointer2, label: "Select", hint: "V" }],
+  ["pan", { icon: Hand, label: "Pan", hint: "H" }],
+];
+const TOOL_NAME = { select: "Select", pan: "Pan", ext: "External wall", int: "Internal wall", door: "Door", window: "Window", dim: "Dimension", room: "Room label", text: "Note" };
 
 const LAYER_LIST = [
   ["walls", "Walls"],
@@ -183,7 +191,12 @@ const LAYER_LIST = [
   ["grid", "Grid"],
 ];
 
-const SAVE_LABEL = { idle: "Not saved", unsaved: "Unsaved changes", saving: "Saving...", saved: "Saved", error: "Save failed" };
+const SAVE_LABEL = { idle: "NOT SAVED", unsaved: "UNSAVED CHANGES", saving: "SAVING…", saved: "SAVED", error: "SAVE FAILED" };
+
+// The editor's workspace surround and grid (components/SheetParts.jsx).
+const SURROUND = "radial-gradient(circle at 50% 50%, #e2e8f0, #cbd5e1 90%)";
+const GRID_LINE = "rgba(37,99,235,0.18)";
+const GRID_MM = 500;
 
 // ------------------------- main screen -------------------------
 export default function CadSketch({ title = "Maple House \u2014 First floor", ref: codeRef = "PW-0247", openSketchId = null, linkProject = null, linkSheet = null, linkName = null, embedded = false, onClose = null, onApplyPlan = null }) {
@@ -223,8 +236,44 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const [planModal, setPlanModal] = useState(false);
   const [planBusy, setPlanBusy] = useState(null);
   const [nameGate, setNameGate] = useState(!(openSketchId || linkProject || embedded));
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [savedFlash, setSavedFlash] = useState(false);
+  const [panelsHidden, setPanelsHidden] = useState(false);
+  const [inspectorHidden, setInspectorHidden] = useState(false);
+  const doSaveRef = useRef(null);
 
   viewRef.current = view;
+
+  const { theme, toggleTheme, access = {} } = useApp();
+  // Try mode: the Trial pill shows the account's symbols across saved drawings
+  // (a sketch places none), same pill and Subscribe as the editor.
+  const tryUsage = useTryUsage({ enabled: access.isTry, limit: access.symbolLimit, currentProjectId: null, project: null });
+
+  // Undo / redo: every edit goes through change(); opening or starting a
+  // sketch clears the history.
+  const modelRef = useRef(model);
+  modelRef.current = model;
+  const histRef = useRef({ past: [], future: [] });
+  const [, setHistVer] = useState(0);
+  const change = (fn) => {
+    const cur = modelRef.current, next = fn(cur);
+    if (next === cur) return;
+    const h = histRef.current;
+    h.past.push(cur); if (h.past.length > 200) h.past.shift();
+    h.future = [];
+    modelRef.current = next; setModel(next); setHistVer((v) => v + 1);
+  };
+  const step = (from, to) => {
+    const h = histRef.current;
+    if (!h[from].length) return;
+    const m = h[from].pop();
+    h[to].push(modelRef.current);
+    modelRef.current = m; setModel(m); setSel(null); setDraftPts([]); setDimP1(null); setHistVer((v) => v + 1);
+  };
+  const undo = () => step("past", "future");
+  const redo = () => step("future", "past");
+  const resetHistory = () => { histRef.current = { past: [], future: [] }; setHistVer((v) => v + 1); };
 
   const fitExtent = useCallback((extent, sz) => {
     sz = sz || size;
@@ -256,8 +305,15 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   useEffect(() => {
     const onKey = (e) => {
       if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
-      const map = { v: "select", e: "ext", i: "int", d: "door", w: "window", m: "dim", r: "room", t: "text", h: "pan" };
       const k = e.key.toLowerCase();
+      if (e.metaKey || e.ctrlKey) {
+        if (k === "z" && !e.shiftKey) { e.preventDefault(); undo(); }
+        else if ((k === "z" && e.shiftKey) || k === "y") { e.preventDefault(); redo(); }
+        else if (k === "s") { e.preventDefault(); doSaveRef.current && doSaveRef.current(); }
+        return;
+      }
+      if (e.altKey) return;
+      const map = { v: "select", e: "ext", i: "int", d: "door", w: "window", m: "dim", r: "room", t: "text", h: "pan" };
       if (map[k]) { setTool(map[k]); setDraftPts([]); setDimP1(null); }
       else if (e.key === "Escape") { setDraftPts([]); setDimP1(null); setSel(null); setTool("select"); }
       else if (e.key === "Delete" || e.key === "Backspace") { deleteSel(); }
@@ -388,6 +444,17 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     const v = viewRef.current;
     return { x: (clientX - r.left - v.tx) / v.s, y: (clientY - r.top - v.ty) / v.s };
   };
+  // Snap to an existing wall end within 12px on screen. Wins over angle lock
+  // and grid, so walls (diagonal ones included) can always meet exactly.
+  const endpointSnap = (raw) => {
+    let best = null, bd = 12 / viewRef.current.s;
+    for (const w of model.walls) for (const [x, y] of [[w.x1, w.y1], [w.x2, w.y2]]) {
+      const d = hyp(raw.x - x, raw.y - y);
+      if (d < bd) { bd = d; best = { x, y, ep: true }; }
+    }
+    return best;
+  };
+  const wallPoint = (raw, from) => endpointSnap(raw) || snapPt(raw, from);
   const snapPt = (raw, from) => {
     let x = raw.x, y = raw.y;
     if (flags.ortho && from) {
@@ -413,8 +480,8 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     }
     const raw = toWorld(e.clientX, e.clientY);
     const from = draftPts.length ? draftPts[draftPts.length - 1] : null;
-    const p = isWallTool ? snapPt(raw, from) : (flags.gridSnap ? { x: snap(raw.x, settings.grid), y: snap(raw.y, settings.grid) } : raw);
-    setCur({ x: p.x, y: p.y, sx: e.clientX, sy: e.clientY, on: true });
+    const p = isWallTool ? wallPoint(raw, from) : (flags.gridSnap ? { x: snap(raw.x, settings.grid), y: snap(raw.y, settings.grid) } : raw);
+    setCur({ x: p.x, y: p.y, sx: e.clientX, sy: e.clientY, on: true, ep: !!p.ep });
   };
   const handleDown = (e) => {
     if (pinchActiveRef.current) return;
@@ -429,7 +496,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const commitWallSeg = (a, b) => {
     if (a.x === b.x && a.y === b.y) return;
     const seg = { id: "w" + Date.now() + Math.round(Math.random() * 1e4), type: tool === "ext" ? "external" : "internal", x1: a.x, y1: a.y, x2: b.x, y2: b.y };
-    setModel((m) => ({ ...m, walls: m.walls.concat([seg]) }));
+    change((m) => ({ ...m, walls: m.walls.concat([seg]) }));
   };
   // One action per tool pick: once a wall, door, window, dimension, room label
   // or note is placed, drop back to Select. Pick the tool again for the next one.
@@ -440,7 +507,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     const raw = toWorld(e.clientX, e.clientY);
     if (isWallTool) {
       const from = draftPts.length ? draftPts[draftPts.length - 1] : null;
-      const p = snapPt(raw, from);
+      const p = wallPoint(raw, from);
       if (!from) { setDraftPts([p]); return; }
       if (p.x === from.x && p.y === from.y) return; // zero length: keep waiting for the end point
       commitWallSeg(from, p);
@@ -453,10 +520,10 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       const t = nw.seg.type === "external" ? T_EXT : T_INT;
       if (tool === "door") {
         const d = { id: "D" + Date.now(), x: Math.round(nw.cx), y: Math.round(nw.cy), dir: nw.dir, w: settings.doorW, t, hinge: -1, fold: 1, ref: "" };
-        setModel((m) => ({ ...m, doors: m.doors.concat([d]) }));
+        change((m) => ({ ...m, doors: m.doors.concat([d]) }));
       } else {
         const wn = { id: "W" + Date.now(), x: Math.round(nw.cx), y: Math.round(nw.cy), dir: nw.dir, w: settings.winW, t, escape: false, ref: "" };
-        setModel((m) => ({ ...m, windows: m.windows.concat([wn]) }));
+        change((m) => ({ ...m, windows: m.windows.concat([wn]) }));
       }
       finishAction();
       return;
@@ -467,7 +534,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       else {
         const horiz = Math.abs(pp.x - dimP1.x) >= Math.abs(pp.y - dimP1.y);
         const nd = { id: "M" + Date.now(), x1: dimP1.x, y1: dimP1.y, x2: pp.x, y2: pp.y, side: horiz ? "top" : "left", off: 700 };
-        setModel((m) => ({ ...m, dims: m.dims.concat([nd]) }));
+        change((m) => ({ ...m, dims: m.dims.concat([nd]) }));
         finishAction();
       }
       return;
@@ -475,8 +542,8 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     if (tool === "room" || tool === "text") {
       const nm = tool === "room" ? (window.prompt("Room name", "New room") || "") : (window.prompt("Note text", "") || "");
       if (!nm) return;
-      if (tool === "room") setModel((m) => ({ ...m, rooms: m.rooms.concat([{ name: nm, area: 0, x: Math.round(raw.x), y: Math.round(raw.y) }]) }));
-      else setModel((m) => ({ ...m, notes: m.notes.concat([{ text: nm, x: Math.round(raw.x), y: Math.round(raw.y) }]) }));
+      if (tool === "room") change((m) => ({ ...m, rooms: m.rooms.concat([{ name: nm, area: 0, x: Math.round(raw.x), y: Math.round(raw.y) }]) }));
+      else change((m) => ({ ...m, notes: m.notes.concat([{ text: nm, x: Math.round(raw.x), y: Math.round(raw.y) }]) }));
       finishAction();
       return;
     }
@@ -499,7 +566,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   };
   const deleteSel = () => {
     if (!sel) return;
-    setModel((m) => {
+    change((m) => {
       if (sel.kind === "door") return { ...m, doors: m.doors.filter((d) => d.id !== sel.id) };
       if (sel.kind === "window") return { ...m, windows: m.windows.filter((w) => w.id !== sel.id) };
       return { ...m, walls: m.walls.filter((w) => w.id !== sel.id) };
@@ -508,17 +575,17 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   };
   const convertSel = () => {
     if (!sel || sel.kind !== "wall") return;
-    setModel((m) => ({ ...m, walls: m.walls.map((w) => w.id === sel.id ? { ...w, type: w.type === "external" ? "internal" : "external" } : w) }));
+    change((m) => ({ ...m, walls: m.walls.map((w) => w.id === sel.id ? { ...w, type: w.type === "external" ? "internal" : "external" } : w) }));
   };
   const updDoor = (fn) => {
     if (!sel || sel.kind !== "door") return;
-    setModel((m) => ({ ...m, doors: m.doors.map((d) => d.id === sel.id ? { ...d, ...fn(d) } : d) }));
+    change((m) => ({ ...m, doors: m.doors.map((d) => d.id === sel.id ? { ...d, ...fn(d) } : d) }));
   };
   const flipSwing = () => updDoor((d) => ({ fold: -d.fold }));
   const flipHinge = () => updDoor((d) => ({ hinge: -d.hinge }));
   const toggleEscape = () => {
     if (!sel || sel.kind !== "window") return;
-    setModel((m) => ({ ...m, windows: m.windows.map((w) => w.id === sel.id ? { ...w, escape: !w.escape } : w) }));
+    change((m) => ({ ...m, windows: m.windows.map((w) => w.id === sel.id ? { ...w, escape: !w.escape } : w) }));
   };
   const zoomBy = (factor) => setView((v) => {
     const ns = Math.max(SCALE_MIN, Math.min(SCALE_MAX, v.s * factor));
@@ -537,14 +604,17 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   };
   const doSave = async () => {
     setSaveState("saving");
-    try { await persistSketch(); setSaveState("saved"); }
+    try {
+      await persistSketch(); setSaveState("saved");
+      setSavedFlash(true); setTimeout(() => setSavedFlash(false), 1400);
+    }
     catch (e) { console.error(e); setSaveState("error"); window.alert("Couldn't save: " + (e.message || e)); }
   };
+  doSaveRef.current = doSave;
   const refreshList = async () => { try { setSketches(await listSketches()); } catch (e) { console.warn(e); } };
-  const toggleOpen = () => { const n = !openPanel; setOpenPanel(n); if (n) refreshList(); };
   const doNew = () => {
     skipDirty.current = true;
-    setModel(blankModel());
+    setModel(blankModel()); resetHistory();
     setSketchId(null); setSketchName("");
     setLinkProjectId(null); setLinkSheetId(null); setFrame(null);
     setSel(null); setDraftPts([]); setDimP1(null); setTool("select"); setSaveState("idle");
@@ -558,7 +628,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       const meta = sketches.find((sk) => sk.id === id);
       const { _link, ...geo } = data;
       skipDirty.current = true;
-      setModel({ ...blankModel(), ...geo });
+      setModel({ ...blankModel(), ...geo }); resetHistory();
       setLinkProjectId(_link?.projectId || null);
       setLinkSheetId(_link?.sheetId || null);
       setFrame(_link?.frame || null);
@@ -660,7 +730,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       if (!data) { setNameGate(false); setSaveState("idle"); setPlanBusy(null); return; }
       const { _link, ...geo } = data;
       skipDirty.current = true;
-      setModel({ ...blankModel(), ...geo });
+      setModel({ ...blankModel(), ...geo }); resetHistory();
       setLinkProjectId(_link?.projectId || linkProject || null);
       setLinkSheetId(_link?.sheetId || linkSheet || null);
       setFrame(_link?.frame || null);
@@ -680,7 +750,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const joined = useMemo(() => joinWalls(model.walls), [model.walls]);
   const planEls = useMemo(() => {
     const g = [];
-    g.push(<rect key="sheet" x={SHEET.x} y={SHEET.y} width={SHEET.w} height={SHEET.h} fill="none" stroke="#2C97A8" strokeWidth={2.5} vectorEffect="non-scaling-stroke" />);
+    g.push(<rect key="sheet" x={SHEET.x} y={SHEET.y} width={SHEET.w} height={SHEET.h} fill="none" stroke="#B8C3CF" strokeWidth={1} vectorEffect="non-scaling-stroke" />);
     if (layers.boundary && model.boundary) g.push(<polyline key="bnd" points={ptStr(model.boundary)} className="cadv-boundary" fill="none" strokeWidth={1.4} strokeDasharray="14 10" vectorEffect="non-scaling-stroke" />);
     if (layers.stairs) (model.rooflights || []).forEach((rl) => g.push(
       <g key={rl.ref}>
@@ -728,6 +798,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     overlay.push(<line key="chx" x1={SHEET.x} y1={cur.y} x2={SHEET.x + SHEET.w} y2={cur.y} className="cadv-cross" strokeWidth={0.9} opacity={0.6} vectorEffect="non-scaling-stroke" />);
     overlay.push(<line key="chy" x1={cur.x} y1={SHEET.y} x2={cur.x} y2={SHEET.y + SHEET.h} className="cadv-cross" strokeWidth={0.9} opacity={0.6} vectorEffect="non-scaling-stroke" />);
     overlay.push(<circle key="cdot" cx={cur.x} cy={cur.y} r={70} className="cadv-active" fill="#fff" strokeWidth={1.4} vectorEffect="non-scaling-stroke" />);
+    if (isWallTool && cur.ep) overlay.push(<rect key="ep" x={cur.x - 9 / view.s} y={cur.y - 9 / view.s} width={18 / view.s} height={18 / view.s} fill="none" className="cadv-active" strokeWidth={2} vectorEffect="non-scaling-stroke" />);
   }
 
   // length HUD (DOM, at cursor)
@@ -747,7 +818,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const selDoor = sel && sel.kind === "door" ? model.doors.find((d) => d.id === sel.id) : null;
   const selWin = sel && sel.kind === "window" ? model.windows.find((w) => w.id === sel.id) : null;
   const hint = {
-    select: "Click a wall to select. Hold Shift and drag to pan.",
+    select: "Click a wall, door or window to select it. Shift-drag to pan.",
     ext: draftPts.length ? "Click the end point - Esc to cancel" : "Click the start point of an external wall",
     int: draftPts.length ? "Click the end point - Esc to cancel" : "Click the start point of an internal wall",
     door: "Click on a wall to place a door",
@@ -758,203 +829,319 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     pan: "Drag to pan the sheet",
   }[tool];
 
+  const pickTool = (id) => {
+    const t = id === "wall" ? (tool === "int" ? "int" : "ext") : id;
+    setTool(t); setDraftPts([]); setDimP1(null);
+  };
+  const goBack = () => (embedded ? (onClose && onClose()) : router.push("/"));
+  const openRename = () => { setRenameDraft(sketchName); setRenameOpen(true); };
+  const commitRename = () => {
+    const nm = renameDraft.trim();
+    if (!nm) return;
+    if (nm !== sketchName) { setSketchName(nm); setSaveState((st) => (st === "saving" ? st : "unsaved")); }
+    setRenameOpen(false);
+  };
+  const subscribe = () => { access.openSubscribe && access.openSubscribe(); };
+  const canUndo = histRef.current.past.length > 0, canRedo = histRef.current.future.length > 0;
+
   const svgCursor = tool === "pan" ? "grab" : (drawingTool ? "crosshair" : "default");
-  const minorSz = 500 * view.s, majorSz = 1000 * view.s;
+  const gridSz = GRID_MM * view.s;
   const sL = view.tx + SHEET.x * view.s, sT = view.ty + SHEET.y * view.s;
   const sR = view.tx + (SHEET.x + SHEET.w) * view.s, sB = view.ty + (SHEET.y + SHEET.h) * view.s;
   const clipRect = `polygon(${sL}px ${sT}px, ${sR}px ${sT}px, ${sR}px ${sB}px, ${sL}px ${sB}px)`;
-  const gridStyle = layers.grid ? {
-    backgroundImage:
-      `linear-gradient(to right, rgba(132,174,186,0.55) 1px, transparent 1px),` +
-      `linear-gradient(to bottom, rgba(132,174,186,0.55) 1px, transparent 1px),` +
-      `linear-gradient(to right, rgba(170,198,206,0.45) 1px, transparent 1px),` +
-      `linear-gradient(to bottom, rgba(170,198,206,0.45) 1px, transparent 1px)`,
-    backgroundSize: `${majorSz}px ${majorSz}px, ${majorSz}px ${majorSz}px, ${minorSz}px ${minorSz}px, ${minorSz}px ${minorSz}px`,
+  // White sheet (like the editor's paper) with the editor's grid over it.
+  const gridStyle = {
+    backgroundColor: "#FFFFFF",
+    backgroundImage: layers.grid
+      ? `linear-gradient(to right, ${GRID_LINE} 1px, transparent 1px), linear-gradient(to bottom, ${GRID_LINE} 1px, transparent 1px)`
+      : "none",
+    backgroundSize: `${gridSz}px ${gridSz}px`,
     backgroundPosition: `${view.tx}px ${view.ty}px`,
     clipPath: clipRect, WebkitClipPath: clipRect,
-  } : { display: "none" };
+  };
+  const choiceRow = (opts, value, set, fmt = (v) => v) => (
+    <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${opts.length}, minmax(0, 1fr))` }}>
+      {opts.map((v) => <button key={v} onClick={() => set(v)} className={panelChoice(value === v)}>{fmt(v)}</button>)}
+    </div>
+  );
+  const rule = "pt-3 border-t border-slate-200 dark:border-[#263441]";
 
   return (
-    <div className="cadv">
+    <div className="cadv absolute inset-0 flex flex-col bg-slate-100 text-slate-900 dark:bg-[#0E141B] dark:text-slate-100 overflow-hidden select-none"
+         style={{ fontFamily: "var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif" }}>
       <style>{CSS}</style>
-      <div className="cadv__top">
-        <button className="cadv__back" onClick={() => (embedded ? (onClose && onClose()) : router.push("/"))} title={embedded ? "Back to symbols" : "Back to dashboard"}>&#8249;</button>
-        <input className="cadv__name" value={sketchName} onChange={(e) => setSketchName(e.target.value)} spellCheck={false} aria-label="Sketch name" />
-        <span className={"cadv__save cadv__save--" + saveState}>{SAVE_LABEL[saveState]}</span>
-        <span className="cadv__grow" />
-        <div className="cadv__acts">
-          <button onClick={doNew}>New</button>
-          <button onClick={toggleOpen}>Open</button>
-          <button onClick={doSave} disabled={saveState === "saving"}>Save</button>
-          <button className="accent" onClick={openUsePlan} disabled={!!planBusy}>Use this plan</button>
-        </div>
-        {openPanel && (
-          <div className="cadv__open">
-            <div className="cadv__open-head">Your sketches</div>
-            {sketches.length === 0 ? (
-              <div className="cadv__open-empty">No saved sketches yet.</div>
-            ) : sketches.map((sk) => (
-              <button key={sk.id} className="cadv__open-row" onClick={() => doLoad(sk.id)}>
-                <span className="nm">{sk.name}</span>
-                <span className="dt">{new Date(sk.updatedAt).toLocaleDateString("en-GB")}</span>
-                <span className="del" title="Delete" onClick={(e) => doDelete(sk.id, e)}>&#215;</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
 
-      <div className="cadv__body">
-        <div className="cadv__rail">
-          {TOOLS.map(([id, label, key]) => (
-            <button key={id} className={"cadv__tool" + (tool === id ? " on" : "")} title={label + " (" + key + ")"}
-              onClick={() => { setTool(id); setDraftPts([]); setDimP1(null); }}>
-              <Glyph name={id} />
-              <span className="key">{key}</span>
-            </button>
+      {/* ==================== TOP BAR (shared with the editor) ==================== */}
+      <TopBarShell>
+        <TbGroup first>
+          <TbButton onClick={goBack} icon={ChevronLeft} label={embedded ? "Drawing" : "Dashboard"} title={embedded ? "Back to the drawing" : "Back to dashboard"} />
+          <TbBrand />
+          <TbProjectPill label={sketchName || "Untitled sketch"} title="Rename this sketch" onClick={openRename} icon={PencilRuler} />
+        </TbGroup>
+
+        <TbGroup label="File">
+          <TbMenu icon={FolderOpen} label="Open" title="Open a saved sketch, or start a new one" width="w-72"
+            open={openPanel} onOpenChange={(n) => { setOpenPanel(n); if (n) refreshList(); }}>
+            {(close) => (
+              <>
+                <TbMenuItem icon={FilePlus} label="New sketch" onClick={() => { close(); doNew(); }} />
+                <div className="my-1 h-px bg-slate-200 dark:bg-[#2A3947]" />
+                <div className={`${PANEL_LABEL} px-3 pt-1.5 pb-1`}>Your sketches</div>
+                <div className="max-h-72 overflow-y-auto">
+                  {sketches.length === 0 ? (
+                    <div className="px-3 py-2 text-[12px] text-slate-500 dark:text-slate-400">No saved sketches yet.</div>
+                  ) : sketches.map((sk) => (
+                    <div key={sk.id} className="flex items-center rounded-lg hover:bg-[#ECF8FA] dark:hover:bg-white/10">
+                      <button type="button" role="menuitem" onClick={() => { close(); doLoad(sk.id); }}
+                        className="flex-1 min-w-0 flex items-center gap-2 px-3 h-9 text-left">
+                        <span className="flex-1 truncate text-[12px] font-medium text-slate-700 dark:text-slate-200">{sk.name}</span>
+                        <span className="text-[10px] text-slate-400 tabular-nums" style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>{new Date(sk.updatedAt).toLocaleDateString("en-GB")}</span>
+                      </button>
+                      <button type="button" title="Delete sketch" onClick={(e) => doDelete(sk.id, e)}
+                        className="w-7 h-7 mr-1 flex items-center justify-center rounded-md text-slate-400 hover:text-red-500 hover:bg-red-500/10">
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </TbMenu>
+          <TbButton onClick={doSave} icon={Save} label={saveState === "saving" ? "Saving…" : savedFlash ? "Saved ✓" : "Save"} title="Save (⌘S)" flash={savedFlash} disabled={saveState === "saving"} />
+          <TbButton onClick={openUsePlan} icon={Send} label="Use this plan" shortLabel="Use plan" title="Send this plan to the electrical drawing" disabled={!!planBusy} />
+        </TbGroup>
+
+        <TbGroup label="Draw">
+          {DRAW_TOOLS.map((t) => (
+            <TbButton key={t.id} collapse icon={t.icon} label={t.label} title={`${t.label} (${t.key})`}
+              active={t.id === "wall" ? isWallTool : tool === t.id} onClick={() => pickTool(t.id)} />
           ))}
-        </div>
+        </TbGroup>
 
-        <div className="cadv__workspace" ref={wrapRef}>
-          <div ref={gridRef} className="cadv__grid" style={{ position: "absolute", inset: 0, pointerEvents: "none", transformOrigin: "0 0", willChange: PROMOTE, ...gridStyle }} />
-          <svg ref={svgRef} className="cadv__svg" width="100%" height="100%" style={{ cursor: svgCursor, transformOrigin: "0 0", willChange: PROMOTE }}
-            onPointerDown={handleDown} onPointerMove={handleMove} onPointerUp={handleUp} onPointerCancel={handleUp}
-            onClick={handleClick}
-            onPointerLeave={() => setCur((c) => ({ ...c, on: false }))}>
-            <g ref={gRef}>
-              {planEls}
-              {overlay}
-            </g>
-          </svg>
-          {hud}
-          <div className="cadv__zoom">
-            <button onClick={() => zoomBy(1.2)} title="Zoom in">+</button>
-            <button onClick={() => zoomBy(1 / 1.2)} title="Zoom out">&#8722;</button>
-            <button onClick={() => fit()} title="Zoom to fit">&#10530;</button>
+        <TbGroup label="Edit">
+          <TbButton onClick={undo} icon={Undo2} title="Undo (⌘Z)" iconOnly disabled={!canUndo} />
+          <TbButton onClick={redo} icon={Redo2} title="Redo (⌘⇧Z)" iconOnly disabled={!canRedo} />
+        </TbGroup>
+
+        <TbGroup label="View">
+          <TbMenu icon={SlidersHorizontal} label="View" title="View options">
+            <TbMenuItem icon={Grid3x3} label="Grid" checked={layers.grid} onClick={() => setLayers((l) => ({ ...l, grid: !l.grid }))} />
+            <TbMenuItem icon={Magnet} label="Snap to grid" checked={flags.gridSnap} onClick={() => setFlags((f) => ({ ...f, gridSnap: !f.gridSnap }))} />
+            <TbMenuItem icon={Compass} label="Lock angles (45°)" checked={flags.ortho} onClick={() => setFlags((f) => ({ ...f, ortho: !f.ortho }))} />
+            <TbMenuItem icon={Maximize2} label="Zoom to fit" onClick={() => fit()} />
+            <TbPanelsItem hidden={panelsHidden} onClick={() => setPanelsHidden((h) => !h)} />
+            <TbThemeItem theme={theme} onClick={toggleTheme} />
+          </TbMenu>
+        </TbGroup>
+
+        <TbTrialSlot>{access.isTry ? <TryPill used={tryUsage.used} limit={tryUsage.limit} onSubscribe={subscribe} /> : null}</TbTrialSlot>
+      </TopBarShell>
+
+      <div className="relative z-10 flex-1 flex overflow-hidden">
+        {/* ==================== LEFT PANEL ==================== */}
+        {!panelsHidden && (
+          <SidePanel side="left" title="Floor plan" eyebrow="SKETCH">
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              <div>
+                <div className={`${PANEL_LABEL} mb-2`}>Snap grid</div>
+                {choiceRow([50, 100, 250], settings.grid, (v) => setSettings((s) => ({ ...s, grid: v })), (v) => v + " mm")}
+              </div>
+              <div className={rule}>
+                <div className={`${PANEL_LABEL} mb-2`}>Drawing aids</div>
+                <div className="grid grid-cols-2 gap-1">
+                  <button onClick={() => setFlags((f) => ({ ...f, ortho: !f.ortho }))} className={panelChoice(flags.ortho)}>Lock angles</button>
+                  <button onClick={() => setFlags((f) => ({ ...f, gridSnap: !f.gridSnap }))} className={panelChoice(flags.gridSnap)}>Snap</button>
+                </div>
+              </div>
+              <div className={rule}>
+                <div className={`${PANEL_LABEL} mb-1.5`}>Layers</div>
+                <div className="flex flex-col">
+                  {LAYER_LIST.map(([id, label]) => (
+                    <button key={id} onClick={() => setLayers((l) => ({ ...l, [id]: !l[id] }))}
+                      className={`flex items-center gap-2.5 px-2 h-8 rounded-md text-[12px] text-left transition-colors hover:bg-slate-200/60 dark:hover:bg-white/5 ${layers[id] ? "text-slate-800 dark:text-slate-100" : "text-slate-400 dark:text-slate-500"}`}>
+                      <span className={`w-2.5 h-2.5 rounded-[3px] shrink-0 ring-1 ${layers[id] ? "bg-[#3FB7C9] ring-[#3FB7C9]" : "bg-transparent ring-slate-300 dark:ring-slate-600"}`} />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="border-t border-slate-200 dark:border-[#263441] px-4 py-3 bg-[#E3EAF3] dark:bg-[#141C24] text-[9px] text-slate-500 leading-relaxed">
+              Pick a tool and place it; the tool then goes back to Select. Esc cancels.
+            </div>
+          </SidePanel>
+        )}
+
+        {/* ==================== CANVAS ==================== */}
+        <main className="flex-1 relative overflow-hidden bg-slate-200 dark:bg-[#0B1117] flex flex-col">
+          <SheetTabs label="Plan" sheets={[{ id: "plan", name: sketchName || "Untitled sketch" }]} activeId="plan"
+            onSwitch={() => {}} onDelete={() => {}}
+            onRename={(_, nm) => { if (nm !== sketchName) { setSketchName(nm); setSaveState((st) => (st === "saving" ? st : "unsaved")); } }} />
+          <div className="relative flex-1 overflow-hidden">
+          <div ref={wrapRef} className="absolute inset-0 overflow-hidden" style={{ background: SURROUND }}>
+            <div ref={gridRef} style={{ position: "absolute", inset: 0, pointerEvents: "none", transformOrigin: "0 0", willChange: PROMOTE, ...gridStyle }} />
+            <svg ref={svgRef} className="cadv__svg" width="100%" height="100%" style={{ cursor: svgCursor, transformOrigin: "0 0", willChange: PROMOTE }}
+              onPointerDown={handleDown} onPointerMove={handleMove} onPointerUp={handleUp} onPointerCancel={handleUp}
+              onClick={handleClick}
+              onPointerLeave={() => setCur((c) => ({ ...c, on: false }))}>
+              <g ref={gRef}>
+                {planEls}
+                {overlay}
+              </g>
+            </svg>
+            {hud}
           </div>
-          <div className="cadv__chip">
-            <span className="north">N &#8593;</span>
-            <span className="bar"><i /><i className="alt" /><i /></span>
+
+          <FloatingToolbar tool={tool} setTool={pickTool} tools={CANVAS_TOOLS} />
+          {isWallTool && (
+            <WallTypeChooser className="top-4 left-16" value={tool === "int" ? "internal" : "external"}
+              onChange={(t) => pickTool(t === "internal" ? "int" : "ext")}
+              hint={draftPts.length ? "click end · Esc cancels" : `click start · click end · ${tool === "int" ? T_INT : T_EXT} mm`} />
+          )}
+          <ZoomControls zoom={view.s / 0.08} onIn={() => zoomBy(1.2)} onOut={() => zoomBy(1 / 1.2)} onFit={() => fit()} />
+          <div className="absolute left-4 bottom-11 z-20 flex items-center gap-3 px-3 h-8 bg-white dark:bg-[#16202B] rounded-xl ring-1 ring-slate-200/70 dark:ring-[#2A3947] shadow-[0_10px_30px_-10px_rgba(16,28,40,0.22)] text-[10px] text-slate-600 dark:text-slate-300"
+               style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>
+            <span className="font-semibold">N &#8593;</span>
+            <span className="inline-flex h-1.5 ring-1 ring-slate-400"><i className="w-5 bg-slate-600 dark:bg-slate-300" /><i className="w-5 bg-white dark:bg-[#16202B]" /><i className="w-5 bg-slate-600 dark:bg-slate-300" /></span>
             <span>0 1 2 m</span>
           </div>
-        </div>
 
-        <div className="cadv__inspector">
-          {selWall ? (
-            <div>
-              <div className="cadv__sect first">Selected wall</div>
-              <div className="cadv-prop"><span className="k">Length</span><span className="v mono">{fmtMM(segLen(selWall))} mm</span></div>
-              <div className="cadv-prop"><span className="k">Type</span><span className="v">{selWall.type === "external" ? "External" : "Internal"}</span></div>
-              <div className="cadv-prop"><span className="k">Thickness</span><span className="v mono">{selWall.type === "external" ? T_EXT : T_INT} mm</span></div>
-              <div className="cadv__row">
-                <button className="cadv-btn" onClick={convertSel}>Make {selWall.type === "external" ? "internal" : "external"}</button>
-                <button className="cadv-btn danger" onClick={deleteSel}>Delete</button>
-              </div>
-            </div>
-          ) : selDoor ? (
-            <div>
-              <div className="cadv__sect first">Selected door</div>
-              <div className="cadv-prop"><span className="k">Width</span><span className="v mono">{selDoor.w} mm</span></div>
-              <div className="cadv-prop"><span className="k">On</span><span className="v">{selDoor.t === T_EXT ? "External wall" : "Internal wall"}</span></div>
-              <div className="cadv__sect">Swing</div>
-              <div className="cadv-seg">
-                <button onClick={flipSwing}>Flip side</button>
-                <button onClick={flipHinge}>Flip hinge</button>
-              </div>
-              <div className="cadv-hint">Flip side swaps which room the door opens into; flip hinge swaps the hinged edge. Between them you get all four swings.</div>
-              <div className="cadv__row">
-                <button className="cadv-btn danger" onClick={deleteSel}>Delete door</button>
-              </div>
-            </div>
-          ) : selWin ? (
-            <div>
-              <div className="cadv__sect first">Selected window</div>
-              <div className="cadv-prop"><span className="k">Width</span><span className="v mono">{selWin.w} mm</span></div>
-              <div className="cadv-prop"><span className="k">On</span><span className="v">{selWin.t === T_EXT ? "External wall" : "Internal wall"}</span></div>
-              <div className="cadv__sect">Marking</div>
-              <div className="cadv-seg">
-                <button className={selWin.escape ? "on" : ""} onClick={toggleEscape}>Escape window</button>
-              </div>
-              <div className="cadv__row">
-                <button className="cadv-btn danger" onClick={deleteSel}>Delete window</button>
-              </div>
-            </div>
-          ) : (
-            <div>
-              <div className="cadv__sect first">Active tool</div>
-              <div className="cadv-prop"><span className="k">Tool</span><span className="v">{TOOLS.find((t) => t[0] === tool)?.[1]}</span></div>
-              {isWallTool && (
+          <StatusBar right={<>X {Math.round(cur.x)} Y {Math.round(cur.y)} · GRID {settings.grid}MM · <span className={saveState === "unsaved" || saveState === "error" ? "text-amber-600" : ""}>{SAVE_LABEL[saveState]}</span></>}>
+            <StatusCount label="WALLS" value={model.walls.length} />
+            <StatusCount label="DOORS" value={model.doors.length} />
+            <StatusCount label="WINDOWS" value={model.windows.length} />
+            <span>TOOL <span className="text-[#22808F] ml-1">{TOOL_NAME[tool].toUpperCase()}</span></span>
+            <span className="text-[#22808F]">{hint}</span>
+          </StatusBar>
+          </div>
+        </main>
+
+        {/* ==================== RIGHT INSPECTOR ==================== */}
+        {!panelsHidden && (inspectorHidden ? (
+          <CollapsedPanel onExpand={() => setInspectorHidden(false)} />
+        ) : (
+          <SidePanel side="right" title="Inspector" onCollapse={() => setInspectorHidden(true)}>
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {selWall ? (
                 <>
-                  <div className="cadv__sect">Wall type</div>
-                  <div className="cadv-seg">
-                    <button className={tool === "ext" ? "on" : ""} onClick={() => { setTool("ext"); setDraftPts([]); }}>External &middot; {T_EXT}</button>
-                    <button className={tool === "int" ? "on" : ""} onClick={() => { setTool("int"); setDraftPts([]); }}>Internal &middot; {T_INT}</button>
+                  <div>
+                    <div className={`${PANEL_LABEL} mb-2`}>Wall</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Stat label="Length" value={fmtMM(segLen(selWall)) + " mm"} />
+                      <Stat label="Thickness" value={(selWall.type === "external" ? T_EXT : T_INT) + " mm"} />
+                    </div>
+                  </div>
+                  <div className={rule}>
+                    <div className={`${PANEL_LABEL} mb-2`}>Type</div>
+                    <div className="grid grid-cols-2 gap-1">
+                      {["external", "internal"].map((t) => (
+                        <button key={t} onClick={() => selWall.type !== t && convertSel()} className={panelChoice(selWall.type === t)}>{t === "external" ? "External" : "Internal"}</button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className={rule}>
+                    <button onClick={deleteSel} className={`w-full ${PANEL_BTN_DANGER}`}><Trash2 size={12} /> Delete wall</button>
+                  </div>
+                </>
+              ) : selDoor ? (
+                <>
+                  <div>
+                    <div className={`${PANEL_LABEL} mb-2`}>Door</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Stat label="Width" value={selDoor.w + " mm"} />
+                      <Stat label="Wall" value={selDoor.t === T_EXT ? "External" : "Internal"} />
+                    </div>
+                  </div>
+                  <div className={rule}>
+                    <div className={`${PANEL_LABEL} mb-2`}>Swing</div>
+                    <div className="flex gap-2">
+                      <button onClick={flipSwing} className={`flex-1 ${PANEL_BTN}`}>Flip side</button>
+                      <button onClick={flipHinge} className={`flex-1 ${PANEL_BTN}`}>Flip hinge</button>
+                    </div>
+                    <div className="text-[10px] text-slate-600 dark:text-slate-300 mt-2 leading-relaxed">Flip side swaps which room the door opens into; flip hinge swaps the hinged edge. Between them you get all four swings.</div>
+                  </div>
+                  <div className={rule}>
+                    <button onClick={deleteSel} className={`w-full ${PANEL_BTN_DANGER}`}><Trash2 size={12} /> Delete door</button>
+                  </div>
+                </>
+              ) : selWin ? (
+                <>
+                  <div>
+                    <div className={`${PANEL_LABEL} mb-2`}>Window</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Stat label="Width" value={selWin.w + " mm"} />
+                      <Stat label="Wall" value={selWin.t === T_EXT ? "External" : "Internal"} />
+                    </div>
+                  </div>
+                  <div className={rule}>
+                    <div className={`${PANEL_LABEL} mb-2`}>Marking</div>
+                    <button onClick={toggleEscape} className={`w-full ${panelChoice(selWin.escape)}`}>Escape window</button>
+                  </div>
+                  <div className={rule}>
+                    <button onClick={deleteSel} className={`w-full ${PANEL_BTN_DANGER}`}><Trash2 size={12} /> Delete window</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <div className={`${PANEL_LABEL} mb-2`}>Tool</div>
+                    <div className="text-sm font-medium text-slate-900 dark:text-slate-100">{TOOL_NAME[tool]}</div>
+                    <div className="text-[10px] text-slate-600 dark:text-slate-300 mt-1.5 leading-relaxed">{hint}</div>
+                  </div>
+                  {isWallTool && (
+                    <div className={rule}>
+                      <div className={`${PANEL_LABEL} mb-2`}>Wall type</div>
+                      <div className="grid grid-cols-2 gap-1">
+                        <button onClick={() => pickTool("ext")} className={panelChoice(tool === "ext")}>External · {T_EXT}</button>
+                        <button onClick={() => pickTool("int")} className={panelChoice(tool === "int")}>Internal · {T_INT}</button>
+                      </div>
+                    </div>
+                  )}
+                  {tool === "door" && (
+                    <div className={rule}>
+                      <div className={`${PANEL_LABEL} mb-2`}>Door width</div>
+                      {choiceRow([760, 850, 960], settings.doorW, (v) => setSettings((s) => ({ ...s, doorW: v })))}
+                    </div>
+                  )}
+                  {tool === "window" && (
+                    <div className={rule}>
+                      <div className={`${PANEL_LABEL} mb-2`}>Window width</div>
+                      {choiceRow([600, 900, 1200], settings.winW, (v) => setSettings((s) => ({ ...s, winW: v })))}
+                    </div>
+                  )}
+                  <div className={rule}>
+                    <div className={`${PANEL_LABEL} mb-2`}>Plan</div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <Stat label="Walls" value={model.walls.length} />
+                      <Stat label="Doors" value={model.doors.length} />
+                      <Stat label="Windows" value={model.windows.length} />
+                    </div>
                   </div>
                 </>
               )}
-              {tool === "door" && (
-                <>
-                  <div className="cadv__sect">Door width</div>
-                  <div className="cadv-seg">
-                    {[760, 850, 960].map((wv) => (
-                      <button key={wv} className={settings.doorW === wv ? "on" : ""} onClick={() => setSettings((s) => ({ ...s, doorW: wv }))}>{wv}</button>
-                    ))}
-                  </div>
-                </>
-              )}
-              {tool === "window" && (
-                <>
-                  <div className="cadv__sect">Window width</div>
-                  <div className="cadv-seg">
-                    {[600, 900, 1200].map((wv) => (
-                      <button key={wv} className={settings.winW === wv ? "on" : ""} onClick={() => setSettings((s) => ({ ...s, winW: wv }))}>{wv}</button>
-                    ))}
-                  </div>
-                </>
-              )}
-              <div className="cadv__sect">Snap grid</div>
-              <div className="cadv-seg">
-                {[50, 100, 250].map((gv) => (
-                  <button key={gv} className={settings.grid === gv ? "on" : ""} onClick={() => setSettings((s) => ({ ...s, grid: gv }))}>{gv}mm</button>
-                ))}
-              </div>
-              <div className="cadv__sect">Drawing aids</div>
-              <div className="cadv-seg">
-                <button className={flags.ortho ? "on" : ""} onClick={() => setFlags((f) => ({ ...f, ortho: !f.ortho }))}>Angle</button>
-                <button className={flags.gridSnap ? "on" : ""} onClick={() => setFlags((f) => ({ ...f, gridSnap: !f.gridSnap }))}>Snap</button>
-              </div>
-              <div className="cadv-hint">{hint}</div>
-              <div className="cadv__sect">Layers</div>
-              <div className="cadv-layers">
-                {LAYER_LIST.map(([id, label]) => (
-                  <button key={id} className={"cadv-layer" + (layers[id] ? " on" : "")} onClick={() => setLayers((l) => ({ ...l, [id]: !l[id] }))}>
-                    <span className="dot" />{label}
-                  </button>
-                ))}
-              </div>
             </div>
-          )}
-        </div>
+          </SidePanel>
+        ))}
       </div>
 
-      <div className="cadv__status">
-        <span className="cell xy">X <b>{Math.round(cur.x)}</b> Y <b>{Math.round(cur.y)}</b></span>
-        <span className="cell cmd">{hint}</span>
-        <span className="spacer" />
-        <span className={"cell toggle" + (flags.ortho ? " on" : "")} onClick={() => setFlags((f) => ({ ...f, ortho: !f.ortho }))}>ANGLE</span>
-        <span className={"cell toggle" + (flags.gridSnap ? " on" : "")} onClick={() => setFlags((f) => ({ ...f, gridSnap: !f.gridSnap }))}>GRID</span>
-        <span className="cell">GRID {settings.grid}mm</span>
-        <span className="cell">{Math.round(view.s / 0.08 * 100)}%</span>
-      </div>
-
-      {nameGate && (
+      {(nameGate || renameOpen) && (
         <div className="cadv__modal-bg">
           <div className="cadv__modal">
-            <div className="h">Name your drawing</div>
-            <p>Give this plan a name so it's easy to find later and saved safely. You can rename it any time.</p>
-            <input className="cadv__gate-input" autoFocus value={sketchName} placeholder="e.g. 24 High Street - First floor" onChange={(e) => setSketchName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && sketchName.trim()) startNamed(); }} />
-            <button className="m-btn primary" disabled={!sketchName.trim()} onClick={startNamed}>Start drawing</button>
-            <button className="m-cancel" onClick={() => { setNameGate(false); toggleOpen(); }}>Open a saved drawing instead</button>
+            <div className="h">{nameGate ? "Name your drawing" : "Rename sketch"}</div>
+            <p>{nameGate ? "Give this plan a name so it's easy to find later and saved safely. You can rename it any time." : "The new name is kept when you next save."}</p>
+            {nameGate ? (
+              <>
+                <input className="cadv__gate-input" autoFocus value={sketchName} placeholder="e.g. 24 High Street - First floor" onChange={(e) => setSketchName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && sketchName.trim()) startNamed(); }} />
+                <button className="m-btn primary" disabled={!sketchName.trim()} onClick={startNamed}>Start drawing</button>
+                <button className="m-cancel" onClick={() => { setNameGate(false); setOpenPanel(true); refreshList(); }}>Open a saved drawing instead</button>
+              </>
+            ) : (
+              <>
+                <input className="cadv__gate-input" autoFocus value={renameDraft} onChange={(e) => setRenameDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") setRenameOpen(false); }} />
+                <button className="m-btn primary" disabled={!renameDraft.trim()} onClick={commitRename}>Rename</button>
+                <button className="m-cancel" onClick={() => setRenameOpen(false)}>Cancel</button>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -990,21 +1177,11 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   );
 }
 
+// Only what Tailwind can't reach: the plan's SVG ink classes, the cursor HUD
+// and the dialogs. Toolbar, panels, zoom and status bar are the editor's own
+// components (components/SheetParts.jsx).
 const CSS = `
-.cadv{position:absolute; inset:0; display:flex; flex-direction:column; background:#fff; font-family:var(--font-inter),system-ui,sans-serif; overflow:hidden}
 .cadv *{box-sizing:border-box}
-.cadv__top{position:relative; display:flex; align-items:center; gap:10px; padding:0 14px; height:56px; border-bottom:1px solid rgba(44,62,80,.1); flex:0 0 auto; background:#fff}
-.cadv__back{width:36px; height:36px; border:1px solid rgba(44,62,80,.12); background:#fff; border-radius:9px; font-size:20px; line-height:1; color:#3E4C59; cursor:pointer}
-.cadv__back:hover{background:#F4F6F9}
-.cadv__title .name{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:15px; color:#18222D}
-.cadv__title .sub{font-family:var(--font-jetbrains-mono),monospace; font-size:11px; color:#6E7B88}
-.cadv__body{flex:1; display:flex; min-height:0}
-.cadv__rail{flex:0 0 60px; width:60px; background:#F4F6F9; border-right:1px solid rgba(44,62,80,.1); display:flex; flex-direction:column; align-items:center; gap:4px; padding:10px 0}
-.cadv__tool{position:relative; width:42px; height:42px; border:1px solid transparent; border-radius:10px; background:transparent; color:#2C97A8; display:flex; align-items:center; justify-content:center; cursor:pointer; transition:background .14s,color .14s,border-color .14s}
-.cadv__tool:hover{background:#fff; color:#1C6F7C; border-color:rgba(44,62,80,.12)}
-.cadv__tool.on{background:#2C3E50; color:#3FB7C9; border-color:#2C3E50}
-.cadv__tool .key{position:absolute; right:4px; bottom:2px; font-family:var(--font-jetbrains-mono),monospace; font-size:8.5px; opacity:.55}
-.cadv__workspace{flex:1; position:relative; min-width:0; overflow:hidden; background:#FFFFFF}
 .cadv__svg{position:absolute; inset:0; width:100%; height:100%; display:block; touch-action:none}
 .cadv-ink{stroke:#16212B}
 .cadv-poche{fill:#C9D0D8}
@@ -1013,8 +1190,6 @@ const CSS = `
 .cadv-sel-fill{fill:rgba(63,183,201,.18)}
 .cadv-active{stroke:#3FB7C9}
 .cadv-cross{stroke:#2C3E50}
-.cadv-grid-minor{stroke:#AAC6CE; opacity:.4}
-.cadv-grid-major{stroke:#84AEBA; opacity:.55}
 .cadv-dim{stroke:#2C3E50}
 .cadv-dim-crit{stroke:#C4564B}
 .cadv-boundary{stroke:#38B24A}
@@ -1027,91 +1202,30 @@ const CSS = `
 .cadv-note{font-family:var(--font-jetbrains-mono),monospace; fill:#54616E}
 .cadv__hud{position:absolute; z-index:8; pointer-events:none; background:#1A2733; color:#EAF1F6; font-family:var(--font-jetbrains-mono),monospace; font-size:11.5px; padding:4px 8px; border-radius:6px; white-space:nowrap; transform:translate(14px,14px)}
 .cadv__hud b{color:#3FB7C9; font-weight:600}
-.cadv__zoom{position:absolute; right:16px; bottom:16px; display:flex; flex-direction:column; background:#fff; border:1px solid rgba(44,62,80,.1); border-radius:12px; overflow:hidden; box-shadow:0 6px 16px rgba(20,33,46,.09)}
-.cadv__zoom button{width:38px; height:38px; border:0; background:#fff; color:#3E4C59; font-size:17px; cursor:pointer}
-.cadv__zoom button:hover{background:#F4F6F9; color:#18222D}
-.cadv__zoom button+button{border-top:1px solid rgba(44,62,80,.1)}
-.cadv__chip{position:absolute; left:16px; bottom:16px; display:flex; align-items:center; gap:12px; background:rgba(255,255,255,.92); border:1px solid rgba(44,62,80,.1); border-radius:10px; padding:8px 12px; font-family:var(--font-jetbrains-mono),monospace; font-size:11px; color:#54616E}
-.cadv__chip .north{color:#3E4C59; font-weight:600}
-.cadv__chip .bar{display:inline-flex; height:6px; border:1px solid #6E7B88}
-.cadv__chip .bar i{width:20px; height:100%; background:#3E4C59}
-.cadv__chip .bar i.alt{background:#fff}
-.cadv__inspector{flex:0 0 278px; width:278px; background:#fff; border-left:1px solid rgba(44,62,80,.1); overflow-y:auto}
-.cadv__sect{padding:14px 16px 4px; font-family:var(--font-jetbrains-mono),monospace; font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:#8C97A3}
-.cadv__sect.first{padding-top:16px}
-.cadv-prop{display:flex; align-items:center; justify-content:space-between; gap:10px; padding:7px 16px}
-.cadv-prop .k{font-size:12.5px; color:#54616E}
-.cadv-prop .v{font-size:12.5px; color:#18222D; font-weight:540}
-.cadv-prop .v.mono{font-family:var(--font-jetbrains-mono),monospace}
-.cadv-seg{display:flex; gap:4px; padding:4px 16px 8px}
-.cadv-seg button{flex:1; height:34px; border:1px solid rgba(44,62,80,.12); border-radius:9px; background:#fff; font:inherit; font-size:11.5px; font-weight:540; color:#54616E; cursor:pointer; transition:all .14s}
-.cadv-seg button:hover{border-color:rgba(44,62,80,.22); color:#18222D}
-.cadv-seg button.on{background:#2C3E50; border-color:#2C3E50; color:#EAF1F6}
-.cadv__row{display:flex; gap:8px; padding:10px 16px}
-.cadv-btn{flex:1; height:36px; border:1px solid rgba(44,62,80,.12); border-radius:9px; background:#fff; font:inherit; font-size:12.5px; font-weight:540; color:#3E4C59; cursor:pointer}
-.cadv-btn:hover{background:#F4F6F9; color:#18222D}
-.cadv-btn.danger{color:#C4564B; border-color:rgba(196,86,75,.3)}
-.cadv-btn.danger:hover{background:rgba(196,86,75,.08)}
-.cadv-hint{margin:8px 16px 14px; padding:11px 12px; border-radius:10px; background:rgba(63,183,201,.12); border:1px solid rgba(63,183,201,.2); font-size:12px; line-height:1.45; color:#1C6F7C}
-.cadv__status{flex:0 0 auto; height:34px; display:flex; align-items:center; padding:0 6px; border-top:1px solid rgba(44,62,80,.1); background:#F4F6F9; font-family:var(--font-jetbrains-mono),monospace; font-size:11px; color:#6E7B88}
-.cadv__status .cell{padding:0 12px; display:flex; align-items:center; gap:7px; height:100%}
-.cadv__status .cell+.cell{border-left:1px solid rgba(44,62,80,.1)}
-.cadv__status .cmd{color:#3E4C59}
-.cadv__status .xy b{color:#283643}
-.cadv__status .spacer{flex:1; border:0}
-.cadv__status .toggle{cursor:pointer; color:#8C97A3}
-.cadv__status .toggle.on{color:#1C6F7C; background:rgba(63,183,201,.1)}
-.cadv-layers{padding:2px 12px 14px; display:flex; flex-direction:column; gap:1px}
-.cadv-layer{display:flex; align-items:center; gap:9px; width:100%; text-align:left; padding:7px 8px; border:0; border-radius:8px; background:transparent; font:inherit; font-size:12.5px; color:#8C97A3; cursor:pointer}
-.cadv-layer:hover{background:#F4F6F9}
-.cadv-layer .dot{width:9px; height:9px; border-radius:3px; border:1.5px solid #B5BEC7; background:transparent; flex:0 0 auto}
-.cadv-layer.on{color:#283643}
-.cadv-layer.on .dot{background:#3FB7C9; border-color:#3FB7C9}
-.cadv__name{flex:0 1 260px; min-width:120px; height:34px; border:1px solid transparent; border-radius:8px; padding:0 10px; font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:15px; color:#18222D; background:transparent}
-.cadv__name:hover{border-color:rgba(44,62,80,.12); background:#F8FAFB}
-.cadv__name:focus{outline:none; border-color:#3FB7C9; background:#fff}
-.cadv__save{font-family:var(--font-jetbrains-mono),monospace; font-size:10.5px; letter-spacing:.04em; color:#8C97A3; white-space:nowrap}
-.cadv__save--saved{color:#1C6F7C}
-.cadv__save--saving{color:#3E4C59}
-.cadv__save--unsaved{color:#B06A1E}
-.cadv__save--error{color:#C4564B}
-.cadv__grow{flex:1}
-.cadv__acts{display:flex; gap:8px}
-.cadv__acts button{height:34px; padding:0 14px; border:1px solid rgba(44,62,80,.14); border-radius:9px; background:#fff; font:inherit; font-size:12.5px; font-weight:540; color:#3E4C59; cursor:pointer}
-.cadv__acts button:hover{background:#F4F6F9; color:#18222D}
-.cadv__acts button.primary{background:#2C3E50; border-color:#2C3E50; color:#fff}
-.cadv__acts button.primary:hover{background:#22303d}
-.cadv__acts button:disabled{opacity:.5; cursor:default}
-.cadv__open{position:absolute; top:54px; right:14px; width:300px; max-height:340px; overflow-y:auto; background:#fff; border:1px solid rgba(44,62,80,.14); border-radius:12px; box-shadow:0 12px 30px rgba(20,33,46,.16); z-index:20; padding:6px}
-.cadv__open-head{padding:8px 10px 6px; font-family:var(--font-jetbrains-mono),monospace; font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:#8C97A3}
-.cadv__open-empty{padding:10px; font-size:12.5px; color:#6E7B88}
-.cadv__open-row{display:flex; align-items:center; gap:8px; width:100%; text-align:left; padding:8px 10px; border:0; border-radius:8px; background:transparent; font:inherit; cursor:pointer}
-.cadv__open-row:hover{background:#F4F6F9}
-.cadv__open-row .nm{flex:1; font-size:13px; color:#18222D; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
-.cadv__open-row .dt{font-family:var(--font-jetbrains-mono),monospace; font-size:10.5px; color:#8C97A3}
-.cadv__open-row .del{width:20px; height:20px; display:flex; align-items:center; justify-content:center; border-radius:6px; color:#A6AEB6; font-size:15px}
-.cadv__open-row .del:hover{background:rgba(196,86,75,.12); color:#C4564B}
-.cadv__acts button.accent{background:#2C97A8; border-color:#2C97A8; color:#fff}
-.cadv__acts button.accent:hover{background:#23808e}
-.cadv__acts button.accent:disabled{opacity:.5; cursor:default}
-.cadv__modal-bg{position:fixed; inset:0; background:rgba(16,24,32,.5); display:flex; align-items:center; justify-content:center; z-index:50}
-.cadv__modal{width:420px; max-width:92vw; background:#fff; border-radius:16px; padding:22px; box-shadow:0 24px 60px rgba(16,24,32,.3)}
-.cadv__modal .h{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:18px; color:#18222D; margin-bottom:8px}
-.cadv__modal p{font-size:13.5px; line-height:1.5; color:#54616E; margin:0 0 16px}
-.cadv__modal .m-btn{display:flex; flex-direction:column; align-items:flex-start; width:100%; text-align:left; padding:12px 14px; margin-bottom:10px; border:1px solid rgba(44,62,80,.16); border-radius:11px; background:#fff; font:inherit; font-size:14px; font-weight:600; color:#18222D; cursor:pointer}
-.cadv__modal .m-btn small{font-weight:400; font-size:12px; color:#8C97A3; margin-top:3px}
-.cadv__modal .m-btn:hover{background:#F4F6F9}
-.cadv__modal .m-btn.primary{background:#2C97A8; border-color:#2C97A8; color:#fff}
-.cadv__modal .m-btn.primary small{color:rgba(255,255,255,.85)}
-.cadv__modal .m-btn.primary:hover{background:#23808e}
-.cadv__modal .m-cancel{width:100%; height:38px; border:0; background:transparent; font:inherit; font-size:13px; color:#6E7B88; cursor:pointer; margin-top:2px}
-.cadv__modal .m-cancel:hover{color:#18222D}
+.cadv__modal-bg{position:fixed; inset:0; background:rgba(15,23,42,.5); backdrop-filter:blur(3px); display:flex; align-items:center; justify-content:center; z-index:50; padding:16px}
+.cadv__modal{width:420px; max-width:100%; background:#fff; border-radius:16px; padding:24px 24px 20px; box-shadow:0 24px 60px -20px rgba(0,0,0,.45); color:#0E141B; user-select:text}
+.cadv__modal .h{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:19px; margin-bottom:8px}
+.cadv__modal p{font-size:13.5px; line-height:1.55; color:#3A4654; margin:0 0 16px}
+.cadv__modal .m-btn{display:flex; flex-direction:column; align-items:flex-start; width:100%; text-align:left; padding:12px 14px; margin-bottom:10px; border:0; border-radius:10px; background:#F1F5F9; font:inherit; font-size:14px; font-weight:600; color:#1A2530; cursor:pointer}
+.cadv__modal .m-btn small{font-weight:500; font-size:12px; opacity:.75; margin-top:3px}
+.cadv__modal .m-btn:hover{background:#E2E8F0}
+.cadv__modal .m-btn.primary{background:var(--action,#2C97A8); color:var(--action-ink,#1A2530)}
+.cadv__modal .m-btn.primary:hover{background:var(--action-hover,#22808F)}
 .cadv__modal .m-btn:disabled{opacity:.5; cursor:default}
-.cadv__gate-input{width:100%; height:42px; border:1px solid rgba(44,62,80,.18); border-radius:11px; padding:0 14px; font:inherit; font-size:15px; color:#18222D; margin-bottom:14px}
-.cadv__gate-input:focus{outline:none; border-color:#3FB7C9; box-shadow:0 0 0 3px rgba(63,183,201,.18)}
-.cadv__busy{position:fixed; inset:0; background:rgba(16,24,32,.55); display:flex; align-items:center; justify-content:center; z-index:60}
-.cadv__busy .box{display:flex; align-items:center; gap:12px; background:#fff; padding:16px 22px; border-radius:12px; font-size:14px; color:#18222D; font-weight:540}
+.cadv__modal .m-cancel{width:100%; height:38px; border:0; background:transparent; font:inherit; font-size:13px; color:#54616E; cursor:pointer; margin-top:2px}
+.cadv__modal .m-cancel:hover{color:#0E141B}
+.cadv__gate-input{width:100%; height:42px; border:0; box-shadow:inset 0 0 0 1px #CBD5E1; border-radius:10px; padding:0 14px; font:inherit; font-size:15px; color:#0E141B; background:#fff; margin-bottom:14px}
+.cadv__gate-input:focus{outline:none; box-shadow:inset 0 0 0 1px #3FB7C9, 0 0 0 3px rgba(63,183,201,.18)}
+.cadv__busy{position:fixed; inset:0; background:rgba(15,23,42,.5); backdrop-filter:blur(3px); display:flex; align-items:center; justify-content:center; z-index:60}
+.cadv__busy .box{display:flex; align-items:center; gap:12px; background:#fff; padding:16px 22px; border-radius:12px; font-size:14px; color:#0E141B; font-weight:600}
 .cadv__busy .spin{width:18px; height:18px; border:2.5px solid rgba(44,62,80,.18); border-top-color:#2C97A8; border-radius:50%; animation:cadvspin .8s linear infinite}
 @keyframes cadvspin{to{transform:rotate(360deg)}}
+html.dark .cadv__modal, html.dark .cadv__busy .box{background:#16202B; color:#E7EDF3}
+html.dark .cadv__modal p{color:#B6C2CE}
+html.dark .cadv__modal .m-btn{background:#22303D; color:#E7EDF3}
+html.dark .cadv__modal .m-btn:hover{background:#2A3947}
+html.dark .cadv__modal .m-btn.primary{background:var(--action,#2C97A8); color:var(--action-ink,#1A2530)}
+html.dark .cadv__modal .m-cancel{color:#B6C2CE}
+html.dark .cadv__modal .m-cancel:hover{color:#fff}
+html.dark .cadv__gate-input{background:#0E141B; color:#E7EDF3; box-shadow:inset 0 0 0 1px #2A3947}
 `;
-
