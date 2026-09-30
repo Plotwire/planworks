@@ -22,6 +22,7 @@ import {
   ProjectTitleBlockContext,
 } from "@/components/SheetParts";
 import { useApp } from "@/components/AppShell";
+import { getSketchData } from "@/lib/cad/sketchStore";
 import { DEFAULT_TITLEBLOCK } from "@/lib/titleBlock";
 import { useTryUsage, useTryPrompt, TryPill, TryPrompt, LOCKED, drawingSymbolCount } from "@/components/TryMode";
 import dynamic from "next/dynamic";
@@ -134,6 +135,9 @@ function normaliseProject(p) {
       annotations: s.annotations || [],
       notes: seedNotes(s.notes),
       symbolScale: typeof s.symbolScale === "number" ? s.symbolScale : 1,
+      // The sketch this sheet's plan was drawn in (Edit floor plan). Kept only
+      // when present, so sheets without one are unchanged.
+      ...(s.sketchId ? { sketchId: s.sketchId } : {}),
     }));
     return { meta, notes: projNotesText, boq: p.boq || null, titleBlock: p.titleBlock || null, colourMode: p.colourMode || "colour", sheets, activeSheetId: sheets.find(s => s.id === p.activeSheetId) ? p.activeSheetId : sheets[0].id };
   }
@@ -510,6 +514,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   readOnlyRef.current = readOnly;
   const [floorPlanOpen, setFloorPlanOpen] = useState(false);
   const [floorPlanArgs, setFloorPlanArgs] = useState(null);
+  const [planGone, setPlanGone] = useState(false); // linked sketch was deleted
 
   // Grid size in drawing units; symbols snap to multiples of this. Smaller =
   // more squares / finer placement (better for spacing out lighting).
@@ -648,7 +653,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     // This link is transient (blob: URL) and is stripped before any save; the
     // permanent copy is uploaded below and re-linked by hydrateImages on next load.
     const pdfNow = sourcePdf ? { pdfSrc: URL.createObjectURL(sourcePdf), pdfPage: 1 } : {};
-    patchSheetById(targetId, { bgImage: { src: displayUrl, w, h, ...pdfNow } });
+    patchSheetById(targetId, { bgImage: { src: displayUrl, w, h, ...pdfNow }, sketchId: null });
     setTimeout(fitToScreen, 60);
     // Registered BEFORE the upload starts, so a save that follows immediately
     // always finds it and waits (see readyToSave).
@@ -1575,8 +1580,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   });
 
   // Apply a plan handed back from the embedded Floor Plan sketch, in place (no navigation).
-  const applyFloorPlan = async ({ path, w, h, dataUrl, sketchId }) => {
-    const sid = activeSheetIdRef.current;
+  const applyFloorPlan = async ({ path, w, h, dataUrl, sketchId, sheetId }) => {
+    const sid = sheetId || activeSheetIdRef.current;
     let updated = null;
     setProject(prev => {
       updated = { ...prev, sheets: prev.sheets.map(s => s.id === sid ? { ...s, bgImage: { path, w, h, src: dataUrl }, sketchId } : s) };
@@ -1837,6 +1842,32 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     onHome();
   };
 
+  // ---- Floor plan round trip -----------------------------------------------
+  // The sheet's plan came from a sketch when the sheet carries its sketchId (an
+  // import clears it). Edit floor plan saves the drawing, then opens that
+  // sketch over the editor; Back to drawing / Use this plan there updates this
+  // same sheet with the plan frame kept, so symbols stay put.
+  const openFloorPlan = (sketchId) => {
+    setFloorPlanArgs({
+      openSketchId: sketchId || null,
+      linkProject: currentProjectId,
+      linkSheet: activeSheet?.id || null,
+      linkName: meta.projectName || "Floor plan",
+    });
+    setFloorPlanOpen(true);
+  };
+  const planFromSketch = Boolean(activeSheet?.sketchId && activeSheet?.bgImage);
+  const editFloorPlan = async () => {
+    const id = activeSheet?.sketchId;
+    if (!id) return;
+    let data = null;
+    try { data = await getSketchData(id); }
+    catch (err) { alert("Couldn't open the floor plan. Check your connection and try again."); return; }
+    if (!data) { setPlanGone(true); return; }
+    await saveProject();
+    openFloorPlan(id);
+  };
+
   const displayMeta = useMemo(
     () => ({ ...meta, sheetName: activeSheet.name, drawingNumber: activeSheet.drawingNumber || "" }),
     [meta, activeSheet.name, activeSheet.drawingNumber]
@@ -1870,6 +1901,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         onShowBoq={() => setShowBoq(true)}
         onShowNotes={() => setShowNotes(true)}
         onShowTitleBlock={() => setShowTitleBlock(true)}
+        onEditFloorPlan={planFromSketch && !readOnly ? editFloorPlan : null}
         sidebarHidden={sidebarHidden}
         onToggleSidebar={() => setSidebarHidden(s => !s)}
       />
@@ -1982,15 +2014,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
           {/* Floor Plan — opens the sketch for this drawing (round-trips back here) */}
           {(
             <button
-              onClick={() => {
-                setFloorPlanArgs({
-                  openSketchId: activeSheet?.sketchId || null,
-                  linkProject: currentProjectId,
-                  linkSheet: activeSheet?.id || null,
-                  linkName: meta.projectName || "Floor plan",
-                });
-                setFloorPlanOpen(true);
-              }}
+              onClick={() => openFloorPlan(activeSheet?.sketchId)}
               title="Draw or edit the floor plan"
               className="absolute top-4 left-16 z-20 flex items-center gap-1.5 h-9 px-3 bg-white dark:bg-[#16202B] rounded-xl ring-1 ring-slate-200/70 dark:ring-[#2A3947] shadow-[0_10px_30px_-10px_rgba(16,28,40,0.22)] text-[12px] font-semibold text-slate-700 dark:text-slate-200 hover:text-[#22808F] transition-colors">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="1.5"/><path d="M3 9h6V3M21 15h-6v6"/></svg>
@@ -2076,6 +2100,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
               deleteSelected={deleteSelected}
               placed={placed}
               onCollapse={() => setInspectorHidden(true)}
+              onEditFloorPlan={planFromSketch && !readOnly ? editFloorPlan : null}
             />
           )
         )}
@@ -2156,6 +2181,25 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         </div>
       )}
     </div>
+      {/* Edit floor plan: the linked sketch has been deleted. */}
+      {planGone && (
+        <div role="dialog" aria-modal="true" aria-labelledby="pw-plan-gone" onClick={() => setPlanGone(false)}
+          className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-[3px]">
+          <div onClick={(e) => e.stopPropagation()} className="w-full max-w-[420px] rounded-2xl bg-white dark:bg-[#16202B] p-6 shadow-2xl text-slate-900 dark:text-slate-100">
+            <h2 id="pw-plan-gone" className="text-[19px] font-bold mb-2" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>This floor plan can't be edited</h2>
+            <p className="text-[13.5px] leading-relaxed text-slate-600 dark:text-slate-300 mb-5">
+              The sketch it was drawn in has been deleted. The plan on this sheet stays exactly as it is, with your symbols.
+              To change it, draw a new floor plan for this sheet, or import a PDF or image.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setPlanGone(false)}
+                className="h-10 px-4 rounded-[10px] text-[13px] font-semibold bg-slate-100 text-[#1A2530] dark:bg-[#22303D] dark:text-slate-100">OK</button>
+              <button type="button" onClick={() => { setPlanGone(false); openFloorPlan(null); }}
+                className="h-10 px-4 rounded-[10px] text-[13px] font-semibold bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)]">Draw a new floor plan</button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Try mode: the Subscribe prompt (components/TryMode.jsx). */}
       <TryPrompt open={Boolean(tryPrompt.prompt)} title={tryPrompt.prompt?.title} body={tryPrompt.prompt?.body}
         onSubscribe={subscribeFromEditor} onClose={tryPrompt.hide} />

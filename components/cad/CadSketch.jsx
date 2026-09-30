@@ -254,6 +254,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const modelRef = useRef(model);
   modelRef.current = model;
   const histRef = useRef({ past: [], future: [] });
+  const openedModelRef = useRef(model); // the model as opened, for Back to drawing
   const [, setHistVer] = useState(0);
   const change = (fn) => {
     const cur = modelRef.current, next = fn(cur);
@@ -683,7 +684,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
         const up = await uploadPlanImage(dataUrlToBlob(png.dataUrl));
         const skId = await persistSketch({ projectId: linkProjectId, sheetId: linkSheetId, frame: efr });
         setFrame(efr); setPlanBusy(null);
-        onApplyPlan({ path: up.path, w: png.w, h: png.h, dataUrl: png.dataUrl, sketchId: skId });
+        onApplyPlan({ path: up.path, w: png.w, h: png.h, dataUrl: png.dataUrl, sketchId: skId, sheetId: linkSheetId });
         onClose && onClose();
         return;
       }
@@ -716,7 +717,20 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   };
   const openUsePlan = () => {
     if (!model.walls || !model.walls.length) { window.alert("Draw at least the outline walls before sending the plan to the editor."); return; }
+    // Opened from a drawing: it can only mean "update that drawing", so no question.
+    if (embedded && onApplyPlan) { runUsePlan("apply"); return; }
     setPlanModal(true);
+  };
+  // Back to drawing (opened from the editor): unchanged -> just close; changed
+  // -> update that same drawing and sheet, then close. A sketch with no walls
+  // left is saved but not sent, so the sheet keeps its plan.
+  const backToDrawing = async () => {
+    if (modelRef.current === openedModelRef.current) { onClose && onClose(); return; }
+    if (!modelRef.current.walls.length) {
+      try { await persistSketch(); } catch (e) { console.warn(e); }
+      onClose && onClose(); return;
+    }
+    runUsePlan("apply");
   };
   const startNamed = async () => {
     const nm = sketchName.trim();
@@ -735,9 +749,12 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       if (!data) { setNameGate(false); setSaveState("idle"); setPlanBusy(null); return; }
       const { _link, ...geo } = data;
       skipDirty.current = true;
-      setModel({ ...blankModel(), wallStyle: "light", ...geo }); resetHistory();
-      setLinkProjectId(_link?.projectId || linkProject || null);
-      setLinkSheetId(_link?.sheetId || linkSheet || null);
+      const loaded = { ...blankModel(), wallStyle: "light", ...geo };
+      setModel(loaded); resetHistory();
+      openedModelRef.current = loaded;
+      // Opened from a drawing: that drawing and sheet are the ones to update.
+      setLinkProjectId((embedded && linkProject) || _link?.projectId || linkProject || null);
+      setLinkSheetId((embedded && linkSheet) || _link?.sheetId || linkSheet || null);
       setFrame(_link?.frame || null);
       setSketchId(id);
       setSketchName(linkName || "Floor plan");
@@ -837,7 +854,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     const t = id === "wall" ? (tool === "int" ? "int" : "ext") : id;
     setTool(t); setDraftPts([]); setDimP1(null);
   };
-  const goBack = () => (embedded ? (onClose && onClose()) : router.push("/"));
+  const goBack = () => (embedded ? backToDrawing() : router.push("/"));
   const openRename = () => { setRenameDraft(sketchName); setRenameOpen(true); };
   const commitRename = () => {
     const nm = renameDraft.trim();
@@ -867,7 +884,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       {/* ==================== TOP BAR (shared with the editor) ==================== */}
       <TopBarShell>
         <TbGroup first>
-          <TbButton onClick={goBack} icon={ChevronLeft} label={embedded ? "Drawing" : "Dashboard"} title={embedded ? "Back to the drawing" : "Back to dashboard"} />
+          <TbButton onClick={goBack} icon={ChevronLeft} label={embedded ? "Back to drawing" : "Dashboard"} shortLabel={embedded ? "Drawing" : undefined} title={embedded ? "Back to the drawing (updates its plan if you changed anything)" : "Back to dashboard"} disabled={!!planBusy} />
           <TbBrand />
           <TbProjectPill label={sketchName || "Untitled sketch"} title="Rename this sketch" onClick={openRename} icon={PencilRuler} />
         </TbGroup>

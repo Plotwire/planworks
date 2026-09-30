@@ -7,7 +7,7 @@ import {
   MousePointer2, Cable, BrickWall, RotateCw, ZoomIn, ZoomOut, Maximize2,
   Palette as PaletteIcon, Ruler, Hand, Type, Printer, Settings, Search, Sun, Moon, Mail,
   ChevronRight, ChevronLeft, X, FileText, PanelLeftClose, PanelLeftOpen,
-  Grid3x3, ChevronDown, Check, ClipboardList, Plus, Clock, LayoutPanelTop, ImagePlus, SlidersHorizontal, Building2,
+  Grid3x3, ChevronDown, Check, ClipboardList, Plus, Clock, LayoutPanelTop, ImagePlus, SlidersHorizontal, Building2, PencilRuler,
 } from "lucide-react";
 import {
   SYMBOLS, SYMBOL_META, CATEGORY_COLOURS, VIEWBOX,
@@ -90,7 +90,7 @@ export function TopBar({
   meta, onHome, theme, onToggleTheme, onShowMeta, onImport, onUndo, onRedo, onSave, savedFlash, onShowProjects,
   onExportJSON, onPrint, colourMode, onToggleColour, onNormalise, normaliseFlash,
   snapEnabled, onToggleSnap, onShowBoq, onShowTitleBlock, onShowNotes,
-  sidebarHidden, onToggleSidebar, trialPill = null,
+  sidebarHidden, onToggleSidebar, trialPill = null, onEditFloorPlan = null,
 }) {
   const projectLabel = meta.projectName || "Untitled Project";
   const sheetLabel = meta.sheetName || "Drawing";
@@ -119,8 +119,11 @@ export function TopBar({
       {/* 4. Drawing */}
       <TbGroup label="Drawing">
         <TbButton onClick={onShowNotes} icon={Type} label="Installation notes" shortLabel="Notes" title="Installation notes" />
-        <TbButton onClick={onShowTitleBlock} icon={LayoutPanelTop} label="Title block" title="Title block" />
+        <TbButton onClick={onShowTitleBlock} icon={LayoutPanelTop} label="Title block" shortLabel="Title" title="Title block" />
         <TbButton onClick={onShowBoq} icon={ClipboardList} label="Quote" title="Quote: materials list and client quote" />
+        {/* Only when this sheet's plan was drawn in Sketch a plan. Icon only
+            under 1300px so the bar still fits one row at 1180px. */}
+        {onEditFloorPlan && <TbButton onClick={onEditFloorPlan} icon={PencilRuler} label="Edit floor plan" title="Edit floor plan (opens the sketch this plan was drawn in)" collapse />}
       </TbGroup>
 
       {/* 5. View */}
@@ -1760,7 +1763,7 @@ function TitleBlock({ meta, updateMeta, onSheetField }) {
 export function Inspector({
   selectedItem, selectedAnno, wireSelected,
   updateLabel, updateAnnoText, setRotation, setItemScale,
-  rotateSelected, deleteSelected, placed, onCollapse,
+  rotateSelected, deleteSelected, placed, onCollapse, onEditFloorPlan = null,
 }) {
   return (
     <SidePanel side="right" title="Inspector" onCollapse={onCollapse}>
@@ -1783,7 +1786,7 @@ export function Inspector({
       ) : wireSelected ? (
         <WireInspector deleteSelected={deleteSelected} />
       ) : (
-        <EmptyInspector placed={placed} />
+        <EmptyInspector placed={placed} onEditFloorPlan={onEditFloorPlan} />
       )}
     </SidePanel>
   );
@@ -1920,7 +1923,7 @@ function WireInspector({ deleteSelected }) {
   );
 }
 
-function EmptyInspector({ placed }) {
+function EmptyInspector({ placed, onEditFloorPlan = null }) {
   const counts = {};
   placed.forEach(p => {
     const sym = findSymbol(p.symbolId);
@@ -1934,6 +1937,16 @@ function EmptyInspector({ placed }) {
                     [&::-webkit-scrollbar-thumb]:bg-white/10
                     [&::-webkit-scrollbar-thumb]:rounded-full">
       <div className="mb-4 text-slate-600 dark:text-slate-300">Select a symbol or annotation to inspect.</div>
+      {onEditFloorPlan && (
+        <div className="mb-5">
+          <div className="text-slate-500 dark:text-slate-400 uppercase tracking-[0.2em] text-[9px] mb-2">Floor plan</div>
+          <div className="mb-2.5 text-slate-600 dark:text-slate-300">This sheet&rsquo;s plan was drawn in Sketch a plan.</div>
+          <button type="button" onClick={onEditFloorPlan}
+            className="w-full h-9 flex items-center justify-center gap-1.5 rounded-lg text-[12px] font-semibold bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)] transition-colors">
+            <PencilRuler size={15} /> Edit floor plan
+          </button>
+        </div>
+      )}
       <div className="text-slate-500 dark:text-slate-400 uppercase tracking-[0.2em] text-[9px] mb-2">Schedule</div>
       {!entries.length ? (
         <div className="text-slate-400 mt-2 text-[10px] italic">No items placed yet.</div>
