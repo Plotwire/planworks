@@ -12,7 +12,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
-  T_EXT, T_INT, DOOR_W, WIN_W, ptStr, hyp, segLen, snap, fmtMM,
+  T_EXT, T_INT, DOOR_W, WIN_W, ptStr, wallStyleOf, hyp, segLen, snap, fmtMM,
   nearestWall, hitTest, joinWalls, pocheD, outlinePathD,
 } from "@/lib/cad/plan";
 import { listSketches, getSketchData, insertSketch, updateSketch, deleteSketch } from "@/lib/cad/sketchStore";
@@ -44,11 +44,11 @@ const SCALE_MIN = 0.02, SCALE_MAX = 0.6;
 // Every wall drawn as one joined solid: a single poche path, then the outline
 // of the union (mitred corners, T-junctions and crossings with no seams). The
 // selected wall is outlined on top in the accent colour.
-function WallsNode({ joined, selId }) {
+function WallsNode({ joined, selId, solid }) {
   const selPoly = selId ? joined.polys[selId] : null;
   return (
     <g>
-      <path d={pocheD(joined.polys)} className="cadv-poche" fillRule="nonzero" stroke="none" />
+      <path d={pocheD(joined.polys)} className={solid ? "cadv-poche-solid" : "cadv-poche"} fillRule="nonzero" stroke="none" />
       <path d={outlinePathD(joined.outline)} className="cadv-ink" fill="none" strokeWidth={1.3}
         strokeLinejoin="miter" strokeMiterlimit={12} strokeLinecap="square" vectorEffect="non-scaling-stroke" />
       {selPoly && (
@@ -211,7 +211,8 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const livePinchRef = useRef(null);
   const suppressClickRef = useRef(false);
 
-  const [model, setModel] = useState(() => ({ EXTENT: { w: 8400, h: 8800, margin: 2600 }, walls: [], doors: [], windows: [], dims: [], rooms: [], notes: [], boundary: null, rooflights: [], stairs: null }));
+  // New sketches start with Solid walls; saved ones keep what they have (see wallStyleOf).
+  const [model, setModel] = useState(() => ({ EXTENT: { w: 8400, h: 8800, margin: 2600 }, walls: [], doors: [], windows: [], dims: [], rooms: [], notes: [], boundary: null, rooflights: [], stairs: null, wallStyle: "solid" }));
   const [tool, setTool] = useState("select");
   const [view, setView] = useState({ s: 0.08, tx: 200, ty: 200 });
   const [draftPts, setDraftPts] = useState([]);
@@ -598,7 +599,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     return { s: ns, tx: cxp - wx * ns, ty: cyp - wy * ns };
   });
 
-  const blankModel = () => ({ EXTENT: { w: 8400, h: 8800, margin: 2600 }, walls: [], doors: [], windows: [], dims: [], rooms: [], notes: [], boundary: null, rooflights: [], stairs: null });
+  const blankModel = () => ({ EXTENT: { w: 8400, h: 8800, margin: 2600 }, walls: [], doors: [], windows: [], dims: [], rooms: [], notes: [], boundary: null, rooflights: [], stairs: null, wallStyle: "solid" });
   const currentLink = () => (linkProjectId ? { projectId: linkProjectId, sheetId: linkSheetId, frame } : null);
   const persistSketch = async (link) => {
     const lk = link === undefined ? currentLink() : link;
@@ -632,7 +633,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       const meta = sketches.find((sk) => sk.id === id);
       const { _link, ...geo } = data;
       skipDirty.current = true;
-      setModel({ ...blankModel(), ...geo }); resetHistory();
+      setModel({ ...blankModel(), wallStyle: "light", ...geo }); resetHistory();
       setLinkProjectId(_link?.projectId || null);
       setLinkSheetId(_link?.sheetId || null);
       setFrame(_link?.frame || null);
@@ -734,7 +735,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       if (!data) { setNameGate(false); setSaveState("idle"); setPlanBusy(null); return; }
       const { _link, ...geo } = data;
       skipDirty.current = true;
-      setModel({ ...blankModel(), ...geo }); resetHistory();
+      setModel({ ...blankModel(), wallStyle: "light", ...geo }); resetHistory();
       setLinkProjectId(_link?.projectId || linkProject || null);
       setLinkSheetId(_link?.sheetId || linkSheet || null);
       setFrame(_link?.frame || null);
@@ -760,7 +761,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
         <rect x={rl.x} y={rl.y} width={rl.w} height={rl.h} fill="none" className="cadv-ink" strokeWidth={0.8} strokeDasharray="20 14" vectorEffect="non-scaling-stroke" opacity={0.6} />
         <text x={rl.x + rl.w / 2} y={rl.y + rl.h / 2} className="cadv-note" fontSize={150} textAnchor="middle" fontWeight={600}>{rl.ref}</text>
       </g>));
-    if (layers.walls) g.push(<WallsNode key="walls" joined={joined} selId={sel && sel.kind === "wall" ? sel.id : null} />);
+    if (layers.walls) g.push(<WallsNode key="walls" joined={joined} solid={wallStyleOf(model) === "solid"} selId={sel && sel.kind === "wall" ? sel.id : null} />);
     if (layers.openings) {
       g.push(<g key="doors">{model.doors.map((d) => <DoorNode key={d.id} d={d} selected={sel && sel.kind === "door" && sel.id === d.id} />)}</g>);
       g.push(<g key="wins">{model.windows.map((wn) => <WindowNode key={wn.id} wn={wn} selected={sel && sel.kind === "window" && sel.id === wn.id} />)}</g>);
@@ -934,6 +935,12 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
         {!panelsHidden && (
           <SidePanel side="left" title="Floor plan" eyebrow="SKETCH">
             <div className="flex-1 overflow-y-auto px-3 py-3">
+              <section className="mb-5">
+                <SectionLabel>Wall style</SectionLabel>
+                <ChoiceGroup label="Wall style" value={wallStyleOf(model)}
+                  onChange={(v) => v !== wallStyleOf(model) && change((m) => ({ ...m, wallStyle: v }))}
+                  options={[{ value: "solid", label: "Solid" }, { value: "light", label: "Light" }]} />
+              </section>
               <section className="mb-5">
                 <SectionLabel>Snap grid</SectionLabel>
                 <ChoiceGroup label="Snap grid" value={settings.grid} onChange={(v) => setSettings((s) => ({ ...s, grid: v }))}
@@ -1131,6 +1138,7 @@ const CSS = `
 .cadv__svg{position:absolute; inset:0; width:100%; height:100%; display:block; touch-action:none}
 .cadv-ink{stroke:#16212B}
 .cadv-poche{fill:#C9D0D8}
+.cadv-poche-solid{fill:#27313C}
 .cadv-paper{fill:#FFFFFF}
 .cadv-sel{stroke:#3FB7C9}
 .cadv-sel-fill{fill:rgba(63,183,201,.18)}
