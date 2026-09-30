@@ -315,12 +315,17 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       if (e.altKey) return;
       const map = { v: "select", e: "ext", i: "int", d: "door", w: "window", m: "dim", r: "room", t: "text", h: "pan" };
       if (map[k]) { setTool(map[k]); setDraftPts([]); setDimP1(null); }
-      else if (e.key === "Escape") { setDraftPts([]); setDimP1(null); setSel(null); setTool("select"); }
+      else if (e.key === "Escape") {
+        // First Esc cancels the item in progress; with nothing in progress it
+        // leaves the tool (back to Select).
+        if (draftPts.length || dimP1) { setDraftPts([]); setDimP1(null); }
+        else { setSel(null); setTool("select"); }
+      }
       else if (e.key === "Delete" || e.key === "Backspace") { deleteSel(); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [sel]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sel, draftPts, dimP1]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // wheel zoom toward cursor (native, non-passive)
   useEffect(() => {
@@ -498,9 +503,10 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     const seg = { id: "w" + Date.now() + Math.round(Math.random() * 1e4), type: tool === "ext" ? "external" : "internal", x1: a.x, y1: a.y, x2: b.x, y2: b.y };
     change((m) => ({ ...m, walls: m.walls.concat([seg]) }));
   };
-  // One action per tool pick: once a wall, door, window, dimension, room label
-  // or note is placed, drop back to Select. Pick the tool again for the next one.
-  const finishAction = () => { setDraftPts([]); setDimP1(null); setTool("select"); };
+  // A tool stays active until Esc (with nothing in progress) or Select. Each
+  // item is complete on its own: after a wall's end click the next click starts
+  // a NEW wall where you click, never chained from the last wall's end.
+  const finishAction = () => { setDraftPts([]); setDimP1(null); };
   const handleClick = (e) => {
     if (suppressClickRef.current) { suppressClickRef.current = false; return; }
     if (panRef.current) return;
@@ -819,13 +825,13 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const selWin = sel && sel.kind === "window" ? model.windows.find((w) => w.id === sel.id) : null;
   const hint = {
     select: "Click a wall, door or window to select it. Shift-drag to pan.",
-    ext: draftPts.length ? "Click the end point - Esc to cancel" : "Click the start point of an external wall",
-    int: draftPts.length ? "Click the end point - Esc to cancel" : "Click the start point of an internal wall",
-    door: "Click on a wall to place a door",
-    window: "Click on a wall to place a window",
-    dim: dimP1 ? "Click the second measure point" : "Click the first measure point",
-    room: "Click inside a space to drop a room label",
-    text: "Click to place a note",
+    ext: draftPts.length ? "Click the end point - Esc to cancel" : "Click the start point of an external wall - Esc to exit",
+    int: draftPts.length ? "Click the end point - Esc to cancel" : "Click the start point of an internal wall - Esc to exit",
+    door: "Click on a wall to place a door - Esc to exit",
+    window: "Click on a wall to place a window - Esc to exit",
+    dim: dimP1 ? "Click the second measure point - Esc to cancel" : "Click the first measure point - Esc to exit",
+    room: "Click inside a space to drop a room label - Esc to exit",
+    text: "Click to place a note - Esc to exit",
     pan: "Drag to pan the sheet",
   }[tool];
 
@@ -967,7 +973,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
               </div>
             </div>
             <div className="border-t border-slate-200 dark:border-[#263441] px-4 py-3 bg-[#E3EAF3] dark:bg-[#141C24] text-[9px] text-slate-500 leading-relaxed">
-              Pick a tool and place it; the tool then goes back to Select. Esc cancels.
+              A tool stays on until you press Esc or pick Select. Esc once cancels what you're drawing; again leaves the tool.
             </div>
           </SidePanel>
         )}
@@ -996,7 +1002,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
           {isWallTool && (
             <WallTypeChooser className="top-4 left-16" value={tool === "int" ? "internal" : "external"}
               onChange={(t) => pickTool(t === "internal" ? "int" : "ext")}
-              hint={draftPts.length ? "click end · Esc cancels" : `click start · click end · ${tool === "int" ? T_INT : T_EXT} mm`} />
+              hint={draftPts.length ? "click end · Esc cancels" : `click start · click end · Esc exits · ${tool === "int" ? T_INT : T_EXT} mm`} />
           )}
           <ZoomControls zoom={view.s / 0.08} onIn={() => zoomBy(1.2)} onOut={() => zoomBy(1 / 1.2)} onFit={() => fit()} />
           <div className="absolute left-4 bottom-11 z-20 flex items-center gap-3 px-3 h-8 bg-white dark:bg-[#16202B] rounded-xl ring-1 ring-slate-200/70 dark:ring-[#2A3947] shadow-[0_10px_30px_-10px_rgba(16,28,40,0.22)] text-[10px] text-slate-600 dark:text-slate-300"
