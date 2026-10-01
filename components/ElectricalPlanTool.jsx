@@ -2163,12 +2163,10 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
 
           {/* Status bar */}
           <StatusBar right={<>SHEET A3 · {meta.scale}</>}>
-            {/* Under 1300px the counts give way to the hint. */}
-            <span className="hidden min-[1300px]:contents">
-              <StatusCount label="SYMBOLS" value={placed.length} />
-              <StatusCount label="WIRES" value={wires.length} />
-              <StatusCount label="NOTES" value={annotations.length} />
-            </span>
+            {/* The counts always show; the hint after them truncates. */}
+            <StatusCount label="SYMBOLS" value={placed.length} />
+            <StatusCount label="WIRES" value={wires.length} />
+            <StatusCount label="NOTES" value={annotations.length} />
             <span>TOOL <span className="text-[#22808F] ml-1">{tool.toUpperCase()}</span></span>
             <StatusHint parts={statusParts} />
           </StatusBar>
