@@ -29,6 +29,7 @@ import { TrialSheetMark, TryPrompt, useTryPrompt, LOCKED } from "@/components/Tr
 import { addDaysIso, QUOTE_VALID_DAYS, shownOnQuote, lineTotal as boqLineTotal, sectionTotal, boqTotals, outputSettings, materialsDoc, quoteDoc, docToCsv, QUOTE_DETAILS, hasQty, badNumberLines, parseNum, expiredValidUntil, fmtDate } from "@/lib/boqOutputs";
 import BoqDocPages from "@/components/BoqDocPages";
 import { keyText, ariaKeys, SHOW_KBD, TOUCH, CLOSE_MENUS } from "@/components/Shortcuts";
+import { SHEET, planFootprint } from "@/lib/cad/sheet";
 
 // Per-project title block. The editor publishes the *effective* title block
 // (the project's own, falling back to the account default) through this context
@@ -40,31 +41,12 @@ export function useProjectTitleBlock() {
 }
 
 /* ============================================================================
- * The sheet model
- * Re-declared here so this file is self-contained. Must match the values
- * in ElectricalPlanTool.jsx.
+ * The sheet model (SHEET), and planFootprint: where the plan sits inside the
+ * drawing area. The editor, the print page and the PDF export all place the
+ * plan with that one function, as does the sketch's true-scale export
+ * (lib/cad/planScale), so symbols stay on the right wall line in all of them.
+ * Both live in lib/cad/sheet, the one copy of the sheet's numbers.
  * ========================================================================= */
-const SHEET = {
-  width: 1587,
-  height: 1123,
-  margin: 18,
-  legendWidth: 230,
-  notesWidth: 280,
-  titleHeight: 110,
-};
-
-/* Where the plan sits inside the drawing area: scaled to fit (contain) and
- * centred. Returns { x, y, w, h } in CSS px, relative to DRAW's top-left.
- *
- * The editor, the print page and the PDF export all place the plan with this
- * one function. Symbols are positioned in the same DRAW space, so sharing it
- * is what keeps them on the right wall line in all three. */
-function planFootprint(DRAW, w, h) {
-  const scale = Math.min(DRAW.w / w, DRAW.h / h);
-  const fw = w * scale;
-  const fh = h * scale;
-  return { x: (DRAW.w - fw) / 2, y: (DRAW.h - fh) / 2, w: fw, h: fh };
-}
 
 const TOOLS = {
   select: { icon: MousePointer2, label: "Select", hint: "V" },
@@ -688,10 +670,11 @@ export const PANEL_TEXT = "text-[13px] leading-snug text-slate-800 dark:text-sla
 export const PANEL_HELP = "text-[12px] leading-relaxed text-slate-600 dark:text-slate-300";
 
 /* Pick-one control. Selected = the app's solid teal button (navy text);
- * unselected = white with a thin border. Obvious at a glance which is on. */
-export function ChoiceGroup({ options, value, onChange, label }) {
+ * unselected = white with a thin border. Obvious at a glance which is on.
+ * columns: how many to a row (default all in one). */
+export function ChoiceGroup({ options, value, onChange, label, columns = null }) {
   return (
-    <div role="radiogroup" aria-label={label} className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}>
+    <div role="radiogroup" aria-label={label} className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${columns || options.length}, minmax(0, 1fr))` }}>
       {options.map((o) => {
         const on = o.value === value;
         return (
@@ -3109,14 +3092,21 @@ function glyphToPrims(glyphEl) {
   return prims;
 }
 
-// Build a placement job (in PDF points) for one glyph element.
-function glyphToJob(glyphEl, DRAW, sx, sy, PAGE_H) {
+// Build a placement job (in PDF points) for one glyph element. clip: the
+// sheet's plan was sent at a true scale (bgImage.planFrame), whose re-map
+// (lib/cad/planScale remapSheet) can leave symbols outside the drawing area:
+// one wholly outside it (turned any way) is left out, as the editor and print
+// page hide it (the area clips). One partly inside prints whole, as before.
+// Older sheets print every symbol, exactly as they always have.
+function glyphToJob(glyphEl, DRAW, sx, sy, PAGE_H, clip = false) {
   const size = parseFloat(glyphEl.getAttribute("width")) || 0;
   if (!size) return null;
   const g = glyphEl.parentNode; // the <g> carrying translate()/rotate()
   const { tx, ty, rot } = parseGroupTransform(g && g.getAttribute ? g.getAttribute("transform") : "");
   const half = size / 2;
   const localX = tx + half, localY = ty + half;      // symbol centre in DRAW space
+  const r = half * Math.SQRT2;
+  if (clip && (localX + r < 0 || localY + r < 0 || localX - r > DRAW.w || localY - r > DRAW.h)) return null;
   const cx = (DRAW.x + localX) * sx;                  // → PDF points
   const cy = PAGE_H - (DRAW.y + localY) * sy;         // pdf-lib is bottom-left
   return { prims: glyphToPrims(glyphEl), cx, cy, size: size * sx, rotationDeg: rot };
@@ -3563,7 +3553,7 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
         const glyphEls = Array.from(el.querySelectorAll('[data-sym-glyph]'));
         const symbolJobs = [];
         for (const gEl of glyphEls) {
-          const job = glyphToJob(gEl, DRAW, sx, sy, PAGE_H);
+          const job = glyphToJob(gEl, DRAW, sx, sy, PAGE_H, !!(bg && bg.planFrame));
           if (job) symbolJobs.push(job);
           saved.push([gEl, "visibility", gEl.style.visibility]);
           gEl.style.visibility = "hidden";

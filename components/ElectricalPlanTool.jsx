@@ -23,6 +23,8 @@ import {
 } from "@/components/SheetParts";
 import { useApp } from "@/components/AppShell";
 import { getSketchData } from "@/lib/cad/sketchStore";
+import { SHEET, DRAW } from "@/lib/cad/sheet";
+import { applyPlanToSheet, scaleLabel, outsideNote } from "@/lib/cad/planScale";
 import { DEFAULT_TITLEBLOCK } from "@/lib/titleBlock";
 import { useTryUsage, useTryPrompt, TryPill, TryPrompt, LOCKED, drawingSymbolCount } from "@/components/TryMode";
 import { ShortcutsCard, StatusHint, TOUCH } from "@/components/Shortcuts";
@@ -43,15 +45,9 @@ import { useEditor } from "@/store/editorStore";
  * Print/export uses the browser's native print-to-PDF for full fidelity.
  * ========================================================================= */
 
-// Sheet dimensions — A3 landscape at 96 DPI (web standard)
-const SHEET = {
-  width: 1587,   // 420mm at 96dpi  (≈ 16.5")
-  height: 1123,  // 297mm at 96dpi
-  margin: 18,
-  legendWidth: 230,
-  notesWidth: 280,
-  titleHeight: 110,
-};
+// Sheet dimensions — A3 landscape at 96 DPI (web standard) — and the drawing
+// area (DRAW): lib/cad/sheet, shared with components/SheetParts.jsx and the
+// sketch's true-scale plan export (lib/cad/planScale).
 
 const ZOOM_MIN = 0.1;
 const ZOOM_MAX = 5;
@@ -601,14 +597,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const livePinchRef = useRef(null);       // latest pinch {zoom,panX,panY}; committed to state on release
 
   // ---------- Drawing area geometry ----------
-  // The drawing area occupies the centre of the sheet, bounded by margins,
-  // legend column, notes column, and title block.
-  const DRAW = useMemo(() => ({
-    x: SHEET.margin + SHEET.legendWidth + 8,
-    y: SHEET.margin,
-    w: SHEET.width - SHEET.margin * 2 - SHEET.legendWidth - SHEET.notesWidth - 16,
-    h: SHEET.height - SHEET.margin * 2 - SHEET.titleHeight - 8,
-  }), []);
+  // The drawing area (DRAW, lib/cad/sheet) occupies the centre of the sheet,
+  // bounded by margins, legend column, notes column, and title block.
 
   // ---------- Undo / Redo ----------
   const snapshot = useCallback(() => {
@@ -1653,16 +1643,39 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   });
 
   // Apply a plan handed back from the embedded Floor Plan sketch, in place (no navigation).
-  const applyFloorPlan = async ({ path, w, h, dataUrl, sketchId, sheetId }) => {
+  // scale / frame: the true scale and plan frame it was drawn at
+  // (lib/cad/planScale). When that moved the plan on the sheet (a new scale,
+  // or a plan that outgrew its frame), everything placed on the sheet moves
+  // with it so each item stays on the same spot of the plan, and the title
+  // block's Scale is set to match. That one is project-wide: with more than
+  // one floor it shows the last plan sent. onSaved: the sketch moves its link
+  // on to the new frame and scale once the drawing is saved with them.
+  const applyFloorPlan = async ({ path, w, h, dataUrl, sketchId, sheetId, scale = null, frame = null, remap = null, legacyFrame = null, manual = false, onSaved = null }) => {
     const sid = sheetId || activeSheetIdRef.current;
-    let updated = null;
-    setProject(prev => {
-      updated = { ...prev, sheets: prev.sheets.map(s => s.id === sid ? { ...s, bgImage: { path, w, h, src: dataUrl }, sketchId } : s) };
-      return updated;
-    });
+    const plan = { path, w, h, src: dataUrl, sketchId, frame, scale, oldFrame: remap && remap.oldFrame, legacyFrame };
+    const withPlan = (prev) => {
+      let moved = false, outside = 0;
+      const sheets = prev.sheets.map(s => {
+        if (s.id !== sid) return s;
+        const r = applyPlanToSheet(s, plan);
+        if (r.remapped) { moved = true; outside = r.outside; }
+        return r.sheet;
+      });
+      const next = { ...prev, sheets, ...(scale && sheets.some(s => s.id === sid) ? { meta: { ...prev.meta, scale: scaleLabel(scale) } } : {}) };
+      return { next, moved, outside };
+    };
+    // Worked out now from the project as shown (the editor sits behind the
+    // sketch, so nothing has changed it), as well as in the update below,
+    // which React may only run later: the save never waits on that.
+    const dry = withPlan(projectRef.current);
+    let done = null;
+    setProject(prev => { done = withPlan(prev); return done.next; });
+    const { next: updated, moved, outside } = done || dry;
+    // Undo must not put symbols back where they were on the old plan.
+    if (moved) { setHistory([]); setFuture([]); }
     setFloorPlanOpen(false);
-    if (currentProjectIdRef.current && updated) {
-      await enqueueSave(updated, async ({ p, id, stillLoaded }) => {
+    if (currentProjectIdRef.current) {
+      const ok = await enqueueSave(updated, async ({ p, id, stillLoaded }) => {
         try {
           const safe = await readyToSave(p);
           await updateProjectRow(id, p.meta?.projectName || "Untitled drawing", safe);
@@ -1673,7 +1686,10 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
           return false;
         }
       });
-    }
+      if (ok) onSaved?.();
+    } else onSaved?.(); // no row yet: the sheet carries its frame into the first Save
+    // Items the re-map left outside the drawing area: say so once the new plan is showing.
+    if (outside) setTimeout(() => window.alert(outsideNote(outside, scale, manual)), 0);
   };
 
   // Save As: store the current canvas as a new named project (new cloud row)
@@ -1919,7 +1935,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   // The sheet's plan came from a sketch when the sheet carries its sketchId (an
   // import clears it). Edit floor plan saves the drawing, then opens that
   // sketch over the editor; Back to drawing / Use this plan there updates this
-  // same sheet with the plan frame kept, so symbols stay put.
+  // same sheet at the plan's true scale (applyFloorPlan): the frame is kept
+  // when it still fits, else symbols move with the plan, so they stay put on it.
   const openFloorPlan = (sketchId) => {
     setFloorPlanArgs({
       openSketchId: sketchId || null,

@@ -24,6 +24,7 @@ import { listSketches, getSketchData, insertSketch, updateSketch, deleteSketch }
 import { insertProject, getProjectData, updateProjectRow } from "@/lib/db";
 import { uploadPlanImage, dataUrlToBlob } from "@/lib/planImages";
 import { computeFrame, renderModelToPng } from "@/lib/cad/sketchToImage";
+import { SCALES, MARGIN_MM, PLAN_PX, scalePrefOf, scaleLabel, planSheetFrame, applyPlanToSheet, outsideNote, legacyFrameOf } from "@/lib/cad/planScale";
 import { isTouchDevice } from "@/lib/touch";
 import {
   ChevronLeft, FolderOpen, FilePlus, Save, Send, Undo2, Redo2, SlidersHorizontal, Grid3x3, Magnet, Compass,
@@ -44,7 +45,9 @@ import { TryPill, useTryUsage } from "@/components/TryMode";
 // smooth panning on a drawing.
 const PROMOTE = isTouchDevice() ? "auto" : "transform";
 
-const SCALE_MIN = 0.02, SCALE_MAX = 0.6;
+// Zoom limits (screen px per mm). Out far enough to see a big plan's whole A3
+// drawing-area outline (54 m across for a 36.5 m house at 1:200).
+const SCALE_MIN = 0.005, SCALE_MAX = 0.6;
 
 // ------------------------- node renderers -------------------------
 // Every wall drawn as one joined solid: a single poche path, then the outline
@@ -241,6 +244,8 @@ const LAYER_LIST = [
 // nothing hidden can be edited or deleted.
 const SEL_LAYER = { wall: "walls", door: "openings", window: "openings", room: "rooms" };
 
+// The Scale section's warning (the plan would be cut off, or is too big for A3).
+const SCALE_WARN = "mt-2 rounded-lg px-2.5 py-2 text-[12px] leading-snug font-medium bg-red-50 text-red-800 ring-1 ring-red-200 dark:bg-red-500/10 dark:text-red-200 dark:ring-red-400/30";
 const SAVE_LABEL = { idle: "NOT SAVED", unsaved: "UNSAVED CHANGES", saving: "SAVING…", saved: "SAVED", error: "SAVE FAILED" };
 // The snap a wall point is on (Snap to walls), shown by the cursor.
 const SNAP_LABEL = { end: "END", side: "SIDE", guide: "GUIDE" };
@@ -355,7 +360,13 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const skipDirty = useRef(true);
   const [linkProjectId, setLinkProjectId] = useState(linkProject || null);
   const [linkSheetId, setLinkSheetId] = useState(linkSheet || null);
+  // The plan frame (mm) and scale the plan was last sent with (_link): null
+  // scale = sent before scales (lib/cad/planScale converts it on the next send).
   const [frame, setFrame] = useState(null);
+  const [linkScale, setLinkScale] = useState(null);
+  // The frame plans were sent at before scales (legacyFrameOf), kept once the
+  // link moves on, for a Save As copy of an older drawing that still has one.
+  const [legacyFrame, setLegacyFrame] = useState(null);
   const [planModal, setPlanModal] = useState(false);
   const [planBusy, setPlanBusy] = useState(null);
   const [nameGate, setNameGate] = useState(!(openSketchId || linkProject || embedded));
@@ -986,11 +997,14 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   });
 
   const blankModel = () => ({ EXTENT: { w: 8400, h: 8800, margin: 2600 }, walls: [], doors: [], windows: [], dims: [], rooms: [], notes: [], boundary: null, rooflights: [], stairs: null, wallStyle: "solid" });
-  const currentLink = () => (linkProjectId ? { projectId: linkProjectId, sheetId: linkSheetId, frame } : null);
-  const persistSketch = async (link) => {
+  // Old sketches keep their link as it was ({ projectId, sheetId, frame }) until a send.
+  const keptLegacy = () => (legacyFrame ? { legacyFrame } : {});
+  const currentLink = () => (linkProjectId ? { projectId: linkProjectId, sheetId: linkSheetId, frame, ...(linkScale ? { scale: linkScale, ...keptLegacy() } : {}) } : null);
+  // id: the sketch's id when it was saved earlier in the same send.
+  const persistSketch = async (link, knownId = sketchId) => {
     const lk = link === undefined ? currentLink() : link;
     const data = { ...model, _link: lk };
-    if (sketchId) { await updateSketch(sketchId, sketchName, data); return sketchId; }
+    if (knownId) { await updateSketch(knownId, sketchName, data); return knownId; }
     const id = await insertSketch(sketchName, data); setSketchId(id); return id;
   };
   const doSave = async () => {
@@ -1007,7 +1021,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     skipDirty.current = true;
     setModel(blankModel()); resetHistory();
     setSketchId(null); setSketchName("");
-    setLinkProjectId(null); setLinkSheetId(null); setFrame(null);
+    setLinkProjectId(null); setLinkSheetId(null); setFrame(null); setLinkScale(null); setLegacyFrame(null);
     setSel(null); setDraftPts([]); setDimP1(null); setTool("select"); setSaveState("idle");
     setNameGate(true);
     setTimeout(() => fitFrame(DEFAULT_FRAME), 0);
@@ -1022,7 +1036,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       setModel({ ...blankModel(), wallStyle: "light", ...geo }); resetHistory();
       setLinkProjectId(_link?.projectId || null);
       setLinkSheetId(_link?.sheetId || null);
-      setFrame(_link?.frame || null);
+      setFrame(_link?.frame || null); setLinkScale(_link?.scale || null); setLegacyFrame(legacyFrameOf(_link));
       setSketchId(id); setSketchName(meta?.name || "Untitled sketch");
       setSel(null); setDraftPts([]); setDimP1(null); setTool("select");
       fitFrame((geo.walls && geo.walls.length) ? computeFrame(geo, 900) : DEFAULT_FRAME);
@@ -1039,62 +1053,92 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     } catch (err) { console.error(err); window.alert("Couldn't delete: " + (err.message || err)); }
   };
 
-  const createDrawing = async (path, w, h, fr) => {
+  // A new drawing with this plan. ps: where it goes on the sheet and at what
+  // scale (planSheetFrame), which the title block's Scale says.
+  const createDrawing = async (path, w, h, ps) => {
     setPlanBusy("Creating drawing");
     const sheetId = "s_" + Math.random().toString(36).slice(2, 9);
     const today = new Date().toISOString().slice(0, 10);
     const name = sketchName || "Untitled drawing";
     const data = {
-      meta: { projectName: name, drawingNumber: "", date: today, revision: "A", revNote: "First Issue", company: "", clientName: "", clientEmail: "" },
+      meta: { projectName: name, drawingNumber: "", date: today, revision: "A", revNote: "First Issue", company: "", clientName: "", clientEmail: "", scale: scaleLabel(ps.scale) },
       boq: null, titleBlock: null, colourMode: "red",
       notes: "", // blank Installation Notes, like any new drawing
-      sheets: [{ id: sheetId, name, drawingNumber: "", bgImage: { path, w, h }, placed: [], furniture: [], walls: [], wires: [], annotations: [], notes: "", symbolScale: 1 }],
+      sheets: [{ id: sheetId, name, drawingNumber: "", bgImage: { path, w, h, planFrame: ps.frame, planScale: ps.scale }, placed: [], furniture: [], walls: [], wires: [], annotations: [], notes: "", symbolScale: 1 }],
       activeSheetId: sheetId,
     };
     const newId = await insertProject(name, data);
-    setLinkProjectId(newId); setLinkSheetId(sheetId); setFrame(fr);
-    const skId = await persistSketch({ projectId: newId, sheetId, frame: fr });
+    setLinkProjectId(newId); setLinkSheetId(sheetId); setFrame(ps.frame); setLinkScale(ps.scale);
+    const skId = await persistSketch({ projectId: newId, sheetId, frame: ps.frame, scale: ps.scale, ...keptLegacy() });
     try { await updateProjectRow(newId, name, { ...data, sheets: data.sheets.map((s) => s.id === sheetId ? { ...s, sketchId: skId } : s) }); } catch (e) { console.warn(e); }
     setPlanBusy(null);
     router.push("/drawing?id=" + newId);
   };
+  // Where the plan goes on the A3 sheet and at what scale (lib/cad/planScale).
+  // withLink: this send updates the drawing it was last sent to, so the frame
+  // and scale it went with then decide whether anything moves.
+  const sheetPlanOf = (m, withLink, polys = null) => planSheetFrame(m, { scalePref: scalePrefOf(m), link: withLink && frame ? { frame, scale: linkScale } : null, polys });
+  // A picked scale the plan doesn't fit at: what to choose instead. Too big
+  // for every standard scale, only Auto (past 1:500) shows all of it.
+  const scaleCure = (p) => (p.tooBig ? `choose Auto (1:${p.autoScale}) so none of it is cut off` : "choose a smaller scale or Auto");
   const runUsePlan = async (mode) => {
     setPlanModal(false);
+    const embed = !!(embedded && onApplyPlan);
+    const ps = sheetPlanOf(model, embed || mode === "update");
+    // Only a picked scale can cut the plan off (Auto never does): ask first.
+    if (ps.cut && !window.confirm(`The plan doesn't fit A3 at 1:${ps.scale}, so part of it will be cut off the drawing, and anything placed on that part will be hidden.\n\nSend it anyway? Cancel to ${scaleCure(ps)}.`)) return;
     setPlanBusy("Preparing plan");
     try {
-      if (embedded && onApplyPlan) {
-        const efr = frame || computeFrame(model);
-        const png = await renderModelToPng(model, efr, 2200);
-        setPlanBusy("Uploading plan");
-        const up = await uploadPlanImage(dataUrlToBlob(png.dataUrl));
-        const skId = await persistSketch({ projectId: linkProjectId, sheetId: linkSheetId, frame: efr });
-        setFrame(efr); setPlanBusy(null);
-        onApplyPlan({ path: up.path, w: png.w, h: png.h, dataUrl: png.dataUrl, sketchId: skId, sheetId: linkSheetId });
+      const png = await renderModelToPng(model, ps.frame, PLAN_PX);
+      setPlanBusy("Uploading plan");
+      const { path } = await uploadPlanImage(dataUrlToBlob(png.dataUrl));
+      const lk = { projectId: linkProjectId, sheetId: linkSheetId, frame: ps.frame, scale: ps.scale, ...keptLegacy() };
+      // Sending to a drawing it updates: the sketch is saved first with the
+      // link it has, so its edits are safe whatever happens next, and its
+      // link moves on to the new frame and scale only once the drawing is
+      // saved with them - a failed save can't leave the link naming a frame
+      // the drawing's plan isn't drawn at.
+      if (embed) {
+        // The editor puts it on the sheet, moving what is placed there with
+        // the plan when the frame changed, saves, then calls onSaved
+        // (applyFloorPlan).
+        const skId = await persistSketch(currentLink());
+        setFrame(ps.frame); setLinkScale(ps.scale); setPlanBusy(null);
+        const onSaved = () => persistSketch(lk, skId).catch((e) => console.warn(e));
+        onApplyPlan({ path, w: png.w, h: png.h, dataUrl: png.dataUrl, sketchId: skId, sheetId: linkSheetId, scale: ps.scale, frame: ps.frame, remap: ps.remap, legacyFrame, manual: ps.manual, onSaved });
         onClose && onClose();
         return;
       }
-      const fr = (mode === "update" && frame) ? frame : computeFrame(model);
-      const { dataUrl, w, h } = await renderModelToPng(model, fr, 2200);
-      setPlanBusy("Uploading plan");
-      const { path } = await uploadPlanImage(dataUrlToBlob(dataUrl));
       if (mode === "update" && linkProjectId) {
         setPlanBusy("Updating drawing");
         let proj = null;
         try { proj = await getProjectData(linkProjectId); } catch { proj = null; }
-        if (!proj) { await createDrawing(path, w, h, fr); return; }
-        const skId = await persistSketch({ projectId: linkProjectId, sheetId: linkSheetId, frame: fr });
-        const newSheets = (proj.sheets || []).map((s) => s.id === linkSheetId ? { ...s, bgImage: { path, w, h }, sketchId: skId } : s);
-        const matched = (proj.sheets || []).some((s) => s.id === linkSheetId);
-        if (!matched && newSheets.length) {
-          const aid = (proj.activeSheetId && newSheets.find((s) => s.id === proj.activeSheetId)) ? proj.activeSheetId : newSheets[0].id;
-          for (let i = 0; i < newSheets.length; i++) if (newSheets[i].id === aid) newSheets[i] = { ...newSheets[i], bgImage: { path, w, h }, sketchId: skId };
-        }
-        await updateProjectRow(linkProjectId, proj.meta?.projectName || sketchName, { ...proj, sheets: newSheets });
-        setFrame(fr); setPlanBusy(null);
+        if (!proj) { await createDrawing(path, png.w, png.h, ps); return; }
+        const skId = await persistSketch(currentLink());
+        // The linked sheet; if it has gone, the drawing's active (else first) one.
+        const sheets = proj.sheets || [];
+        const tid = sheets.some((s) => s.id === linkSheetId) ? linkSheetId
+          : !sheets.length ? null : proj.activeSheetId && sheets.some((s) => s.id === proj.activeSheetId) ? proj.activeSheetId : sheets[0].id;
+        const plan = { path, w: png.w, h: png.h, sketchId: skId, frame: ps.frame, scale: ps.scale, oldFrame: ps.remap && ps.remap.oldFrame, legacyFrame, linked: tid === linkSheetId };
+        let outside = 0;
+        const newSheets = sheets.map((s) => {
+          if (s.id !== tid) return s;
+          const r = applyPlanToSheet(s, plan);
+          outside = r.outside;
+          return r.sheet;
+        });
+        const meta = tid ? { meta: { ...(proj.meta || {}), scale: scaleLabel(ps.scale) } } : {};
+        await updateProjectRow(linkProjectId, proj.meta?.projectName || sketchName, { ...proj, ...meta, sheets: newSheets });
+        // The drawing has it now. Should this last write fail, the sketch's
+        // edits are already saved and the sheet's own planFrame says where
+        // its plan is, which the next send goes by.
+        try { await persistSketch(lk, skId); } catch (e) { console.warn(e); }
+        setFrame(ps.frame); setLinkScale(ps.scale); setPlanBusy(null);
+        if (outside) window.alert(outsideNote(outside, ps.scale, ps.manual));
         router.push("/drawing?id=" + linkProjectId);
         return;
       }
-      await createDrawing(path, w, h, fr);
+      await createDrawing(path, png.w, png.h, ps);
     } catch (e) {
       console.error(e); setPlanBusy(null);
       window.alert("Couldn't send the plan to the editor: " + (e.message || e));
@@ -1140,7 +1184,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       // Opened from a drawing: that drawing and sheet are the ones to update.
       setLinkProjectId((embedded && linkProject) || _link?.projectId || linkProject || null);
       setLinkSheetId((embedded && linkSheet) || _link?.sheetId || linkSheet || null);
-      setFrame(_link?.frame || null);
+      setFrame(_link?.frame || null); setLinkScale(_link?.scale || null); setLegacyFrame(legacyFrameOf(_link));
       setSketchId(id);
       setSketchName(linkName || "Floor plan");
       setSel(null); setDraftPts([]); setDimP1(null); setTool("select");
@@ -1159,6 +1203,11 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   // (lib/cad/rooms); only worked out when there is such a label.
   const anyAuto = model.rooms.some(isAuto);
   const spaces = useMemo(() => (anyAuto ? roomSpaces(model.walls, joined.polys) : null), [model.walls, joined, anyAuto]);
+  // Where the plan will go on the A3 sheet if sent now (as runUsePlan: the
+  // frame it was last sent with when opened from, or linked to, a drawing):
+  // the drawing-area outline on the canvas and the Scale section.
+  const sheetPlan = useMemo(() => sheetPlanOf(model, embedded || !!linkProjectId, joined.polys),
+    [model, joined, frame, linkScale, embedded, linkProjectId]); // eslint-disable-line react-hooks/exhaustive-deps
   const planEls = useMemo(() => {
     const g = [], c = planCentre(model.walls);
     if (layers.boundary && model.boundary) g.push(<polyline key="bnd" points={ptStr(model.boundary)} className="cadv-boundary" fill="none" strokeWidth={1.4} strokeDasharray="14 10" vectorEffect="non-scaling-stroke" />);
@@ -1249,6 +1298,29 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     overlay.push(<rect key={"hd" + k} x={x - 4.5 / view.s} y={y - 4.5 / view.s} width={9 / view.s} height={9 / view.s} className="cadv-handle" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />));
   if (dragUi && dragUi.ep) overlay.push(<rect key="dep" x={dragUi.x - 9 / view.s} y={dragUi.y - 9 / view.s} width={18 / view.s} height={18 / view.s} fill="none" className="cadv-active" strokeWidth={2} vectorEffect="non-scaling-stroke" />);
   if (dragUi && dragUi.kind === "node" && flags.wallSnap) overlay.push(...snapMarks("d", dragUi));
+  // The A3 drawing area at the plan's scale, where sending it will put it
+  // (sheetPlan): faint and dashed under the plan, red when a picked scale
+  // cuts the plan off; its label over the plan, haloed, so walls never hide
+  // it. Only once there are walls. On screen only - never in the plan image.
+  const sf = sheetPlan.frame, hasWalls = model.walls.length > 0, sheetCls = sheetPlan.cut ? "cadv-sheet over" : "cadv-sheet";
+  // The label at the outline's top-left corner, kept in sight (screen px):
+  // below the canvas top when that edge is above it, and clear of the tool
+  // palette (top left) - along the edge, inside the outline.
+  const fx0 = sf.x * view.s + view.tx, fy0 = sf.y * view.s + view.ty;
+  const lyS = Math.max(fy0 - 7, Math.min(18, (sf.y + sf.h) * view.s + view.ty - 6));
+  const lxS = Math.max(fx0, Math.min(lyS < 104 ? 64 : 8, (sf.x + sf.w) * view.s + view.tx - 40));
+  const sheetOutline = hasWalls && (
+    <g className={sheetCls} pointerEvents="none">
+      <rect x={sf.x} y={sf.y} width={sf.w} height={sf.h} fill="none" strokeWidth={1.2} strokeDasharray="10 7" vectorEffect="non-scaling-stroke" />
+    </g>
+  );
+  const sheetLabel = hasWalls && (
+    <g className={sheetCls} pointerEvents="none">
+      <text x={(lxS - view.tx) / view.s} y={(lyS - view.ty) / view.s} fontSize={11 / view.s} stroke="#FFFFFF" strokeWidth={3 / view.s} strokeLinejoin="round" paintOrder="stroke">
+        {`A3 · 1:${sheetPlan.scale}${sheetPlan.cut ? " · PLAN DOESN'T FIT" : ""}`}
+      </text>
+    </g>
+  );
 
   // length HUD (DOM, at cursor). With Snap to walls on it also names the
   // snap in use: END, SIDE or GUIDE.
@@ -1342,7 +1414,10 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const canUndo = histRef.current.past.length > 0, canRedo = histRef.current.future.length > 0;
 
   const svgCursor = tool === "pan" ? "grab" : drawingTool ? "crosshair" : (dragUi || cur.hov ? "move" : "default");
-  const gridSz = GRID_MM * view.s;
+  // Zoomed far out, the grid steps up tenfold rather than packing its lines tighter than 8px.
+  let gridMm = GRID_MM;
+  while (gridMm * view.s < 8) gridMm *= 10;
+  const gridSz = gridMm * view.s;
   // White paper with the editor's grid over it, edge to edge.
   const gridStyle = {
     backgroundColor: "#FFFFFF",
@@ -1431,6 +1506,27 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
         {!panelsHidden && (
           <SidePanel side="left" title="Floor plan" eyebrow="SKETCH">
             <div className="flex-1 overflow-y-auto px-3 py-3">
+              {/* The scale the plan goes on the A3 sheet at (lib/cad/planScale):
+                  Auto, or a picked one saved with the sketch (undoable). */}
+              <section className="mb-5">
+                <SectionLabel>Scale</SectionLabel>
+                <ChoiceGroup label="Scale" columns={3} value={scalePrefOf(model)}
+                  onChange={(v) => v !== scalePrefOf(model) && change((m) => ({ ...m, sheetScale: v }))}
+                  options={[{ value: "auto", label: "Auto" }, ...SCALES.map((s) => ({ value: s, label: "1:" + s }))]} />
+                {!hasWalls ? (
+                  <div className={`mt-2 ${PANEL_HELP}`}>Draw the walls to see the scale and the A3 drawing area.</div>
+                ) : sheetPlan.cut ? (
+                  <div role="alert" className={SCALE_WARN}>The plan doesn&apos;t fit A3 at 1:{sheetPlan.scale} - {scaleCure(sheetPlan)}.</div>
+                ) : !sheetPlan.manual && sheetPlan.tooBig ? (
+                  <div role="alert" className={SCALE_WARN}>Too big for A3 even at 1:500 - Auto draws it at 1:{sheetPlan.scale} so none of it is cut off.</div>
+                ) : (
+                  <div className={`mt-2 ${PANEL_HELP}`}>
+                    {!sheetPlan.manual ? `Auto - 1:${sheetPlan.scale}, the largest scale that fits A3.`
+                      : sheetPlan.fits ? `1:${sheetPlan.scale} fits the A3 drawing area.`
+                      : `1:${sheetPlan.scale} fits, but closer to the edge than the ${MARGIN_MM} mm margin Auto keeps.`} The dashed outline shows the drawing area.
+                  </div>
+                )}
+              </section>
               <section className="mb-5">
                 <SectionLabel>Wall style</SectionLabel>
                 <ChoiceGroup label="Wall style" value={wallStyleOf(model)}
@@ -1484,7 +1580,9 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
               onClick={handleClick}
               onPointerLeave={() => setCur((c) => ({ ...c, on: false }))}>
               <g ref={gRef}>
+                {sheetOutline}
                 {planEls}
+                {sheetLabel}
                 {overlay}
               </g>
             </svg>
@@ -1626,12 +1724,12 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
             {embedded ? (
               <>
                 <p>Add this plan to your drawing as the background, behind your electrical symbols.</p>
-                <button className="m-btn primary" onClick={() => runUsePlan("apply")}>Add to this drawing<small>Keeps your placed symbols in position</small></button>
+                <button className="m-btn primary" onClick={() => runUsePlan("apply")}>Add to this drawing<small>Keeps your placed symbols on the same spots of the plan</small></button>
               </>
             ) : linkProjectId ? (
               <>
                 <p>This sketch is already linked to an electrical drawing. Update that drawing with your latest plan and keep every symbol you have placed, or start a brand-new drawing.</p>
-                <button className="m-btn primary" onClick={() => runUsePlan("update")}>Update existing drawing<small>Keeps your placed symbols in position</small></button>
+                <button className="m-btn primary" onClick={() => runUsePlan("update")}>Update existing drawing<small>Keeps your placed symbols on the same spots of the plan</small></button>
                 <button className="m-btn" onClick={() => runUsePlan("new")}>Create a new drawing<small>A fresh drawing with no symbols yet</small></button>
               </>
             ) : (
@@ -1680,6 +1778,10 @@ const CSS = `
 .cadv-room.sel, .cadv-room.sel .ar{fill:#3FB7C9}
 .cadv-tag-txt{font-family:var(--font-jetbrains-mono),monospace; fill:#16212B}
 .cadv-note{font-family:var(--font-jetbrains-mono),monospace; fill:#54616E}
+.cadv-sheet rect{stroke:#2C97A8; opacity:.6}
+.cadv-sheet text{fill:#22808F; font-family:var(--font-jetbrains-mono),monospace; font-weight:600; letter-spacing:.06em; opacity:.85}
+.cadv-sheet.over rect{stroke:#C4564B; opacity:.95}
+.cadv-sheet.over text{fill:#C4564B; opacity:1}
 .cadv__hud{position:absolute; z-index:8; pointer-events:none; background:#1A2733; color:#EAF1F6; font-family:var(--font-jetbrains-mono),monospace; font-size:11.5px; padding:4px 8px; border-radius:6px; white-space:nowrap; transform:translate(14px,14px)}
 .cadv__hud b{color:#3FB7C9; font-weight:600}
 .cadv__hud .sub{color:#8FA3B3; margin-left:6px}

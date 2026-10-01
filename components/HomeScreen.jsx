@@ -64,6 +64,7 @@ function PlanThumb({ project }) {
   // the legacy flat shape for projects saved before sheets existed.
   const src = (project.sheets && project.sheets[0]) ? project.sheets[0] : project;
   const { bgImage, placed = [] } = src;
+  const clip = !!(bgImage && bgImage.planFrame);
   let img = null;
   if (bgImage && bgImage.w && bgImage.h) {
     const s = Math.min(DRAW.w / bgImage.w, DRAW.h / bgImage.h);
@@ -78,8 +79,11 @@ function PlanThumb({ project }) {
       {!img && (
         <rect x={DRAW.x} y={DRAW.y} width={DRAW.w} height={DRAW.h} fill="none" stroke="#e0e6ec" strokeWidth="2"/>
       )}
+      {/* A plan sent at a true scale (bgImage.planFrame) can leave symbols
+          wholly outside the drawing area, hidden in the editor, so here too.
+          Older drawings show every dot, as before. */}
       <g fill="#cc1418">
-        {placed.map((p, i) => (
+        {placed.map((p, i) => (!clip || (p.x > -14 && p.y > -14 && p.x < DRAW.w + 14 && p.y < DRAW.h + 14)) && (
           <circle key={i} cx={DRAW.x + p.x} cy={DRAW.y + p.y} r="14" />
         ))}
       </g>
