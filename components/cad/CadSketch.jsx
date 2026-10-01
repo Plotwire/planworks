@@ -19,6 +19,7 @@ import { findNode, endAt, moveNode, moveWall } from "@/lib/cad/edit";
 import { angled, placeOpening, openingHost, slideOpening, planCentre, openingSide } from "@/lib/cad/openings";
 import { startRun, runEnd, retraces, afterWall } from "@/lib/cad/chain";
 import { isAuto, roomSpaces, areaAt, roomAt, onWall } from "@/lib/cad/rooms";
+import { wallSnap } from "@/lib/cad/snap";
 import { listSketches, getSketchData, insertSketch, updateSketch, deleteSketch } from "@/lib/cad/sketchStore";
 import { insertProject, getProjectData, updateProjectRow } from "@/lib/db";
 import { uploadPlanImage, dataUrlToBlob } from "@/lib/planImages";
@@ -26,7 +27,7 @@ import { computeFrame, renderModelToPng } from "@/lib/cad/sketchToImage";
 import { isTouchDevice } from "@/lib/touch";
 import {
   ChevronLeft, FolderOpen, FilePlus, Save, Send, Undo2, Redo2, SlidersHorizontal, Grid3x3, Magnet, Compass,
-  Maximize2, Trash2, Eye, EyeOff, BrickWall, DoorOpen, Tag as TagIcon, Type, MousePointer2, Hand, PencilRuler, Link2,
+  Maximize2, Trash2, Eye, EyeOff, BrickWall, DoorOpen, Tag as TagIcon, Type, MousePointer2, Hand, PencilRuler, Link2, Crosshair,
 } from "lucide-react";
 import {
   TopBarShell, TbGroup, TbButton, TbBrand, TbProjectPill, TbTrialSlot, TbMenu, TbMenuItem, TbPanelsItem, TbThemeItem,
@@ -238,6 +239,8 @@ const LAYER_LIST = [
 const SEL_LAYER = { wall: "walls", door: "openings", window: "openings", room: "rooms" };
 
 const SAVE_LABEL = { idle: "NOT SAVED", unsaved: "UNSAVED CHANGES", saving: "SAVING…", saved: "SAVED", error: "SAVE FAILED" };
+// The snap a wall point is on (Snap to walls), shown by the cursor.
+const SNAP_LABEL = { end: "END", side: "SIDE", guide: "GUIDE" };
 
 // The editor's grid (components/SheetParts.jsx).
 const GRID_LINE = "rgba(37,99,235,0.18)";
@@ -276,7 +279,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const [sel, setSel] = useState(null);
   const [dimP1, setDimP1] = useState(null);
   const [settings, setSettings] = useState({ grid: 100, doorW: DOOR_W, winW: WIN_W });
-  const [flags, setFlags] = useState({ ortho: true, gridSnap: true, chain: false });
+  const [flags, setFlags] = useState({ ortho: true, gridSnap: true, chain: false, wallSnap: true });
   const [layers, setLayers] = useState({ walls: true, openings: true, dims: true, rooms: true, stairs: true, boundary: true, grid: true });
   const [size, setSize] = useState({ w: 900, h: 600 });
   const [sketchId, setSketchId] = useState(null);
@@ -400,6 +403,9 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
 
   // A typed length belongs to the wall in progress; it goes when that does.
   useEffect(() => { if (!draftPts.length) setTypedLen(""); }, [draftPts]);
+  // Snap to walls markers belong to the pointer's last move: a click, Esc, a
+  // tool change or an edit clears them until the next move works them out again.
+  useEffect(() => { setCur((c) => (c.snap || c.guides ? { ...c, snap: null, guides: null } : c)); }, [draftPts, tool, model.walls]);
 
   // wheel zoom toward cursor (native, non-passive)
   useEffect(() => {
@@ -535,7 +541,11 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     }
     return best;
   };
-  const wallPoint = (raw, from) => endpointSnap(raw) || snapPt(raw, from);
+  // Snap to walls (lib/cad/snap): after a wall end, a wall's side or an
+  // alignment guide, before angle lock and grid. Off: exactly as before.
+  // half: the drawn wall's half thickness, so a side point leaves it room.
+  const snapWalls = (raw, from, o = null, walls = model.walls) => wallSnap(walls, raw, { scale: viewRef.current.s, from, lock: flags.ortho && !!from, grid: flags.gridSnap ? settings.grid : 0, half: (tool === "ext" ? T_EXT : T_INT) / 2, ...o });
+  const wallPoint = (raw, from) => endpointSnap(raw) || (flags.wallSnap && snapWalls(raw, from)) || snapPt(raw, from);
   // proj (dragging a corner): the pointer's distance along the locked
   // direction rather than its straight-line distance from `from`.
   const snapPt = (raw, from, proj = false) => {
@@ -603,7 +613,11 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       // No end snap to the corner itself, nor to those far corners (that would
       // shrink a wall to nothing, which is never allowed).
       const skip = new Set([...ends, ...fars.flatMap((f) => findNode(ws, f.x, f.y))].map((n) => n.id + ":" + n.end));
-      d = { kind: "node", id: g.id, ends, home: { x: hit.x, y: hit.y }, skip, fars };
+      // Snap to walls: no guides from the corner's own ends, no sides of its own
+      // walls; a side point leaves room for the thickest wall there.
+      const own = { skipEnds: new Set(ends.map((n) => n.id + ":" + n.end)), skipWalls: new Set(mine.map((w) => w.id)),
+        half: (mine.some((w) => w.type === "external") ? T_EXT : T_INT) / 2 };
+      d = { kind: "node", id: g.id, ends, home: { x: hit.x, y: hit.y }, skip, fars, own };
     } else if (op) {
       // A door / window slides along the wall it sits in now, never onto another.
       const o = (op.kind === "door" ? base.doors : base.windows).find((x) => x.id === op.id), host = o && openingHost(ws, o);
@@ -637,7 +651,9 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     if (d.kind === "node") {
       // Back over its own spot puts it back exactly; another wall end wins
       // next; else angle lock along whichever wall at the corner the pointer
-      // fits best (the grabbed one on a tie), then grid.
+      // fits best (the grabbed one on a tie), then grid. Snap to walls comes
+      // in before angle lock: a wall's side or a guide, on that wall's locked
+      // line when angles are locked.
       const home = hyp(raw.x - d.home.x, raw.y - d.home.y) <= 12 / viewRef.current.s;
       const ep = !home && endpointSnap(raw, d.skip, d.base.walls);
       let p = home ? d.home : ep, f = d.fars[0];
@@ -645,9 +661,11 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
         const q = snapPt(raw, o, true);
         if (!p || hyp(q.x - raw.x, q.y - raw.y) < hyp(p.x - raw.x, p.y - raw.y) - 1e-6) { p = q; f = o; }
       }
-      at = home || ep ? { x: p.x, y: p.y } : { x: Math.abs(p.x - f.x) < 1e-6 ? f.x : r3(p.x), y: Math.abs(p.y - f.y) < 1e-6 ? f.y : r3(p.y) };
+      const sw = !home && !ep && flags.wallSnap ? snapWalls(raw, f, { lock: flags.ortho, proj: true, ...d.own }, d.base.walls) : null;
+      if (sw) p = sw;
+      at = home || ep || sw ? { x: p.x, y: p.y } : { x: Math.abs(p.x - f.x) < 1e-6 ? f.x : r3(p.x), y: Math.abs(p.y - f.y) < 1e-6 ? f.y : r3(p.y) };
       next = home ? d.base : moveNode(d.base, d.ends, at, modelRef.current);
-      ui = { kind: "node", id: f.id, ep: !!ep, x: at.x, y: at.y };
+      ui = { kind: "node", id: f.id, ep: !!ep, snap: ep ? "end" : sw ? sw.kind : null, guides: sw ? sw.guides : null, x: at.x, y: at.y };
     } else if (d.kind === "opening") {
       // Moves along its wall as far as the pointer has (wherever it was
       // grabbed), kept inside the wall; Snap to grid steps its gap to the
@@ -719,7 +737,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     const from = draftPts.length ? draftPts[draftPts.length - 1] : null;
     const p = isWallTool ? wallPoint(raw, from) : (flags.gridSnap ? { x: snap(raw.x, settings.grid), y: snap(raw.y, settings.grid) } : raw);
     const pk = tool === "select" ? pickAt(model, raw) : null, hov = !!pk && (!!pk.end || pk.ri >= 0); // a wall end or a room label
-    setCur({ x: p.x, y: p.y, rx: raw.x, ry: raw.y, sx: e.clientX, sy: e.clientY, on: true, ep: !!p.ep, hov });
+    setCur({ x: p.x, y: p.y, rx: raw.x, ry: raw.y, sx: e.clientX, sy: e.clientY, on: true, ep: !!p.ep, snap: p.ep ? "end" : p.kind || null, guides: p.guides || null, hov });
   };
   const handleDown = (e) => {
     if (pinchActiveRef.current) { cancelDrag(); return; }
@@ -1112,6 +1130,22 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     return g;
   }, [model, sel, layers, joined, spaces]);
 
+  // Snap to walls markers (screen-constant): a diamond where a point lands on
+  // a wall's side, a ring on a guide; each guide dashed from its tracking
+  // point (a small x there) through the point. Wall ends keep their square.
+  const snapMarks = (k, p) => {
+    const s = view.s, out = [];
+    if (p.snap === "side") out.push(<polygon key={k + "sd"} points={ptStr([[p.x, p.y - 10 / s], [p.x + 10 / s, p.y], [p.x, p.y + 10 / s], [p.x - 10 / s, p.y]])} fill="none" className="cadv-active" strokeWidth={2} vectorEffect="non-scaling-stroke" />);
+    if (p.snap === "guide") out.push(<circle key={k + "gd"} cx={p.x} cy={p.y} r={8 / s} fill="none" className="cadv-active" strokeWidth={2} vectorEffect="non-scaling-stroke" />);
+    if (p.snap !== "end") (p.guides || []).forEach((g, i) => {
+      const L = hyp(p.x - g.x, p.y - g.y), m = 5 / s;
+      if (L < 1e-6) return;
+      out.push(<line key={k + "gl" + i} x1={g.x} y1={g.y} x2={p.x + (p.x - g.x) / L * 60 / s} y2={p.y + (p.y - g.y) / L * 60 / s} className="cadv-guide" strokeWidth={1} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />);
+      out.push(<path key={k + "gx" + i} d={`M${g.x - m} ${g.y - m}L${g.x + m} ${g.y + m}M${g.x - m} ${g.y + m}L${g.x + m} ${g.y - m}`} className="cadv-guide" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />);
+    });
+    return out;
+  };
+
   // overlay: draft + rubber-band + vertices + crosshair + snap dot
   const overlay = [];
   if (isWallTool && draftPts.length) {
@@ -1130,6 +1164,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     overlay.push(<line key="chy" x1={cur.x} y1={-1e6} x2={cur.x} y2={1e6} className="cadv-cross" strokeWidth={0.9} opacity={0.6} vectorEffect="non-scaling-stroke" />);
     overlay.push(<circle key="cdot" cx={cur.x} cy={cur.y} r={70} className="cadv-active" fill="#fff" strokeWidth={1.4} vectorEffect="non-scaling-stroke" />);
     if (isWallTool && cur.ep) overlay.push(<rect key="ep" x={cur.x - 9 / view.s} y={cur.y - 9 / view.s} width={18 / view.s} height={18 / view.s} fill="none" className="cadv-active" strokeWidth={2} vectorEffect="non-scaling-stroke" />);
+    if (isWallTool && flags.wallSnap && !typedLen) overlay.push(...snapMarks("c", cur)); // a typed length isn't snapped
   }
   // Select: drag handles at the selected wall's ends (screen-constant size);
   // a dragged corner shows the end-snap square when it lands on another end.
@@ -1137,10 +1172,16 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   if (tool === "select" && layers.walls && selWall) [[selWall.x1, selWall.y1], [selWall.x2, selWall.y2]].forEach(([x, y], k) =>
     overlay.push(<rect key={"hd" + k} x={x - 4.5 / view.s} y={y - 4.5 / view.s} width={9 / view.s} height={9 / view.s} className="cadv-handle" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />));
   if (dragUi && dragUi.ep) overlay.push(<rect key="dep" x={dragUi.x - 9 / view.s} y={dragUi.y - 9 / view.s} width={18 / view.s} height={18 / view.s} fill="none" className="cadv-active" strokeWidth={2} vectorEffect="non-scaling-stroke" />);
+  if (dragUi && dragUi.kind === "node" && flags.wallSnap) overlay.push(...snapMarks("d", dragUi));
 
-  // length HUD (DOM, at cursor)
+  // length HUD (DOM, at cursor). With Snap to walls on it also names the
+  // snap in use: END, SIDE or GUIDE.
+  const snapTag = (k) => (flags.wallSnap && SNAP_LABEL[k] ? <span className="snap">{SNAP_LABEL[k]}</span> : null);
   let hud = null;
-  if (isWallTool && draftPts.length && cur.on) {
+  if (isWallTool && !draftPts.length && cur.on && snapTag(cur.snap)) {
+    const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
+    hud = <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>{snapTag(cur.snap)}</div>;
+  } else if (isWallTool && draftPts.length && cur.on) {
     const lp = draftPts[draftPts.length - 1];
     const L = Math.round(hyp(cur.x - lp.x, cur.y - lp.y));
     const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
@@ -1148,7 +1189,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     const closing = flags.chain && run && runEnd(true, run, typedLen ? typedEnd() : cur) === run.start;
     hud = typedLen
       ? <div className="cadv__hud cadv__hud--typed" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>Length <b>{typedLen}<i className="cadv__caret" /> mm</b> <span>{closing ? "Enter to close" : "Enter to place"}</span></div>
-      : <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>Length <b>{fmtMM(L)} mm</b>{closing ? <span className="sub">closes the shape</span> : null}</div>;
+      : <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>Length <b>{fmtMM(L)} mm</b>{closing ? <span className="sub">closes the shape</span> : null}{snapTag(cur.snap)}</div>;
   } else if (tool === "dim" && dimP1 && cur.on) {
     const L2 = Math.round(hyp(cur.x - dimP1.x, cur.y - dimP1.y));
     const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
@@ -1165,7 +1206,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   } else if (dragUi) {
     const gw = model.walls.find((w) => w.id === dragUi.id);
     const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
-    if (gw) hud = <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>Length <b>{fmtMM(segLen(gw))} mm</b>{dragUi.kind === "wall" ? <span className="sub">moved {fmtMM(dragUi.off)} mm</span> : null}</div>;
+    if (gw) hud = <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>Length <b>{fmtMM(segLen(gw))} mm</b>{dragUi.kind === "wall" ? <span className="sub">moved {fmtMM(dragUi.off)} mm</span> : snapTag(dragUi.snap)}</div>;
   }
 
   const selDoor = sel && sel.kind === "door" ? model.doors.find((d) => d.id === sel.id) : null;
@@ -1278,6 +1319,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
             <TbMenuItem icon={Grid3x3} label="Grid" checked={layers.grid} onClick={() => setLayers((l) => ({ ...l, grid: !l.grid }))} />
             <TbMenuItem icon={Magnet} label="Snap to grid" checked={flags.gridSnap} onClick={() => setFlags((f) => ({ ...f, gridSnap: !f.gridSnap }))} />
             <TbMenuItem icon={Compass} label="Lock angles (45°)" checked={flags.ortho} onClick={() => setFlags((f) => ({ ...f, ortho: !f.ortho }))} />
+            <TbMenuItem icon={Crosshair} label="Snap to walls" checked={flags.wallSnap} onClick={() => setFlags((f) => ({ ...f, wallSnap: !f.wallSnap }))} />
             <TbMenuItem icon={Link2} label="Chain walls" checked={flags.chain} onClick={() => setFlags((f) => ({ ...f, chain: !f.chain }))} />
             <TbMenuItem icon={Maximize2} label="Zoom to fit" onClick={() => fit()} />
             <TbPanelsItem hidden={panelsHidden} onClick={() => setPanelsHidden((h) => !h)} />
@@ -1310,6 +1352,8 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
                   onChange={(v) => setFlags((f) => ({ ...f, ortho: v }))} />
                 <ToggleRow label="Snap to grid" hint={`Points land on the ${settings.grid} mm grid`} checked={flags.gridSnap}
                   onChange={(v) => setFlags((f) => ({ ...f, gridSnap: v }))} />
+                <ToggleRow label="Snap to walls" hint="Wall sides and alignment guides" checked={flags.wallSnap}
+                  onChange={(v) => setFlags((f) => ({ ...f, wallSnap: v }))} />
                 <ToggleRow label="Chain walls" hint="Each wall starts where the last one ended" checked={flags.chain}
                   onChange={(v) => setFlags((f) => ({ ...f, chain: v }))} />
               </section>
@@ -1520,6 +1564,7 @@ const CSS = `
 .cadv-sel-fill{fill:rgba(63,183,201,.18)}
 .cadv-active{stroke:#3FB7C9}
 .cadv-handle{fill:#3FB7C9; stroke:#FFFFFF}
+.cadv-guide{stroke:#2C97A8; fill:none; opacity:.85}
 .cadv-cross{stroke:#2C3E50}
 .cadv-dim{stroke:#2C3E50}
 .cadv-dim-crit{stroke:#C4564B}
@@ -1535,6 +1580,8 @@ const CSS = `
 .cadv__hud{position:absolute; z-index:8; pointer-events:none; background:#1A2733; color:#EAF1F6; font-family:var(--font-jetbrains-mono),monospace; font-size:11.5px; padding:4px 8px; border-radius:6px; white-space:nowrap; transform:translate(14px,14px)}
 .cadv__hud b{color:#3FB7C9; font-weight:600}
 .cadv__hud .sub{color:#8FA3B3; margin-left:6px}
+.cadv__hud .snap{display:inline-block; margin-left:8px; padding:0 4px; border-radius:3px; background:#2C97A8; color:#0E141B; font-size:10px; font-weight:600; letter-spacing:.06em; line-height:15px}
+.cadv__hud .snap:first-child{margin-left:0}
 .cadv__hud--typed{outline:1.5px solid #2C97A8}
 .cadv__hud--typed span{color:#8FA3B3; margin-left:6px}
 .cadv__caret{display:inline-block; width:1px; height:11px; margin-left:1px; vertical-align:-1px; background:#3FB7C9; animation:cadvCaret 1s steps(1) infinite}
