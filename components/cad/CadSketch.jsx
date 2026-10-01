@@ -17,6 +17,7 @@ import {
 } from "@/lib/cad/plan";
 import { findNode, endAt, moveNode, moveWall } from "@/lib/cad/edit";
 import { angled, placeOpening, openingHost, slideOpening, planCentre, openingSide } from "@/lib/cad/openings";
+import { startRun, runEnd, retraces, afterWall } from "@/lib/cad/chain";
 import { listSketches, getSketchData, insertSketch, updateSketch, deleteSketch } from "@/lib/cad/sketchStore";
 import { insertProject, getProjectData, updateProjectRow } from "@/lib/db";
 import { uploadPlanImage, dataUrlToBlob } from "@/lib/planImages";
@@ -24,7 +25,7 @@ import { computeFrame, renderModelToPng } from "@/lib/cad/sketchToImage";
 import { isTouchDevice } from "@/lib/touch";
 import {
   ChevronLeft, FolderOpen, FilePlus, Save, Send, Undo2, Redo2, SlidersHorizontal, Grid3x3, Magnet, Compass,
-  Maximize2, Trash2, Eye, EyeOff, BrickWall, DoorOpen, Tag as TagIcon, Type, MousePointer2, Hand, PencilRuler,
+  Maximize2, Trash2, Eye, EyeOff, BrickWall, DoorOpen, Tag as TagIcon, Type, MousePointer2, Hand, PencilRuler, Link2,
 } from "lucide-react";
 import {
   TopBarShell, TbGroup, TbButton, TbBrand, TbProjectPill, TbTrialSlot, TbMenu, TbMenuItem, TbPanelsItem, TbThemeItem,
@@ -235,11 +236,15 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const [draftPts, setDraftPts] = useState([]);
   // Exact wall length typed while a wall is in progress (digits, mm).
   const [typedLen, setTypedLen] = useState("");
+  // The run of walls the wall in progress belongs to (lib/cad/chain): its
+  // first point and how many walls it has. Set by every wall's first click,
+  // so it is only read while draftPts has a point.
+  const [run, setRun] = useState(null);
   const [cur, setCur] = useState({ x: 0, y: 0, sx: -99, sy: -99, on: false });
   const [sel, setSel] = useState(null);
   const [dimP1, setDimP1] = useState(null);
   const [settings, setSettings] = useState({ grid: 100, doorW: DOOR_W, winW: WIN_W });
-  const [flags, setFlags] = useState({ ortho: true, gridSnap: true });
+  const [flags, setFlags] = useState({ ortho: true, gridSnap: true, chain: false });
   const [layers, setLayers] = useState({ walls: true, openings: true, dims: true, rooms: true, stairs: true, boundary: true, grid: true });
   const [size, setSize] = useState({ w: 900, h: 600 });
   const [sketchId, setSketchId] = useState(null);
@@ -359,7 +364,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [sel, draftPts, dimP1, typedLen, cur, flags, tool]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sel, draftPts, dimP1, typedLen, cur, flags, tool, run]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // A typed length belongs to the wall in progress; it goes when that does.
   useEffect(() => { if (!draftPts.length) setTypedLen(""); }, [draftPts]);
@@ -672,8 +677,18 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   };
   // A tool stays active until Esc (with nothing in progress) or Select. Each
   // item is complete on its own: after a wall's end click the next click starts
-  // a NEW wall where you click, never chained from the last wall's end.
+  // a NEW wall where you click - unless Chain walls is on (placeWall).
   const finishAction = () => { setDraftPts([]); setDimP1(null); };
+  // Place the wall a -> b. Chain walls on: the next wall starts at b, the same
+  // numbers so the corner joins seamlessly, until a wall ends on the run's
+  // first point (closing the shape) or Esc. Off, or turned off mid-run, the
+  // tool waits for a new start point as always.
+  const placeWall = (a, b) => {
+    commitWallSeg(a, b);
+    const nx = afterWall(flags.chain, run, a, b);
+    if (!nx.draft.length) { finishAction(); return; }
+    setDraftPts(nx.draft); setRun(nx.run); setTypedLen("");
+  };
   // End point for a typed length: from the start point towards the mouse
   // (raw position, so endpoint/grid snap can't skew it), on a 45deg step when
   // angles are locked. Rounded to 0.001mm so straight walls stay exactly square.
@@ -689,9 +704,8 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   };
   const placeTypedWall = () => {
     const end = typedEnd();
-    if (!end) return;
-    commitWallSeg(draftPts[draftPts.length - 1], end);
-    finishAction();
+    if (!end || retraces(run, end)) return; // straight back over the last wall: keep waiting
+    placeWall(draftPts[draftPts.length - 1], runEnd(flags.chain, run, end));
   };
   const handleClick = (e) => {
     if (suppressClickRef.current) { suppressClickRef.current = false; return; }
@@ -700,10 +714,11 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     if (isWallTool) {
       const from = draftPts.length ? draftPts[draftPts.length - 1] : null;
       const p = wallPoint(raw, from);
-      if (!from) { setDraftPts([p]); return; }
-      if (p.x === from.x && p.y === from.y) return; // zero length: keep waiting for the end point
-      commitWallSeg(from, p);
-      finishAction();
+      if (!from) { setDraftPts([p]); setRun(startRun(p)); return; }
+      const end = runEnd(flags.chain, run, p); // on the run's first point: exactly there
+      if (end.x === from.x && end.y === from.y) return; // zero length: keep waiting for the end point
+      if (retraces(run, end)) return; // chained: straight back over the last wall - keep waiting
+      placeWall(from, end);
       return;
     }
     if (tool === "door" || tool === "window") {
@@ -1031,9 +1046,11 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     const lp = draftPts[draftPts.length - 1];
     const L = Math.round(hyp(cur.x - lp.x, cur.y - lp.y));
     const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
+    // Chain walls: this wall would end on the run's first point, closing the shape.
+    const closing = flags.chain && run && runEnd(true, run, typedLen ? typedEnd() : cur) === run.start;
     hud = typedLen
-      ? <div className="cadv__hud cadv__hud--typed" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>Length <b>{typedLen}<i className="cadv__caret" /> mm</b> <span>Enter to place</span></div>
-      : <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>Length <b>{fmtMM(L)} mm</b></div>;
+      ? <div className="cadv__hud cadv__hud--typed" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>Length <b>{typedLen}<i className="cadv__caret" /> mm</b> <span>{closing ? "Enter to close" : "Enter to place"}</span></div>
+      : <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>Length <b>{fmtMM(L)} mm</b>{closing ? <span className="sub">closes the shape</span> : null}</div>;
   } else if (tool === "dim" && dimP1 && cur.on) {
     const L2 = Math.round(hyp(cur.x - dimP1.x, cur.y - dimP1.y));
     const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
@@ -1050,10 +1067,15 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
 
   const selDoor = sel && sel.kind === "door" ? model.doors.find((d) => d.id === sel.id) : null;
   const selWin = sel && sel.kind === "window" ? model.windows.find((w) => w.id === sel.id) : null;
+  // Chain walls on: a run of walls, each from the last one's end, until Esc.
+  const wallHint = (kind) => !draftPts.length
+    ? (flags.chain ? `Click the start point of a run of ${kind} walls - Esc to exit` : `Click the start point of an ${kind} wall - Esc to exit`)
+    : flags.chain && run && run.walls > 0 ? "Click the next point, or type a length in mm and press Enter - Esc to finish"
+    : "Click the end point, or type a length in mm and press Enter - Esc to cancel";
   const hint = dragUi ? "Release to place it - Esc to put it back" : {
     select: "Click to select. Drag a wall, wall end, door or window to move it. Shift-drag to pan.",
-    ext: draftPts.length ? "Click the end point, or type a length in mm and press Enter - Esc to cancel" : "Click the start point of an external wall - Esc to exit",
-    int: draftPts.length ? "Click the end point, or type a length in mm and press Enter - Esc to cancel" : "Click the start point of an internal wall - Esc to exit",
+    ext: wallHint("external"),
+    int: wallHint("internal"),
     door: "Click on a wall to place a door - Esc to exit",
     window: "Click on a wall to place a window - Esc to exit",
     dim: dimP1 ? "Click the second measure point - Esc to cancel" : "Click the first measure point - Esc to exit",
@@ -1150,6 +1172,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
             <TbMenuItem icon={Grid3x3} label="Grid" checked={layers.grid} onClick={() => setLayers((l) => ({ ...l, grid: !l.grid }))} />
             <TbMenuItem icon={Magnet} label="Snap to grid" checked={flags.gridSnap} onClick={() => setFlags((f) => ({ ...f, gridSnap: !f.gridSnap }))} />
             <TbMenuItem icon={Compass} label="Lock angles (45°)" checked={flags.ortho} onClick={() => setFlags((f) => ({ ...f, ortho: !f.ortho }))} />
+            <TbMenuItem icon={Link2} label="Chain walls" checked={flags.chain} onClick={() => setFlags((f) => ({ ...f, chain: !f.chain }))} />
             <TbMenuItem icon={Maximize2} label="Zoom to fit" onClick={() => fit()} />
             <TbPanelsItem hidden={panelsHidden} onClick={() => setPanelsHidden((h) => !h)} />
             <TbThemeItem theme={theme} onClick={toggleTheme} />
@@ -1181,6 +1204,8 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
                   onChange={(v) => setFlags((f) => ({ ...f, ortho: v }))} />
                 <ToggleRow label="Snap to grid" hint={`Points land on the ${settings.grid} mm grid`} checked={flags.gridSnap}
                   onChange={(v) => setFlags((f) => ({ ...f, gridSnap: v }))} />
+                <ToggleRow label="Chain walls" hint="Each wall starts where the last one ended" checked={flags.chain}
+                  onChange={(v) => setFlags((f) => ({ ...f, chain: v }))} />
               </section>
               <section>
                 <SectionLabel className="mb-1">Layers</SectionLabel>
@@ -1276,6 +1301,11 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
                 <>
                   <div className="text-[15px] font-semibold text-slate-900 dark:text-slate-100" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>{TOOL_NAME[tool]}</div>
                   <div className={`mt-1 ${PANEL_HELP}`}>{hint}</div>
+                  {isWallTool && flags.chain && <div className={`mt-2 ${PANEL_HELP}`}>Chain walls is on: each wall starts where the last one ended. Click the first point again to close the shape.</div>}
+                  {/* No Esc key on touch: this ends an open run (the walls stay). */}
+                  {isWallTool && flags.chain && draftPts.length > 0 && run && run.walls > 0 && (
+                    <PanelAction onClick={finishAction} className="w-full mt-3">Finish run</PanelAction>
+                  )}
                   {isWallTool && (
                     <>
                       <SectionLabel className="mt-5 mb-2">Wall type</SectionLabel>
