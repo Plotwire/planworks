@@ -32,8 +32,9 @@ import {
 import {
   TopBarShell, TbGroup, TbButton, TbBrand, TbProjectPill, TbTrialSlot, TbMenu, TbMenuItem, TbPanelsItem, TbThemeItem,
   SidePanel, CollapsedPanel, PANEL_LABEL, PANEL_HELP, SectionLabel, ChoiceGroup, ToggleRow, ScheduleRows, PanelAction,
-  FloatingToolbar, ZoomControls, StatusBar, StatusCount, SheetTabs,
+  FloatingToolbar, ZoomControls, StatusBar, StatusCount, SheetTabs, TbShortcutsButton,
 } from "@/components/SheetParts";
+import { ShortcutsCard, ShortcutsTip, StatusHint, useOnceTip, TOUCH } from "@/components/Shortcuts";
 import { useApp } from "@/components/AppShell";
 import { TryPill, useTryUsage } from "@/components/TryMode";
 
@@ -211,13 +212,15 @@ const DimIcon = glyph(<g><path d="M4 12h16M4 8v8M20 8v8" /><path d="M7 10l-3 2 3
 // Draw tools in the top bar (Select and Pan float on the canvas, as in the
 // editor). Walls are one button; External / Internal is chosen beside the
 // canvas while it is active.
+// kbd: the key (see the keyboard handler), badged on the button; Wall's
+// tooltip names both of its keys.
 const DRAW_TOOLS = [
-  { id: "wall", icon: BrickWall, label: "Wall", key: "E / I" },
-  { id: "door", icon: DoorOpen, label: "Door", key: "D" },
-  { id: "window", icon: WindowIcon, label: "Window", key: "W" },
-  { id: "dim", icon: DimIcon, label: "Dimension", key: "M" },
-  { id: "room", icon: TagIcon, label: "Room label", key: "R" },
-  { id: "text", icon: Type, label: "Note", key: "T" },
+  { id: "wall", icon: BrickWall, label: "Wall", kbd: "e", kbdTip: "E external, I internal" },
+  { id: "door", icon: DoorOpen, label: "Door", kbd: "d" },
+  { id: "window", icon: WindowIcon, label: "Window", kbd: "w" },
+  { id: "dim", icon: DimIcon, label: "Dimension", kbd: "m" },
+  { id: "room", icon: TagIcon, label: "Room label", kbd: "r" },
+  { id: "text", icon: Type, label: "Note", kbd: "t" },
 ];
 const CANVAS_TOOLS = [
   ["select", { icon: MousePointer2, label: "Select", hint: "V" }],
@@ -245,6 +248,68 @@ const SNAP_LABEL = { end: "END", side: "SIDE", guide: "GUIDE" };
 // The editor's grid (components/SheetParts.jsx).
 const GRID_LINE = "rgba(37,99,235,0.18)";
 const GRID_MM = 500;
+
+// The shortcuts card (components/Shortcuts.jsx, "?" or the Shortcuts button):
+// every key the keyboard handler in CadSketch below takes, and the touch
+// gestures its canvas handles. Keep them in step with the handlers.
+const SHORTCUTS = [
+  { title: "Draw", items: [
+    ["External wall", ["e"]],
+    ["Internal wall", ["i"]],
+    ["Door", ["d"]],
+    ["Window", ["w"]],
+    ["Dimension", ["m"]],
+    ["Room label", ["r"]],
+    ["Note", ["t"]],
+    ["Type a wall length (mm) while drawing a wall", ["digits"]],
+    ["Place the wall at the typed length", ["enter"]],
+    ["Correct the typed length", ["backspace"]],
+    ["Cancel the wall or dimension in progress (ends a chained run)", ["esc"]],
+  ] },
+  { title: "Edit", items: [
+    ["Select tool", ["v"]],
+    ["Delete the selected wall, door, window or room label", ["del", "backspace"]],
+    ["Put back what you are dragging", ["esc"]],
+    ["Clear the selection, back to Select", ["esc"]],
+    ["Undo", ["mod+z"]],
+    ["Redo", ["mod+shift+z", "mod+y"]],
+    ["Save", ["mod+s"]],
+  ] },
+  { title: "View", items: [
+    ["Keyboard shortcuts (this card)", ["?"]],
+    ["Close this card", ["esc"]],
+  ] },
+  { title: "Navigate", items: [
+    ["Pan tool", ["h"]],
+    ["Pan with any tool", ["shift+drag", "mdrag"]],
+    ["Zoom in or out at the pointer", ["wheel"]],
+  ] },
+];
+const TOUCH_GESTURES = [
+  { title: "Draw", items: [
+    ["Pick a tool", "Tap it in the top bar"],
+    ["Wall", "Tap the start, then the end"],
+    ["Door or window", "Tap on a wall"],
+    ["Dimension", "Tap the two points"],
+    ["Room label or note", "Tap where it goes"],
+    ["End a run of chained walls", "Tap Finish run in the inspector"],
+  ] },
+  { title: "Edit", items: [
+    ["Select", "With Select, tap a wall, door, window or label"],
+    ["Move a wall, corner, door, window or label", "With Select, drag it with one finger"],
+    ["Delete", "Tap Delete in the inspector"],
+    ["Undo or redo", "Tap the arrows in the top bar"],
+    ["Rename the sketch", "Tap its name in the top bar, or double-tap its tab"],
+  ] },
+  { title: "View", items: [
+    ["Zoom", "Pinch with two fingers"],
+    ["Zoom in, out or to fit", "The buttons at the top right"],
+  ] },
+  { title: "Navigate", items: [
+    ["Pan", "Drag with two fingers"],
+    ["Pan with one finger", "Pick the hand tool, then drag"],
+  ] },
+];
 
 // ------------------------- main screen -------------------------
 export default function CadSketch({ title = "Maple House \u2014 First floor", ref: codeRef = "PW-0247", openSketchId = null, linkProject = null, linkSheet = null, linkName = null, embedded = false, onClose = null, onApplyPlan = null }) {
@@ -299,6 +364,10 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const [savedFlash, setSavedFlash] = useState(false);
   const [panelsHidden, setPanelsHidden] = useState(false);
   const [inspectorHidden, setInspectorHidden] = useState(false);
+  // The shortcuts card, and the first-run tip pointing to it (once per device).
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [tipShow, dismissTip] = useOnceTip("plotwire.sketch.shortcutsTip");
+  const openShortcuts = () => { setShortcutsOpen(true); dismissTip(); };
   const doSaveRef = useRef(null);
 
   viewRef.current = view;
@@ -365,13 +434,20 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     return () => ro.disconnect();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // keyboard shortcuts
+  // keyboard shortcuts (listed for the shortcuts card in SHORTCUTS, above)
   useEffect(() => {
     const onKey = (e) => {
       if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
       // A wall drag (or a press that may become one) owns the keyboard: Esc
       // puts the walls back, nothing else applies until release.
       if (dragRef.current) { if (e.key === "Escape") { e.preventDefault(); cancelDrag(); } return; }
+      // "?" opens the shortcuts card (not over a dialog). While it is open the
+      // card takes every key first (components/Shortcuts.jsx), so none of
+      // these reach here.
+      if (e.key === "?" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (!e.repeat && !e.target.isContentEditable && !nameGate && !renameOpen && !planModal && !planBusy) { e.preventDefault(); openShortcuts(); }
+        return;
+      }
       const k = e.key.toLowerCase();
       if (e.metaKey || e.ctrlKey) {
         if (k === "z" && !e.shiftKey) { e.preventDefault(); undo(); }
@@ -399,7 +475,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [sel, draftPts, dimP1, typedLen, cur, flags, tool, run]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sel, draftPts, dimP1, typedLen, cur, flags, tool, run, nameGate, renameOpen, planModal, planBusy]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // A typed length belongs to the wall in progress; it goes when that does.
   useEffect(() => { if (!draftPts.length) setTypedLen(""); }, [draftPts]);
@@ -1230,6 +1306,25 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     text: "Click to place a note - Esc to exit",
     pan: "Drag to pan the sheet",
   }[tool];
+  // Status bar: the keys for what is happening now, as key caps
+  // (components/Shortcuts.jsx StatusHint); on touch, what to tap or drag.
+  const typedCloses = !!typedLen && flags.chain && run && runEnd(true, run, typedEnd()) === run.start;
+  const chained = flags.chain && run && run.walls > 0;
+  const act = TOUCH ? "Tap" : "Click";
+  const moveSel = !sel ? null : sel.kind === "wall" ? "Drag the wall or a corner" : sel.kind === "room" ? "Drag the label" : "Drag it along its wall";
+  const statusParts = dragUi ? (TOUCH ? ["Lift your finger to place it"] : ["Release to place it", ["esc", "put it back"]])
+    : isWallTool && draftPts.length && typedLen ? [`Length ${typedLen} mm`, ["enter", typedCloses ? "close the shape" : "place"], ["backspace", "edit"], ["esc", "cancel"]]
+    : isWallTool && draftPts.length ? (TOUCH ? [chained ? "Tap the next point" : "Tap the end point", chained ? "Finish run in the inspector ends it" : null]
+      : [chained ? "Next point, or type a length" : "Type a length", ["enter", "to place"], ["esc", chained ? "to finish the run" : "to cancel"]])
+    : isWallTool ? [flags.chain ? `${act} the start of a run of walls` : `${act} the start point`, !TOUCH && [tool === "int" ? "e" : "i", tool === "int" ? "external" : "internal"], !TOUCH && ["esc", "exit"]]
+    : tool === "door" || tool === "window" ? [`${act} a wall to place a ${tool}`, !TOUCH && ["esc", "exit"]]
+    : tool === "dim" ? [dimP1 ? `${act} the second point` : `${act} the first point`, !TOUCH && ["esc", dimP1 ? "cancel" : "exit"]]
+    : tool === "room" ? [`${act} inside a space to drop a room label`, !TOUCH && ["esc", "exit"]]
+    : tool === "text" ? [`${act} to place a note`, !TOUCH && ["esc", "exit"]]
+    : tool === "pan" ? (TOUCH ? ["Drag to pan", "pinch to zoom"] : ["Drag to pan", ["wheel", "to zoom"], ["v", "select"]])
+    : moveSel ? (TOUCH ? [moveSel + " to move it", "Delete is in the inspector"] : [moveSel, ["del", "to delete"], ["mod+z", "undo"], ["esc", "deselect"]])
+    : TOUCH ? ["Tap to select, drag to move", "pinch to zoom", "two fingers to pan"]
+    : ["Click to select, drag to move", ["shift+drag", "to pan"], ["mod+z", "undo"]];
 
   const pickTool = (id) => {
     const t = id === "wall" ? (tool === "int" ? "int" : "ext") : id;
@@ -1265,7 +1360,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       {/* ==================== TOP BAR (shared with the editor) ==================== */}
       <TopBarShell>
         <TbGroup first>
-          <TbButton onClick={goBack} icon={ChevronLeft} label={embedded ? "Back to drawing" : "Dashboard"} shortLabel={embedded ? "Drawing" : undefined} title={embedded ? "Back to the drawing (updates its plan if you changed anything)" : "Back to dashboard"} disabled={!!planBusy} />
+          <TbButton onClick={goBack} icon={ChevronLeft} label={embedded ? "Back to drawing" : "Dashboard"} shortLabel={embedded ? "Drawing" : undefined} title={embedded ? "Back to the drawing (updates its plan if you changed anything)" : "Back to dashboard"} disabled={!!planBusy} fit="back" />
           <TbBrand />
           <TbProjectPill label={sketchName || "Untitled sketch"} title="Rename this sketch" onClick={openRename} icon={PencilRuler} />
         </TbGroup>
@@ -1298,20 +1393,20 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
               </>
             )}
           </TbMenu>
-          <TbButton onClick={doSave} icon={Save} label={saveState === "saving" ? "Saving…" : savedFlash ? "Saved ✓" : "Save"} title="Save (⌘S)" flash={savedFlash} disabled={saveState === "saving"} />
+          <TbButton onClick={doSave} icon={Save} label={saveState === "saving" ? "Saving…" : savedFlash ? "Saved ✓" : "Save"} title="Save" kbd="mod+s" flash={savedFlash} disabled={saveState === "saving"} />
           <TbButton onClick={openUsePlan} icon={Send} label="Use this plan" shortLabel="Use plan" title="Send this plan to the electrical drawing" disabled={!!planBusy} />
         </TbGroup>
 
         <TbGroup label="Draw">
           {DRAW_TOOLS.map((t) => (
-            <TbButton key={t.id} collapse icon={t.icon} label={t.label} title={`${t.label} (${t.key})`}
+            <TbButton key={t.id} collapse fit="draw" icon={t.icon} label={t.label} kbd={t.kbd} kbdTip={t.kbdTip}
               active={t.id === "wall" ? isWallTool : tool === t.id} onClick={() => pickTool(t.id)} />
           ))}
         </TbGroup>
 
         <TbGroup label="Edit">
-          <TbButton onClick={undo} icon={Undo2} title="Undo (⌘Z)" iconOnly disabled={!canUndo} />
-          <TbButton onClick={redo} icon={Redo2} title="Redo (⌘⇧Z)" iconOnly disabled={!canRedo} />
+          <TbButton onClick={undo} icon={Undo2} title="Undo" kbd="mod+z" iconOnly disabled={!canUndo} />
+          <TbButton onClick={redo} icon={Redo2} title="Redo" kbd="mod+shift+z" iconOnly disabled={!canRedo} />
         </TbGroup>
 
         <TbGroup label="View">
@@ -1325,6 +1420,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
             <TbPanelsItem hidden={panelsHidden} onClick={() => setPanelsHidden((h) => !h)} />
             <TbThemeItem theme={theme} onClick={toggleTheme} />
           </TbMenu>
+          <TbShortcutsButton onClick={openShortcuts} open={shortcutsOpen} />
         </TbGroup>
 
         <TbTrialSlot>{access.isTry ? <TryPill used={tryUsage.used} limit={tryUsage.limit} onSubscribe={subscribe} /> : null}</TbTrialSlot>
@@ -1396,17 +1492,22 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
           </div>
 
           <FloatingToolbar tool={tool} setTool={pickTool} tools={CANVAS_TOOLS} />
-          <ZoomControls zoom={view.s / 0.08} onIn={() => zoomBy(1.2)} onOut={() => zoomBy(1 / 1.2)} onFit={() => fit()} />
+          <ZoomControls zoom={view.s / 0.08} onIn={() => zoomBy(1.2)} onOut={() => zoomBy(1 / 1.2)} onFit={() => fit()} keys={false} />
           <div className="absolute left-4 bottom-11 z-20 flex items-center gap-3 px-3 h-8 bg-white dark:bg-[#16202B] rounded-xl ring-1 ring-slate-200/70 dark:ring-[#2A3947] shadow-[0_10px_30px_-10px_rgba(16,28,40,0.22)] text-[11px] text-slate-700 dark:text-slate-200"
                style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>
             <span className="font-semibold">N &#8593;</span>
             <span className="inline-flex h-1.5 ring-1 ring-slate-400"><i className="w-5 bg-slate-600 dark:bg-slate-300" /><i className="w-5 bg-white dark:bg-[#16202B]" /><i className="w-5 bg-slate-600 dark:bg-slate-300" /></span>
             <span>0 1 2 m</span>
           </div>
+          {/* First visit on this device: where the shortcuts are (after the name gate). */}
+          {tipShow && !nameGate && !renameOpen && !planModal && !planBusy && !shortcutsOpen && (
+            <ShortcutsTip className="left-4 bottom-[84px]" onDismiss={dismissTip} onOpen={openShortcuts} />
+          )}
 
-          <StatusBar right={<>X {Math.round(cur.x)} Y {Math.round(cur.y)} · GRID {settings.grid}MM · <span className={saveState === "unsaved" || saveState === "error" ? "text-amber-600" : ""}>{SAVE_LABEL[saveState]}</span></>}>
+          {/* Under 1300px the grid size (it is in the panel) gives way to the hint. */}
+          <StatusBar right={<>X {Math.round(cur.x)} Y {Math.round(cur.y)} · <span className="hidden min-[1300px]:inline">GRID {settings.grid}MM · </span><span className={saveState === "unsaved" || saveState === "error" ? "text-amber-600" : ""}>{SAVE_LABEL[saveState]}</span></>}>
             <span>TOOL <span className="text-[#22808F] ml-1">{TOOL_NAME[tool].toUpperCase()}</span></span>
-            <span className="text-[#22808F]">{hint}</span>
+            <StatusHint parts={statusParts} />
           </StatusBar>
           </div>
         </main>
@@ -1546,6 +1647,8 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       {planBusy && (
         <div className="cadv__busy"><div className="box"><span className="spin" />{planBusy}&#8230;</div></div>
       )}
+      <ShortcutsCard open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} subtitle="Sketch a plan"
+        groups={SHORTCUTS} touchGroups={TOUCH_GESTURES} />
     </div>
   );
 }

@@ -25,6 +25,7 @@ import { useApp } from "@/components/AppShell";
 import { getSketchData } from "@/lib/cad/sketchStore";
 import { DEFAULT_TITLEBLOCK } from "@/lib/titleBlock";
 import { useTryUsage, useTryPrompt, TryPill, TryPrompt, LOCKED, drawingSymbolCount } from "@/components/TryMode";
+import { ShortcutsCard, StatusHint, TOUCH } from "@/components/Shortcuts";
 import dynamic from "next/dynamic";
 const CadSketchPanel = dynamic(() => import("@/components/cad/CadSketch"), { ssr: false });
 import { useEditor } from "@/store/editorStore";
@@ -330,6 +331,65 @@ const TOOLS = {
   note:   { icon: Type,          label: "Note",   hint: "N" },
 };
 
+// The shortcuts card (components/Shortcuts.jsx, "?" or the Shortcuts button):
+// every key the keyboard handler in ElectricalPlanTool takes, and the touch
+// gestures the drawing handles. Keep them in step with the handlers.
+const SHORTCUTS = [
+  { title: "Draw", items: [
+    ["Wire tool: link two symbols", ["w"]],
+    ["Note tool", ["n"]],
+    ["Stop: back to Select, clear the selection", ["esc"]],
+  ] },
+  { title: "Edit", items: [
+    ["Select tool", ["v"]],
+    ["Rotate the selected symbol 15°", ["r"]],
+    ["Rotate in 15° steps (drag the handle)", ["shift+drag"]],
+    ["Delete the selected item", ["del", "backspace"]],
+    ["Undo", ["mod+z"]],
+    ["Redo", ["mod+shift+z", "mod+y"]],
+    ["Save", ["mod+s"]],
+    ["Download a PDF or print", ["mod+p"]],
+  ] },
+  { title: "View", items: [
+    ["Zoom in", ["plus", "="]],
+    ["Zoom out", ["minus"]],
+    ["Fit the sheet to the window", ["0"]],
+    ["Close the print preview, quote, details or projects", ["esc"]],
+    ["Keyboard shortcuts (this card)", ["?"]],
+  ] },
+  { title: "Navigate", items: [
+    ["Pan tool", ["h"]],
+    ["Pan while held", ["space+drag"]],
+    ["Pan with any tool", ["mdrag"]],
+    ["Pan by dragging an empty part of the sheet", ["drag"]],
+    ["Zoom in or out at the pointer", ["wheel"]],
+  ] },
+];
+const TOUCH_GESTURES = [
+  { title: "Draw", items: [
+    ["Add a symbol", "Drag it from the palette onto the drawing"],
+    ["Scroll the palette", "Swipe up or down on it"],
+    ["Wire two symbols", "Wire tool, then tap one symbol and the other"],
+  ] },
+  { title: "Edit", items: [
+    ["Select", "Tap a symbol, note, wire or furniture piece"],
+    ["Move", "Drag a symbol, note or furniture piece"],
+    ["Rotate a symbol", "Drag its round handle"],
+    ["Rotate or resize furniture", "Drag its handles"],
+    ["Point a note's arrow", "Drag the dot at its tip"],
+    ["Delete a symbol, note or wire", "Tap Delete in the inspector"],
+    ["Undo or redo", "Tap the arrows in the top bar"],
+    ["Rename a drawing", "Double-tap its tab"],
+  ] },
+  { title: "View", items: [
+    ["Zoom", "Pinch with two fingers"],
+    ["Zoom in, out or to fit", "The buttons at the top right"],
+  ] },
+  { title: "Navigate", items: [
+    ["Pan", "Drag with two fingers, or drag an empty part of the sheet"],
+  ] },
+];
+
 // ============================================================================
 export default function ElectricalPlanTool({ initialTarget = null, onHome = null, theme = "light", onToggleTheme = null, onProjectId = null, onOpenFloorPlan = null }) {
   // Project state
@@ -515,6 +575,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const [floorPlanOpen, setFloorPlanOpen] = useState(false);
   const [floorPlanArgs, setFloorPlanArgs] = useState(null);
   const [planGone, setPlanGone] = useState(false); // linked sketch was deleted
+  const [shortcutsOpen, setShortcutsOpen] = useState(false); // the shortcuts card ("?")
 
   // Grid size in drawing units; symbols snap to multiples of this. Smaller =
   // more squares / finer placement (better for spacing out lighting).
@@ -1451,6 +1512,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   };
 
   // ---------- Keyboard ----------
+  // (listed for the shortcuts card in SHORTCUTS, above)
   useEffect(() => {
     const onKey = (e) => {
       const isInput = e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.isContentEditable;
@@ -1459,12 +1521,23 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         setSpacePressed(true);
       }
       if (isInput) return;
+      // "?" opens the shortcuts card, not over another window (the floor plan
+      // sketch has its own). While it is open the card takes every key first
+      // (components/Shortcuts.jsx), so none of these reach here.
+      if (e.key === "?" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (!e.repeat && !floorPlanOpen && !printPreview && !readOnly && !showMeta && !showBoq && !showTitleBlock && !showNotes && !showProjects && !planGone && !tryPrompt.prompt) {
+          e.preventDefault(); setShortcutsOpen(true);
+        }
+        return;
+      }
       if (wallDraft && e.key === "Escape") { e.preventDefault(); cancelWall(); return; }
       if (e.key === "Delete" || e.key === "Backspace") deleteSelected();
       else if (e.key === "r" || e.key === "R") rotateSelected();
       else if (e.key === "Escape") { setSelectedId(null); setSelectedFurnId(null); setSelectedWallId(null); setSelectedAnnoId(null); setSelectedWireId(null); setWireStart(null); setTool("select"); setPrintPreview(false); setShowMeta(false); setShowBoq(false); setShowProjects(false); }
-      else if ((e.metaKey || e.ctrlKey) && e.key === "z") { e.preventDefault(); undo(); }
-      else if ((e.metaKey || e.ctrlKey) && (e.key === "y" || (e.shiftKey && e.key === "Z"))) { e.preventDefault(); redo(); }
+      // Lower-cased with Shift checked: ⌘⇧Z comes through as "z" on a Mac (and
+      // Caps Lock makes Ctrl+Z a "Z"), so the key alone can't tell undo from redo.
+      else if ((e.metaKey || e.ctrlKey) && (e.key || "").toLowerCase() === "z" && !e.shiftKey) { e.preventDefault(); undo(); }
+      else if ((e.metaKey || e.ctrlKey) && ((e.key || "").toLowerCase() === "y" || (e.shiftKey && (e.key || "").toLowerCase() === "z"))) { e.preventDefault(); redo(); }
       else if ((e.metaKey || e.ctrlKey) && e.key === "s") { e.preventDefault(); saveProject(); }
       else if ((e.metaKey || e.ctrlKey) && e.key === "p") {
         e.preventDefault();
@@ -1868,6 +1941,23 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     openFloorPlan(id);
   };
 
+  // Status bar: the keys for what is happening now, as key caps
+  // (components/Shortcuts.jsx StatusHint); on touch, what to tap or drag.
+  const act = TOUCH ? "Tap" : "Click";
+  const deselect = TOUCH ? [] : [["del", "to delete"], ["esc", "deselect"]];
+  const statusParts = spacePressed ? ["Drag to pan", "let go of Space to stop"]
+    : tool === "wall" ? (wallDraft ? [`${act} to set the end point`, !TOUCH && ["shift", "any angle"], !TOUCH && ["esc", "cancel"]] : [`${act} to start a wall`, !TOUCH && ["esc", "exit"]])
+    : tool === "wire" ? [wireStart ? `${act} the symbol to link it to` : `${act} a symbol to start a wire`, !TOUCH && ["esc", "stop"]]
+    : tool === "note" ? [`${act} the drawing to add a note`, !TOUCH && ["esc", "cancel"]]
+    : tool === "pan" ? (TOUCH ? ["Drag to pan", "pinch to zoom"] : ["Drag to pan", ["wheel", "to zoom"], ["v", "select"]])
+    : selectedId ? (TOUCH ? ["Drag to move it", "drag the round handle to rotate"] : ["Drag to move it", ["r", "rotate 15°"], ...deselect])
+    : selectedFurnId ? ["Drag to move it", TOUCH ? "drag its handles to rotate or resize" : null, ...deselect]
+    : selectedAnnoId ? ["Drag the note or its arrow to move it", ...deselect]
+    : selectedWireId ? (TOUCH ? ["Delete is in the inspector"] : deselect)
+    : selectedWallId ? (TOUCH ? ["Wall selected"] : deselect)
+    : TOUCH ? ["Drag symbols in from the palette", "tap to select", "pinch to zoom"]
+    : ["Drag symbols in from the palette", ["w", "wire"], ["n", "note"], ["space+drag", "to pan"]];
+
   const displayMeta = useMemo(
     () => ({ ...meta, sheetName: activeSheet.name, drawingNumber: activeSheet.drawingNumber || "" }),
     [meta, activeSheet.name, activeSheet.drawingNumber]
@@ -1904,6 +1994,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         onEditFloorPlan={planFromSketch && !readOnly ? editFloorPlan : null}
         sidebarHidden={sidebarHidden}
         onToggleSidebar={() => setSidebarHidden(s => !s)}
+        onShowShortcuts={() => setShortcutsOpen(true)}
+        shortcutsOpen={shortcutsOpen}
       />
       <input ref={fileInputRef} type="file" accept="image/*,.pdf" className="hidden"
              onChange={(e) => handleFile(e.target.files[0])} />
@@ -2071,14 +2163,14 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
 
           {/* Status bar */}
           <StatusBar right={<>SHEET A3 · {meta.scale}</>}>
-            <StatusCount label="SYMBOLS" value={placed.length} />
-            <StatusCount label="WIRES" value={wires.length} />
-            <StatusCount label="NOTES" value={annotations.length} />
+            {/* Under 1300px the counts give way to the hint. */}
+            <span className="hidden min-[1300px]:contents">
+              <StatusCount label="SYMBOLS" value={placed.length} />
+              <StatusCount label="WIRES" value={wires.length} />
+              <StatusCount label="NOTES" value={annotations.length} />
+            </span>
             <span>TOOL <span className="text-[#22808F] ml-1">{tool.toUpperCase()}</span></span>
-            {tool === "wire" && wireStart && <span className="text-[#22808F] animate-pulse">→ click target</span>}
-            {tool === "note" && <span className="text-[#22808F]">click drawing area to add</span>}
-            {tool === "wall" && <span className="text-[#22808F]">{wallDraft ? "click to set the end point" : "click to start a wall"}</span>}
-            {spacePressed && <span className="text-[#22808F]">PAN</span>}
+            <StatusHint parts={statusParts} />
           </StatusBar>
           </div>
         </main>
@@ -2200,6 +2292,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
           </div>
         </div>
       )}
+      <ShortcutsCard open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} subtitle="Electrical drawing"
+        groups={SHORTCUTS} touchGroups={TOUCH_GESTURES} />
       {/* Try mode: the Subscribe prompt (components/TryMode.jsx). */}
       <TryPrompt open={Boolean(tryPrompt.prompt)} title={tryPrompt.prompt?.title} body={tryPrompt.prompt?.body}
         onSubscribe={subscribeFromEditor} onClose={tryPrompt.hide} />
