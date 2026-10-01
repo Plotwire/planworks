@@ -1465,7 +1465,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
                   {isWallTool && flags.chain && <div className={`mt-2 ${PANEL_HELP}`}>Chain walls is on: each wall starts where the last one ended. Click the first point again to close the shape.</div>}
                   {/* No Esc key on touch: this ends an open run (the walls stay). */}
                   {isWallTool && flags.chain && draftPts.length > 0 && run && run.walls > 0 && (
-                    <PanelAction onClick={finishAction} className="w-full mt-3">Finish run</PanelAction>
+                    <PanelAction primary onClick={finishAction} className="w-full mt-3">Finish run</PanelAction>
                   )}
                   {isWallTool && (
                     <>

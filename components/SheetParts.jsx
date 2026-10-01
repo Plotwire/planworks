@@ -656,11 +656,12 @@ export function ScheduleRows({ rows }) {
 }
 
 // Readable panel button (13px). danger = delete.
-export function PanelAction({ onClick, children, danger = false, className = "" }) {
+export function PanelAction({ onClick, children, danger = false, primary = false, className = "" }) {
   return (
     <button type="button" onClick={onClick}
       className={`h-9 px-3 rounded-lg text-[13px] font-semibold flex items-center justify-center gap-1.5 ring-1 transition-colors ${className} ${
         danger ? "bg-white text-red-700 ring-red-300 hover:bg-red-50 dark:bg-[#0E141B] dark:text-red-300 dark:ring-red-400/40 dark:hover:bg-red-500/10"
+        : primary ? "bg-[var(--action)] text-[color:var(--action-ink)] ring-transparent hover:bg-[var(--action-hover)]"
                : "bg-white text-[#1A2530] ring-slate-300 hover:bg-slate-50 dark:bg-[#0E141B] dark:text-slate-100 dark:ring-[#2A3947] dark:hover:bg-[#16202B]"
       }`}>
       {children}
