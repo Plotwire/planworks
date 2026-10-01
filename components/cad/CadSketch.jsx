@@ -16,6 +16,7 @@ import {
   nearestWall, hitTest, joinWalls, pocheD, outlinePathD,
 } from "@/lib/cad/plan";
 import { findNode, endAt, moveNode, moveWall } from "@/lib/cad/edit";
+import { angled, placeOpening, openingHost, slideOpening, planCentre, openingSide } from "@/lib/cad/openings";
 import { listSketches, getSketchData, insertSketch, updateSketch, deleteSketch } from "@/lib/cad/sketchStore";
 import { insertProject, getProjectData, updateProjectRow } from "@/lib/db";
 import { uploadPlanImage, dataUrlToBlob } from "@/lib/planImages";
@@ -60,7 +61,12 @@ function WallsNode({ joined, selId, solid }) {
   );
 }
 
+// In an angled wall a door / window is its 'h' form drawn about its centre and
+// turned with the wall (lib/cad/openings); hinge and fold are in that frame.
+const turnedAt = (o) => `translate(${o.x} ${o.y}) rotate(${o.ang})`;
+
 function DoorNode({ d, selected }) {
+  if (angled(d)) return <g transform={turnedAt(d)}><DoorNode d={{ ...d, x: 0, y: 0, dir: "h", ang: undefined }} selected={selected} /></g>;
   const { x, y, w, t } = d;
   const ink = selected ? "cadv-sel" : "cadv-ink";
   const els = [];
@@ -84,7 +90,14 @@ function DoorNode({ d, selected }) {
   return <g>{els}</g>;
 }
 
-function WindowNode({ wn, selected }) {
+// side (angled only, see openingSide): which side of the wall the escape label runs along.
+function WindowNode({ wn, selected, side = 1 }) {
+  if (angled(wn)) return (
+    <g transform={turnedAt(wn)}>
+      <WindowNode wn={{ ...wn, x: 0, y: 0, dir: "h", ang: undefined, escape: false }} selected={selected} />
+      {wn.escape ? <text x={0} y={side * 620} className="cadv-note" fontSize={150} textAnchor="middle">ESCAPE WINDOW</text> : null}
+    </g>
+  );
   const { x, y, w, t } = wn, g6 = t / 6, els = [];
   const ink = selected ? "cadv-sel" : "cadv-ink";
   if (wn.dir === "h") {
@@ -211,7 +224,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const pinchActiveRef = useRef(false);
   const livePinchRef = useRef(null);
   const suppressClickRef = useRef(false);
-  // Select tool: a wall end / whole wall being dragged (see armDrag).
+  // Select tool: a wall end / whole wall / door or window being dragged (see armDrag).
   const dragRef = useRef(null);
   const [dragUi, setDragUi] = useState(null);
 
@@ -505,17 +518,19 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const isWallTool = tool === "ext" || tool === "int";
   const drawingTool = tool !== "select" && tool !== "pan";
 
-  // ---- Select tool: drag a wall end (the whole corner) or a whole wall ----
-  // A press on a wall end (10px) or a wall arms a drag; it starts once the
-  // pointer has moved 4px (10px for touch / pen), so a press without moving is
-  // still a click. Each move previews from the pre-drag model (lib/cad/edit);
-  // release commits it as ONE undo step. Esc, a pinch or a cancelled pointer
-  // puts it back.
+  // ---- Select tool: drag a wall end (the whole corner), a whole wall, or a
+  // door / window along its wall ----
+  // A press on a wall end (10px), else a door / window, else a wall arms a
+  // drag; it starts once the pointer has moved 4px (10px for touch / pen), so
+  // a press without moving is still a click. Each move previews from the
+  // pre-drag model (lib/cad/edit, lib/cad/openings); release commits it as
+  // ONE undo step. Esc, a pinch or a cancelled pointer puts it back.
   const r3 = (v) => Math.round(v * 1000) / 1000;
   const armDrag = (e, raw) => {
     const base = modelRef.current, ws = base.walls;
     const selId = sel && sel.kind === "wall" ? sel.id : null;
-    const hit = endAt(ws, raw.x, raw.y, 10 / viewRef.current.s, selId);
+    const hit = layers.walls && endAt(ws, raw.x, raw.y, 10 / viewRef.current.s, selId);
+    const op = !hit && layers.openings && openingAt(raw.x, raw.y); // a hidden one: the wall under it drags
     let d = null;
     if (hit) {
       // Every end at that corner moves. Angle lock works from the far end of
@@ -528,7 +543,11 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       // shrink a wall to nothing, which is never allowed).
       const skip = new Set([...ends, ...fars.flatMap((f) => findNode(ws, f.x, f.y))].map((n) => n.id + ":" + n.end));
       d = { kind: "node", id: g.id, ends, home: { x: hit.x, y: hit.y }, skip, fars };
-    } else if (!openingAt(raw.x, raw.y)) {
+    } else if (op) {
+      // A door / window slides along the wall it sits in now, never onto another.
+      const o = (op.kind === "door" ? base.doors : base.windows).find((x) => x.id === op.id), host = o && openingHost(ws, o);
+      if (host) d = { kind: "opening", okind: op.kind, id: op.id, src: o, host };
+    } else if (layers.walls) {
       const h = hitTest(ws, raw.x, raw.y), w = h && ws.find((o) => o.id === h.id);
       if (w) { const L = segLen(w) || 1; d = { kind: "wall", id: w.id, src: w, n: [-(w.y2 - w.y1) / L, (w.x2 - w.x1) / L] }; }
     }
@@ -542,7 +561,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     if (!d.moved) {
       if (Math.hypot(e.clientX - d.mx, e.clientY - d.my) <= d.slop) return;
       d.moved = true; d.save = saveState;
-      setSel({ kind: "wall", id: d.id }); setDragUi({ kind: d.kind, id: d.id, off: 0 });
+      setSel({ kind: d.okind || "wall", id: d.id }); setDragUi({ kind: d.kind, id: d.id, off: 0, gap: 0 });
     }
     const raw = toWorld(e.clientX, e.clientY);
     // Each preview is worked out from the pre-drag model; the last one shown
@@ -562,6 +581,13 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       at = home || ep ? { x: p.x, y: p.y } : { x: Math.abs(p.x - f.x) < 1e-6 ? f.x : r3(p.x), y: Math.abs(p.y - f.y) < 1e-6 ? f.y : r3(p.y) };
       next = home ? d.base : moveNode(d.base, d.ends, at, modelRef.current);
       ui = { kind: "node", id: f.id, ep: !!ep, x: at.x, y: at.y };
+    } else if (d.kind === "opening") {
+      // Moves along its wall as far as the pointer has (wherever it was
+      // grabbed), kept inside the wall; Snap to grid steps its gap to the
+      // nearer wall end.
+      const r = slideOpening(d.base, d.okind, d.id, d.host, d.src.x + raw.x - d.w0.x, d.src.y + raw.y - d.w0.y, flags.gridSnap ? settings.grid : 0);
+      next = r.model; ui = { kind: "opening", id: d.id, gap: r.gap };
+      at = raw;
     } else {
       // Lock angles: only square to the wall, so its neighbours keep their run.
       let dx = raw.x - d.w0.x, dy = raw.y - d.w0.y, off = null;
@@ -630,7 +656,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       e.preventDefault();
       return;
     }
-    if (tool === "select" && layers.walls && e.button === 0 && !dragRef.current) armDrag(e, toWorld(e.clientX, e.clientY));
+    if (tool === "select" && e.button === 0 && !dragRef.current) armDrag(e, toWorld(e.clientX, e.clientY));
   };
   // After a real drag the click that follows must not change the selection.
   const handleUp = (e) => {
@@ -681,14 +707,17 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       return;
     }
     if (tool === "door" || tool === "window") {
+      // On the nearest wall, kept inside it and clear of the walls joined at its
+      // ends: { x, y, dir } in a square wall as always, plus ang (turned with
+      // the wall) in an angled one.
       const nw = nearestWall(model.walls, raw.x, raw.y);
       if (!nw) return;
       const t = nw.seg.type === "external" ? T_EXT : T_INT;
       if (tool === "door") {
-        const d = { id: "D" + Date.now(), x: Math.round(nw.cx), y: Math.round(nw.cy), dir: nw.dir, w: settings.doorW, t, hinge: -1, fold: 1, ref: "" };
+        const d = { id: "D" + Date.now(), ...placeOpening(nw.seg, raw.x, raw.y, settings.doorW, model.walls), w: settings.doorW, t, hinge: -1, fold: 1, ref: "" };
         change((m) => ({ ...m, doors: m.doors.concat([d]) }));
       } else {
-        const wn = { id: "W" + Date.now(), x: Math.round(nw.cx), y: Math.round(nw.cy), dir: nw.dir, w: settings.winW, t, escape: false, ref: "" };
+        const wn = { id: "W" + Date.now(), ...placeOpening(nw.seg, raw.x, raw.y, settings.winW, model.walls), w: settings.winW, t, escape: false, ref: "" };
         change((m) => ({ ...m, windows: m.windows.concat([wn]) }));
       }
       finishAction();
@@ -931,7 +960,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
 
   const joined = useMemo(() => joinWalls(model.walls), [model.walls]);
   const planEls = useMemo(() => {
-    const g = [];
+    const g = [], c = planCentre(model.walls);
     if (layers.boundary && model.boundary) g.push(<polyline key="bnd" points={ptStr(model.boundary)} className="cadv-boundary" fill="none" strokeWidth={1.4} strokeDasharray="14 10" vectorEffect="non-scaling-stroke" />);
     if (layers.stairs) (model.rooflights || []).forEach((rl) => g.push(
       <g key={rl.ref}>
@@ -941,7 +970,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     if (layers.walls) g.push(<WallsNode key="walls" joined={joined} solid={wallStyleOf(model) === "solid"} selId={sel && sel.kind === "wall" ? sel.id : null} />);
     if (layers.openings) {
       g.push(<g key="doors">{model.doors.map((d) => <DoorNode key={d.id} d={d} selected={sel && sel.kind === "door" && sel.id === d.id} />)}</g>);
-      g.push(<g key="wins">{model.windows.map((wn) => <WindowNode key={wn.id} wn={wn} selected={sel && sel.kind === "window" && sel.id === wn.id} />)}</g>);
+      g.push(<g key="wins">{model.windows.map((wn) => <WindowNode key={wn.id} wn={wn} side={openingSide(wn, c)} selected={sel && sel.kind === "window" && sel.id === wn.id} />)}</g>);
     }
     if (layers.stairs && model.stairs) g.push(<StairNode key="stairs" s={model.stairs} />);
     if (layers.dims) g.push(<g key="dims">{model.dims.map((d) => <DimNode key={d.id} d={d} />)}</g>);
@@ -955,9 +984,16 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
         <text key={"n" + i} x={n.x} y={n.y} className="cadv-note" fontSize={165} textAnchor="middle">{n.text}</text>))}</g>);
     }
     if (layers.openings) {
+      // An angled opening's tag sits where an 'h' one's would, in its turned
+      // frame: a door's on its swing side, a window's on the side facing the
+      // middle of the plan (openingSide).
       const tags = [];
-      model.doors.forEach((d) => { if (d.ref) tags.push(<Tag key={"tg" + d.id} refTxt={d.ref} x={d.x + (d.dir === "h" ? 0 : d.fold * 430)} y={d.y + (d.dir === "h" ? d.fold * 430 : 0)} />); });
-      model.windows.forEach((w) => { if (w.ref) tags.push(<Tag key={"tg" + w.id} refTxt={w.ref} x={w.x + (w.dir === "h" ? 0 : (w.x < 1000 ? 430 : -430))} y={w.y + (w.dir === "h" ? (w.y < 1000 ? 360 : -360) : 0)} />); });
+      model.doors.forEach((d) => { if (d.ref) tags.push(angled(d)
+        ? <g key={"tg" + d.id} transform={turnedAt(d)}><Tag refTxt={d.ref} x={0} y={d.fold * 430} /></g>
+        : <Tag key={"tg" + d.id} refTxt={d.ref} x={d.x + (d.dir === "h" ? 0 : d.fold * 430)} y={d.y + (d.dir === "h" ? d.fold * 430 : 0)} />); });
+      model.windows.forEach((w) => { if (w.ref) tags.push(angled(w)
+        ? <g key={"tg" + w.id} transform={turnedAt(w)}><Tag refTxt={w.ref} x={0} y={openingSide(w, c) * 360} /></g>
+        : <Tag key={"tg" + w.id} refTxt={w.ref} x={w.x + (w.dir === "h" ? 0 : (w.x < 1000 ? 430 : -430))} y={w.y + (w.dir === "h" ? (w.y < 1000 ? 360 : -360) : 0)} />); });
       g.push(<g key="tags">{tags}</g>);
     }
     return g;
@@ -1002,6 +1038,10 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     const L2 = Math.round(hyp(cur.x - dimP1.x, cur.y - dimP1.y));
     const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
     hud = <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}><b>{fmtMM(L2)} mm</b></div>;
+  } else if (dragUi && dragUi.kind === "opening") {
+    // Gap from the opening's nearer edge to the nearer end of its wall.
+    const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
+    hud = <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>To wall end <b>{fmtMM(dragUi.gap)} mm</b></div>;
   } else if (dragUi) {
     const gw = model.walls.find((w) => w.id === dragUi.id);
     const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
@@ -1011,7 +1051,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const selDoor = sel && sel.kind === "door" ? model.doors.find((d) => d.id === sel.id) : null;
   const selWin = sel && sel.kind === "window" ? model.windows.find((w) => w.id === sel.id) : null;
   const hint = dragUi ? "Release to place it - Esc to put it back" : {
-    select: "Click to select. Drag a wall or wall end to move it. Shift-drag to pan.",
+    select: "Click to select. Drag a wall, wall end, door or window to move it. Shift-drag to pan.",
     ext: draftPts.length ? "Click the end point, or type a length in mm and press Enter - Esc to cancel" : "Click the start point of an external wall - Esc to exit",
     int: draftPts.length ? "Click the end point, or type a length in mm and press Enter - Esc to cancel" : "Click the start point of an internal wall - Esc to exit",
     door: "Click on a wall to place a door - Esc to exit",
@@ -1215,7 +1255,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
               ) : selDoor ? (
                 <>
                   <div className="text-[15px] font-semibold text-slate-900 dark:text-slate-100" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>Door</div>
-                  <div className={`mt-1 mb-4 ${PANEL_HELP}`}>Flip side swaps which room it opens into; flip hinge swaps the hinged edge.</div>
+                  <div className={`mt-1 mb-4 ${PANEL_HELP}`}>Drag it along its wall on the plan to move it. Flip side swaps which room it opens into; flip hinge swaps the hinged edge.</div>
                   <ScheduleRows rows={[["Width", selDoor.w + " mm"], ["Wall", selDoor.t === T_EXT ? "External" : "Internal"]]} />
                   <SectionLabel className="mt-5 mb-2">Swing</SectionLabel>
                   <div className="grid grid-cols-2 gap-1.5">
@@ -1227,7 +1267,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
               ) : selWin ? (
                 <>
                   <div className="text-[15px] font-semibold text-slate-900 dark:text-slate-100" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>Window</div>
-                  <div className={`mt-1 mb-4 ${PANEL_HELP}`}>Mark it as an escape window if it's the fire escape route.</div>
+                  <div className={`mt-1 mb-4 ${PANEL_HELP}`}>Drag it along its wall on the plan to move it. Mark it as an escape window if it's the fire escape route.</div>
                   <ScheduleRows rows={[["Width", selWin.w + " mm"], ["Wall", selWin.t === T_EXT ? "External" : "Internal"]]} />
                   <div className="mt-4"><ToggleRow label="Escape window" checked={!!selWin.escape} onChange={() => toggleEscape()} /></div>
                   <PanelAction danger onClick={deleteSel} className="w-full mt-5"><Trash2 size={14} /> Delete window</PanelAction>
