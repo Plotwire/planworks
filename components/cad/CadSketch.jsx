@@ -216,6 +216,8 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const [tool, setTool] = useState("select");
   const [view, setView] = useState({ s: 0.08, tx: 200, ty: 200 });
   const [draftPts, setDraftPts] = useState([]);
+  // Exact wall length typed while a wall is in progress (digits, mm).
+  const [typedLen, setTypedLen] = useState("");
   const [cur, setCur] = useState({ x: 0, y: 0, sx: -99, sy: -99, on: false });
   const [sel, setSel] = useState(null);
   const [dimP1, setDimP1] = useState(null);
@@ -314,6 +316,13 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       }
       if (e.altKey) return;
       const map = { v: "select", e: "ext", i: "int", d: "door", w: "window", m: "dim", r: "room", t: "text", h: "pan" };
+      // Typed wall length: digits build the number, Backspace edits it, Enter
+      // places the wall that long towards the mouse.
+      if (isWallTool && draftPts.length) {
+        if (/^[0-9]$/.test(e.key)) { e.preventDefault(); setTypedLen((t) => (t.length < 6 ? (t === "0" ? "" : t) + e.key : t)); return; }
+        if (e.key === "Backspace" && typedLen) { e.preventDefault(); setTypedLen((t) => t.slice(0, -1)); return; }
+        if (e.key === "Enter") { e.preventDefault(); placeTypedWall(); return; }
+      }
       if (map[k]) { setTool(map[k]); setDraftPts([]); setDimP1(null); }
       else if (e.key === "Escape") {
         // First Esc cancels the item in progress; with nothing in progress it
@@ -325,7 +334,10 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [sel, draftPts, dimP1]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sel, draftPts, dimP1, typedLen, cur, flags, tool]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A typed length belongs to the wall in progress; it goes when that does.
+  useEffect(() => { if (!draftPts.length) setTypedLen(""); }, [draftPts]);
 
   // wheel zoom toward cursor (native, non-passive)
   useEffect(() => {
@@ -486,7 +498,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     const raw = toWorld(e.clientX, e.clientY);
     const from = draftPts.length ? draftPts[draftPts.length - 1] : null;
     const p = isWallTool ? wallPoint(raw, from) : (flags.gridSnap ? { x: snap(raw.x, settings.grid), y: snap(raw.y, settings.grid) } : raw);
-    setCur({ x: p.x, y: p.y, sx: e.clientX, sy: e.clientY, on: true, ep: !!p.ep });
+    setCur({ x: p.x, y: p.y, rx: raw.x, ry: raw.y, sx: e.clientX, sy: e.clientY, on: true, ep: !!p.ep });
   };
   const handleDown = (e) => {
     if (pinchActiveRef.current) return;
@@ -507,6 +519,25 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   // item is complete on its own: after a wall's end click the next click starts
   // a NEW wall where you click, never chained from the last wall's end.
   const finishAction = () => { setDraftPts([]); setDimP1(null); };
+  // End point for a typed length: from the start point towards the mouse
+  // (raw position, so endpoint/grid snap can't skew it), on a 45deg step when
+  // angles are locked. Rounded to 0.001mm so straight walls stay exactly square.
+  const typedEnd = () => {
+    const from = draftPts[draftPts.length - 1], L = parseInt(typedLen, 10);
+    if (!from || !(L > 0) || cur.rx == null) return null;
+    const dx = cur.rx - from.x, dy = cur.ry - from.y;
+    if (!dx && !dy) return null;
+    let ang = Math.atan2(dy, dx);
+    if (flags.ortho) { const st = Math.PI / 4; ang = Math.round(ang / st) * st; }
+    const r3 = (v) => Math.round(v * 1000) / 1000;
+    return { x: r3(from.x + Math.cos(ang) * L), y: r3(from.y + Math.sin(ang) * L) };
+  };
+  const placeTypedWall = () => {
+    const end = typedEnd();
+    if (!end) return;
+    commitWallSeg(draftPts[draftPts.length - 1], end);
+    finishAction();
+  };
   const handleClick = (e) => {
     if (suppressClickRef.current) { suppressClickRef.current = false; return; }
     if (panRef.current) return;
@@ -809,7 +840,8 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     for (let i = 0; i < draftPts.length - 1; i++)
       overlay.push(<line key={"dp" + i} x1={draftPts[i].x} y1={draftPts[i].y} x2={draftPts[i + 1].x} y2={draftPts[i + 1].y} className="cadv-active" strokeWidth={1.6} vectorEffect="non-scaling-stroke" />);
     const last = draftPts[draftPts.length - 1];
-    overlay.push(<line key="rb" x1={last.x} y1={last.y} x2={cur.x} y2={cur.y} className="cadv-active" strokeWidth={1.6} strokeDasharray="8 6" vectorEffect="non-scaling-stroke" />);
+    const tEnd = typedLen ? typedEnd() : null;
+    overlay.push(<line key="rb" x1={last.x} y1={last.y} x2={tEnd ? tEnd.x : cur.x} y2={tEnd ? tEnd.y : cur.y} className="cadv-active" strokeWidth={1.6} strokeDasharray="8 6" vectorEffect="non-scaling-stroke" />);
     draftPts.forEach((p, k) => overlay.push(<rect key={"v" + k} x={p.x - 90} y={p.y - 90} width={180} height={180} className="cadv-active" fill="#fff" strokeWidth={1.4} vectorEffect="non-scaling-stroke" />));
   }
   if (tool === "dim" && dimP1) {
@@ -828,7 +860,9 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     const lp = draftPts[draftPts.length - 1];
     const L = Math.round(hyp(cur.x - lp.x, cur.y - lp.y));
     const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
-    hud = <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>Length <b>{fmtMM(L)} mm</b></div>;
+    hud = typedLen
+      ? <div className="cadv__hud cadv__hud--typed" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>Length <b>{typedLen}<i className="cadv__caret" /> mm</b> <span>Enter to place</span></div>
+      : <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>Length <b>{fmtMM(L)} mm</b></div>;
   } else if (tool === "dim" && dimP1 && cur.on) {
     const L2 = Math.round(hyp(cur.x - dimP1.x, cur.y - dimP1.y));
     const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
@@ -840,8 +874,8 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const selWin = sel && sel.kind === "window" ? model.windows.find((w) => w.id === sel.id) : null;
   const hint = {
     select: "Click a wall, door or window to select it. Shift-drag to pan.",
-    ext: draftPts.length ? "Click the end point - Esc to cancel" : "Click the start point of an external wall - Esc to exit",
-    int: draftPts.length ? "Click the end point - Esc to cancel" : "Click the start point of an internal wall - Esc to exit",
+    ext: draftPts.length ? "Click the end point, or type a length in mm and press Enter - Esc to cancel" : "Click the start point of an external wall - Esc to exit",
+    int: draftPts.length ? "Click the end point, or type a length in mm and press Enter - Esc to cancel" : "Click the start point of an internal wall - Esc to exit",
     door: "Click on a wall to place a door - Esc to exit",
     window: "Click on a wall to place a window - Esc to exit",
     dim: dimP1 ? "Click the second measure point - Esc to cancel" : "Click the first measure point - Esc to exit",
@@ -1173,6 +1207,10 @@ const CSS = `
 .cadv-note{font-family:var(--font-jetbrains-mono),monospace; fill:#54616E}
 .cadv__hud{position:absolute; z-index:8; pointer-events:none; background:#1A2733; color:#EAF1F6; font-family:var(--font-jetbrains-mono),monospace; font-size:11.5px; padding:4px 8px; border-radius:6px; white-space:nowrap; transform:translate(14px,14px)}
 .cadv__hud b{color:#3FB7C9; font-weight:600}
+.cadv__hud--typed{outline:1.5px solid #2C97A8}
+.cadv__hud--typed span{color:#8FA3B3; margin-left:6px}
+.cadv__caret{display:inline-block; width:1px; height:11px; margin-left:1px; vertical-align:-1px; background:#3FB7C9; animation:cadvCaret 1s steps(1) infinite}
+@keyframes cadvCaret{50%{opacity:0}}
 .cadv__modal-bg{position:fixed; inset:0; background:rgba(15,23,42,.5); backdrop-filter:blur(3px); display:flex; align-items:center; justify-content:center; z-index:50; padding:16px}
 .cadv__modal{width:420px; max-width:100%; background:#fff; border-radius:16px; padding:24px 24px 20px; box-shadow:0 24px 60px -20px rgba(0,0,0,.45); color:#0E141B; user-select:text}
 .cadv__modal .h{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:19px; margin-bottom:8px}
