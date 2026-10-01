@@ -15,6 +15,7 @@ import {
   T_EXT, T_INT, DOOR_W, WIN_W, ptStr, wallStyleOf, hyp, segLen, snap, fmtMM,
   nearestWall, hitTest, joinWalls, pocheD, outlinePathD,
 } from "@/lib/cad/plan";
+import { findNode, endAt, moveNode, moveWall } from "@/lib/cad/edit";
 import { listSketches, getSketchData, insertSketch, updateSketch, deleteSketch } from "@/lib/cad/sketchStore";
 import { insertProject, getProjectData, updateProjectRow } from "@/lib/db";
 import { uploadPlanImage, dataUrlToBlob } from "@/lib/planImages";
@@ -210,6 +211,9 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const pinchActiveRef = useRef(false);
   const livePinchRef = useRef(null);
   const suppressClickRef = useRef(false);
+  // Select tool: a wall end / whole wall being dragged (see armDrag).
+  const dragRef = useRef(null);
+  const [dragUi, setDragUi] = useState(null);
 
   // New sketches start with Solid walls; saved ones keep what they have (see wallStyleOf).
   const [model, setModel] = useState(() => ({ EXTENT: { w: 8400, h: 8800, margin: 2600 }, walls: [], doors: [], windows: [], dims: [], rooms: [], notes: [], boundary: null, rooflights: [], stairs: null, wallStyle: "solid" }));
@@ -255,15 +259,20 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   // sketch clears the history.
   const modelRef = useRef(model);
   modelRef.current = model;
+  const shownRef = useRef(model); // the model last rendered (modelRef runs ahead of it mid-drag)
+  shownRef.current = model;
   const histRef = useRef({ past: [], future: [] });
   const openedModelRef = useRef(model); // the model as opened, for Back to drawing
   const [, setHistVer] = useState(0);
+  const pushPast = (m) => {
+    const h = histRef.current;
+    h.past.push(m); if (h.past.length > 200) h.past.shift();
+    h.future = [];
+  };
   const change = (fn) => {
     const cur = modelRef.current, next = fn(cur);
     if (next === cur) return;
-    const h = histRef.current;
-    h.past.push(cur); if (h.past.length > 200) h.past.shift();
-    h.future = [];
+    pushPast(cur);
     modelRef.current = next; setModel(next); setHistVer((v) => v + 1);
   };
   const step = (from, to) => {
@@ -307,6 +316,9 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   useEffect(() => {
     const onKey = (e) => {
       if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
+      // A wall drag (or a press that may become one) owns the keyboard: Esc
+      // puts the walls back, nothing else applies until release.
+      if (dragRef.current) { if (e.key === "Escape") { e.preventDefault(); cancelDrag(); } return; }
       const k = e.key.toLowerCase();
       if (e.metaKey || e.ctrlKey) {
         if (k === "z" && !e.shiftKey) { e.preventDefault(); undo(); }
@@ -463,22 +475,26 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   };
   // Snap to an existing wall end within 12px on screen. Wins over angle lock
   // and grid, so walls (diagonal ones included) can always meet exactly.
-  const endpointSnap = (raw) => {
+  // skip: "id:end" keys of ends to ignore (the ones being dragged).
+  const endpointSnap = (raw, skip = null, walls = model.walls) => {
     let best = null, bd = 12 / viewRef.current.s;
-    for (const w of model.walls) for (const [x, y] of [[w.x1, w.y1], [w.x2, w.y2]]) {
+    for (const w of walls) for (const [x, y, k] of [[w.x1, w.y1, 0], [w.x2, w.y2, 1]]) {
+      if (skip && skip.has(w.id + ":" + k)) continue;
       const d = hyp(raw.x - x, raw.y - y);
       if (d < bd) { bd = d; best = { x, y, ep: true }; }
     }
     return best;
   };
   const wallPoint = (raw, from) => endpointSnap(raw) || snapPt(raw, from);
-  const snapPt = (raw, from) => {
+  // proj (dragging a corner): the pointer's distance along the locked
+  // direction rather than its straight-line distance from `from`.
+  const snapPt = (raw, from, proj = false) => {
     let x = raw.x, y = raw.y;
     if (flags.ortho && from) {
       const dx = x - from.x, dy = y - from.y;
       const step = Math.PI / 4;
       const ang = Math.round(Math.atan2(dy, dx) / step) * step;
-      let dist = Math.hypot(dx, dy);
+      let dist = proj ? Math.max(0, dx * Math.cos(ang) + dy * Math.sin(ang)) : Math.hypot(dx, dy);
       if (flags.gridSnap) dist = Math.round(dist / settings.grid) * settings.grid;
       return { x: from.x + Math.cos(ang) * dist, y: from.y + Math.sin(ang) * dist };
     }
@@ -489,26 +505,139 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const isWallTool = tool === "ext" || tool === "int";
   const drawingTool = tool !== "select" && tool !== "pan";
 
+  // ---- Select tool: drag a wall end (the whole corner) or a whole wall ----
+  // A press on a wall end (10px) or a wall arms a drag; it starts once the
+  // pointer has moved 4px (10px for touch / pen), so a press without moving is
+  // still a click. Each move previews from the pre-drag model (lib/cad/edit);
+  // release commits it as ONE undo step. Esc, a pinch or a cancelled pointer
+  // puts it back.
+  const r3 = (v) => Math.round(v * 1000) / 1000;
+  const armDrag = (e, raw) => {
+    const base = modelRef.current, ws = base.walls;
+    const selId = sel && sel.kind === "wall" ? sel.id : null;
+    const hit = endAt(ws, raw.x, raw.y, 10 / viewRef.current.s, selId);
+    let d = null;
+    if (hit) {
+      // Every end at that corner moves. Angle lock works from the far end of
+      // one of the walls there (see dragMove): fars lists them, the grabbed
+      // wall (the selected one if it's there, else the nearest) first.
+      const ends = findNode(ws, hit.x, hit.y), mine = ws.filter((w) => ends.some((n) => n.id === w.id));
+      const g = mine.find((w) => w.id === selId) || nearestWall(mine, raw.x, raw.y).seg;
+      const fars = [g, ...mine.filter((w) => w !== g)].map((w) => (ends.find((n) => n.id === w.id).end === 0 ? { id: w.id, x: w.x2, y: w.y2 } : { id: w.id, x: w.x1, y: w.y1 }));
+      // No end snap to the corner itself, nor to those far corners (that would
+      // shrink a wall to nothing, which is never allowed).
+      const skip = new Set([...ends, ...fars.flatMap((f) => findNode(ws, f.x, f.y))].map((n) => n.id + ":" + n.end));
+      d = { kind: "node", id: g.id, ends, home: { x: hit.x, y: hit.y }, skip, fars };
+    } else if (!openingAt(raw.x, raw.y)) {
+      const h = hitTest(ws, raw.x, raw.y), w = h && ws.find((o) => o.id === h.id);
+      if (w) { const L = segLen(w) || 1; d = { kind: "wall", id: w.id, src: w, n: [-(w.y2 - w.y1) / L, (w.x2 - w.x1) / L] }; }
+    }
+    if (!d) return;
+    // Capture now, so the release (or a cancel) always comes back here.
+    try { svgRef.current.setPointerCapture(e.pointerId); } catch {}
+    dragRef.current = { ...d, base, pid: e.pointerId, mx: e.clientX, my: e.clientY, w0: raw, moved: false, slop: e.pointerType === "mouse" ? 4 : 10 };
+  };
+  const dragMove = (e) => {
+    const d = dragRef.current;
+    if (!d.moved) {
+      if (Math.hypot(e.clientX - d.mx, e.clientY - d.my) <= d.slop) return;
+      d.moved = true; d.save = saveState;
+      setSel({ kind: "wall", id: d.id }); setDragUi({ kind: d.kind, id: d.id, off: 0 });
+    }
+    const raw = toWorld(e.clientX, e.clientY);
+    // Each preview is worked out from the pre-drag model; the last one shown
+    // (modelRef) lets lib/cad/edit judge the step from there.
+    let next, ui, at;
+    if (d.kind === "node") {
+      // Back over its own spot puts it back exactly; another wall end wins
+      // next; else angle lock along whichever wall at the corner the pointer
+      // fits best (the grabbed one on a tie), then grid.
+      const home = hyp(raw.x - d.home.x, raw.y - d.home.y) <= 12 / viewRef.current.s;
+      const ep = !home && endpointSnap(raw, d.skip, d.base.walls);
+      let p = home ? d.home : ep, f = d.fars[0];
+      if (!p) for (const o of flags.ortho ? d.fars : [f]) {
+        const q = snapPt(raw, o, true);
+        if (!p || hyp(q.x - raw.x, q.y - raw.y) < hyp(p.x - raw.x, p.y - raw.y) - 1e-6) { p = q; f = o; }
+      }
+      at = home || ep ? { x: p.x, y: p.y } : { x: Math.abs(p.x - f.x) < 1e-6 ? f.x : r3(p.x), y: Math.abs(p.y - f.y) < 1e-6 ? f.y : r3(p.y) };
+      next = home ? d.base : moveNode(d.base, d.ends, at, modelRef.current);
+      ui = { kind: "node", id: f.id, ep: !!ep, x: at.x, y: at.y };
+    } else {
+      // Lock angles: only square to the wall, so its neighbours keep their run.
+      let dx = raw.x - d.w0.x, dy = raw.y - d.w0.y, off = null;
+      if (flags.ortho) {
+        off = dx * d.n[0] + dy * d.n[1];
+        if (flags.gridSnap) off = snap(off, settings.grid);
+        dx = d.n[0] * off; dy = d.n[1] * off;
+      } else if (flags.gridSnap) { dx = snap(dx, settings.grid); dy = snap(dy, settings.grid); }
+      dx = r3(dx); dy = r3(dy);
+      next = moveWall(d.base, d.id, dx, dy, modelRef.current);
+      // How far the wall really went (its ends may slide along walls they end on).
+      const a = d.src, b = next && next.walls.find((o) => o.id === d.id);
+      const mx = b ? (b.x1 + b.x2 - a.x1 - a.x2) / 2 : 0, my = b ? (b.y1 + b.y2 - a.y1 - a.y2) / 2 : 0;
+      ui = { kind: "wall", id: d.id, off: flags.ortho ? Math.abs(mx * d.n[0] + my * d.n[1]) : hyp(mx, my) };
+      at = raw;
+    }
+    if (next) { modelRef.current = next; setModel(next); setDragUi(ui); } // null: not allowed (see lib/cad/edit), keep the last good one
+    setCur({ x: at.x, y: at.y, rx: raw.x, ry: raw.y, sx: e.clientX, sy: e.clientY, on: true, ep: false });
+  };
+  // Back to the pre-drag model and save state: skip the "unsaved" mark if a
+  // preview was shown, and never restore a stale "Saving…".
+  const putBack = (d) => {
+    skipDirty.current = shownRef.current !== d.base;
+    if (modelRef.current !== d.base) { modelRef.current = d.base; setModel(d.base); }
+    setSaveState((st) => (st === "unsaved" && d.save !== "saving" ? d.save : st));
+  };
+  const endDrag = () => {
+    const d = dragRef.current;
+    dragRef.current = null;
+    if (!d || !d.moved) return false;
+    setDragUi(null);
+    if (modelRef.current !== d.base) { pushPast(d.base); setHistVer((v) => v + 1); }
+    else putBack(d); // dropped where it started: nothing to undo or save
+    return true;
+  };
+  const cancelDrag = () => {
+    const d = dragRef.current;
+    dragRef.current = null;
+    if (!d || !d.moved) return;
+    setDragUi(null); suppressClickRef.current = true;
+    putBack(d);
+  };
+
   const handleMove = (e) => {
-    if (pinchActiveRef.current) return;
+    if (pinchActiveRef.current) { if (dragRef.current) cancelDrag(); return; }
     if (panRef.current) {
       setView({ s: viewRef.current.s, tx: panRef.current.tx + (e.clientX - panRef.current.mx), ty: panRef.current.ty + (e.clientY - panRef.current.my) });
       return;
     }
+    if (dragRef.current) {
+      if (e.pointerId !== dragRef.current.pid) return;
+      if (e.buttons) { dragMove(e); return; }
+      endDrag(); // the release was missed (outside the window): keep what was shown
+    }
     const raw = toWorld(e.clientX, e.clientY);
     const from = draftPts.length ? draftPts[draftPts.length - 1] : null;
     const p = isWallTool ? wallPoint(raw, from) : (flags.gridSnap ? { x: snap(raw.x, settings.grid), y: snap(raw.y, settings.grid) } : raw);
-    setCur({ x: p.x, y: p.y, rx: raw.x, ry: raw.y, sx: e.clientX, sy: e.clientY, on: true, ep: !!p.ep });
+    const hov = tool === "select" && layers.walls && !!endAt(model.walls, raw.x, raw.y, 10 / viewRef.current.s);
+    setCur({ x: p.x, y: p.y, rx: raw.x, ry: raw.y, sx: e.clientX, sy: e.clientY, on: true, ep: !!p.ep, hov });
   };
   const handleDown = (e) => {
-    if (pinchActiveRef.current) return;
+    if (pinchActiveRef.current) { cancelDrag(); return; }
     suppressClickRef.current = false;
     if (tool === "pan" || e.button === 1 || e.shiftKey) {
       panRef.current = { mx: e.clientX, my: e.clientY, tx: view.tx, ty: view.ty };
       e.preventDefault();
+      return;
     }
+    if (tool === "select" && layers.walls && e.button === 0 && !dragRef.current) armDrag(e, toWorld(e.clientX, e.clientY));
   };
-  const handleUp = () => { panRef.current = null; };
+  // After a real drag the click that follows must not change the selection.
+  const handleUp = (e) => {
+    panRef.current = null;
+    if (dragRef.current && e.pointerId === dragRef.current.pid && endDrag()) suppressClickRef.current = true;
+  };
+  const handleCancel = (e) => { panRef.current = null; if (dragRef.current && e.pointerId === dragRef.current.pid) cancelDrag(); };
 
   const commitWallSeg = (a, b) => {
     if (a.x === b.x && a.y === b.y) return;
@@ -853,6 +982,12 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     overlay.push(<circle key="cdot" cx={cur.x} cy={cur.y} r={70} className="cadv-active" fill="#fff" strokeWidth={1.4} vectorEffect="non-scaling-stroke" />);
     if (isWallTool && cur.ep) overlay.push(<rect key="ep" x={cur.x - 9 / view.s} y={cur.y - 9 / view.s} width={18 / view.s} height={18 / view.s} fill="none" className="cadv-active" strokeWidth={2} vectorEffect="non-scaling-stroke" />);
   }
+  // Select: drag handles at the selected wall's ends (screen-constant size);
+  // a dragged corner shows the end-snap square when it lands on another end.
+  const selWall = sel && sel.kind === "wall" ? model.walls.find((w) => w.id === sel.id) : null;
+  if (tool === "select" && layers.walls && selWall) [[selWall.x1, selWall.y1], [selWall.x2, selWall.y2]].forEach(([x, y], k) =>
+    overlay.push(<rect key={"hd" + k} x={x - 4.5 / view.s} y={y - 4.5 / view.s} width={9 / view.s} height={9 / view.s} className="cadv-handle" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />));
+  if (dragUi && dragUi.ep) overlay.push(<rect key="dep" x={dragUi.x - 9 / view.s} y={dragUi.y - 9 / view.s} width={18 / view.s} height={18 / view.s} fill="none" className="cadv-active" strokeWidth={2} vectorEffect="non-scaling-stroke" />);
 
   // length HUD (DOM, at cursor)
   let hud = null;
@@ -867,13 +1002,16 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     const L2 = Math.round(hyp(cur.x - dimP1.x, cur.y - dimP1.y));
     const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
     hud = <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}><b>{fmtMM(L2)} mm</b></div>;
+  } else if (dragUi) {
+    const gw = model.walls.find((w) => w.id === dragUi.id);
+    const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
+    if (gw) hud = <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>Length <b>{fmtMM(segLen(gw))} mm</b>{dragUi.kind === "wall" ? <span className="sub">moved {fmtMM(dragUi.off)} mm</span> : null}</div>;
   }
 
-  const selWall = sel && sel.kind === "wall" ? model.walls.find((w) => w.id === sel.id) : null;
   const selDoor = sel && sel.kind === "door" ? model.doors.find((d) => d.id === sel.id) : null;
   const selWin = sel && sel.kind === "window" ? model.windows.find((w) => w.id === sel.id) : null;
-  const hint = {
-    select: "Click a wall, door or window to select it. Shift-drag to pan.",
+  const hint = dragUi ? "Release to place it - Esc to put it back" : {
+    select: "Click to select. Drag a wall or wall end to move it. Shift-drag to pan.",
     ext: draftPts.length ? "Click the end point, or type a length in mm and press Enter - Esc to cancel" : "Click the start point of an external wall - Esc to exit",
     int: draftPts.length ? "Click the end point, or type a length in mm and press Enter - Esc to cancel" : "Click the start point of an internal wall - Esc to exit",
     door: "Click on a wall to place a door - Esc to exit",
@@ -899,7 +1037,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const subscribe = () => { access.openSubscribe && access.openSubscribe(); };
   const canUndo = histRef.current.past.length > 0, canRedo = histRef.current.future.length > 0;
 
-  const svgCursor = tool === "pan" ? "grab" : (drawingTool ? "crosshair" : "default");
+  const svgCursor = tool === "pan" ? "grab" : drawingTool ? "crosshair" : (dragUi || cur.hov ? "move" : "default");
   const gridSz = GRID_MM * view.s;
   // White paper with the editor's grid over it, edge to edge.
   const gridStyle = {
@@ -1031,7 +1169,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
           <div ref={wrapRef} className="absolute inset-0 overflow-hidden bg-white">
             <div ref={gridRef} style={{ position: "absolute", inset: 0, pointerEvents: "none", transformOrigin: "0 0", willChange: PROMOTE, ...gridStyle }} />
             <svg ref={svgRef} className="cadv__svg" width="100%" height="100%" style={{ cursor: svgCursor, transformOrigin: "0 0", willChange: PROMOTE }}
-              onPointerDown={handleDown} onPointerMove={handleMove} onPointerUp={handleUp} onPointerCancel={handleUp}
+              onPointerDown={handleDown} onPointerMove={handleMove} onPointerUp={handleUp} onPointerCancel={handleCancel}
               onClick={handleClick}
               onPointerLeave={() => setCur((c) => ({ ...c, on: false }))}>
               <g ref={gRef}>
@@ -1067,7 +1205,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
               {selWall ? (
                 <>
                   <div className="text-[15px] font-semibold text-slate-900 dark:text-slate-100" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>Wall</div>
-                  <div className={`mt-1 mb-4 ${PANEL_HELP}`}>Change its type, or delete it.</div>
+                  <div className={`mt-1 mb-4 ${PANEL_HELP}`}>Drag it, or its end squares, on the plan to move it. Change its type, or delete it.</div>
                   <ScheduleRows rows={[["Length", fmtMM(segLen(selWall)) + " mm"], ["Thickness", (selWall.type === "external" ? T_EXT : T_INT) + " mm"]]} />
                   <SectionLabel className="mt-5 mb-2">Wall type</SectionLabel>
                   <ChoiceGroup label="Wall type" value={selWall.type} onChange={(t) => selWall.type !== t && convertSel()}
@@ -1194,6 +1332,7 @@ const CSS = `
 .cadv-sel{stroke:#3FB7C9}
 .cadv-sel-fill{fill:rgba(63,183,201,.18)}
 .cadv-active{stroke:#3FB7C9}
+.cadv-handle{fill:#3FB7C9; stroke:#FFFFFF}
 .cadv-cross{stroke:#2C3E50}
 .cadv-dim{stroke:#2C3E50}
 .cadv-dim-crit{stroke:#C4564B}
@@ -1207,6 +1346,7 @@ const CSS = `
 .cadv-note{font-family:var(--font-jetbrains-mono),monospace; fill:#54616E}
 .cadv__hud{position:absolute; z-index:8; pointer-events:none; background:#1A2733; color:#EAF1F6; font-family:var(--font-jetbrains-mono),monospace; font-size:11.5px; padding:4px 8px; border-radius:6px; white-space:nowrap; transform:translate(14px,14px)}
 .cadv__hud b{color:#3FB7C9; font-weight:600}
+.cadv__hud .sub{color:#8FA3B3; margin-left:6px}
 .cadv__hud--typed{outline:1.5px solid #2C97A8}
 .cadv__hud--typed span{color:#8FA3B3; margin-left:6px}
 .cadv__caret{display:inline-block; width:1px; height:11px; margin-left:1px; vertical-align:-1px; background:#3FB7C9; animation:cadvCaret 1s steps(1) infinite}
