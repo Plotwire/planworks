@@ -37,6 +37,19 @@ function Splash({ label = "Loading Plotwire…" }) {
 
 const ACTION_BTN = "bg-[var(--action)] hover:bg-[var(--action-hover)] text-[color:var(--action-ink)]";
 
+// Coming Soon holding page: while it's on, visitors who aren't signed in see
+// the "Coming Soon" page instead of the login (the owner's way past it is the
+// discreet "Sign in" link, or ?login / #login). It is ON unless the Vercel
+// environment variable NEXT_PUBLIC_COMING_SOON is "false", "0" or "off" (any
+// case, spaces ignored); unset or anything else keeps the holding page up.
+// NEXT_PUBLIC_* values are fixed when the app is BUILT (Next writes them into
+// the browser code), so changing it in Vercel only takes effect after a
+// redeploy. Written out in full on purpose: Next only fills in a literal
+// process.env.NEXT_PUBLIC_... reference.
+const COMING_SOON = !["false", "0", "off"].includes(
+  String(process.env.NEXT_PUBLIC_COMING_SOON ?? "true").trim().toLowerCase()
+);
+
 // Billing is on and the account's access level couldn't be checked yet (the
 // database didn't answer). In place of the app, never Try: showing a paying or
 // exempt account the Try limits because of a network blip would be wrong. It
@@ -106,10 +119,8 @@ function AppGates({ children }) {
     try { return localStorage.getItem("planworks:theme") || "light"; } catch { return "light"; }
   });
   const [session, setSession] = useState(null);
-  // Coming Soon holding page. While true, visitors who are not logged in see the
-  // "Coming Soon" page instead of the login. Flip to false to launch publicly.
-  const COMING_SOON = true;
-  // Owner route past the holding page: the discreet "Sign in" link, or ?login=1.
+  // Owner route past the Coming Soon page (COMING_SOON, above): the discreet
+  // "Sign in" link, or ?login / #login.
   const [showLogin, setShowLogin] = useState(false);
   const [recovery, setRecovery] = useState(false);
   const [checking, setChecking] = useState(true);

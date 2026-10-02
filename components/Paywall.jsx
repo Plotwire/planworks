@@ -96,7 +96,8 @@ export default function Paywall({ user, onSignOut, onManageBilling, onBack, hasL
           <div className="card-price">
             <span className="amt">£{PRICE_GBP_MONTHLY}</span><span className="per">/month</span>
           </div>
-          <p className="card-blurb">One simple plan. Unlimited users on your account.</p>
+          {/* Terms 3.3: a subscription is for one named user. */}
+          <p className="card-blurb">One simple plan. One user per subscription.</p>
           <ul className="feat">
             {FEATURES.map((f) => (
               <li key={f}>
