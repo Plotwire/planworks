@@ -13,8 +13,11 @@ import { getSettings, saveSettings } from "@/lib/db";
 import { clearSignedOutDeviceData } from "@/lib/deviceData";
 import { DEFAULT_TITLEBLOCK, normaliseTitleBlock, companyProfileToTitleBlock, companyLogoFrom, mergeTitleBlocks } from "@/lib/titleBlock";
 import { useSubscription } from "@/lib/useSubscription";
+import { useCheckoutReturn } from "@/lib/useCheckoutReturn";
+import { PAYMENT_PENDING_MESSAGE } from "@/lib/checkoutReturn";
+import { ConfirmingPayment, PaymentNote } from "@/components/PaymentStatus";
 import { TRY_SYMBOL_LIMIT } from "@/lib/pricing";
-import { openBillingPortal } from "@/lib/billingClient";
+import { openBillingPortal, syncSubscriptionFromStripe } from "@/lib/billingClient";
 import { LEGAL_LINKS } from "@/lib/legal";
 import TermsGate from "@/components/TermsGate";
 import RotateNotice from "@/components/RotateNotice";
@@ -91,7 +94,19 @@ function AppGates({ children }) {
   // NEXT_PUBLIC_BILLING_ENABLED=true in Vercel once Stripe is live and tested.
   const BILLING_ENABLED = process.env.NEXT_PUBLIC_BILLING_ENABLED === "true";
   const subscription = useSubscription(BILLING_ENABLED ? session : null);
-  const [activating, setActivating] = useState(false); // returning from Stripe Checkout
+  // Back from Stripe Checkout: "Confirming your payment…" until the webhook
+  // has unlocked the account (lib/checkoutReturn.js). The return URL itself
+  // grants nothing. If the webhook is late or lost, the server is asked to
+  // check with Stripe itself (POST /api/billing/sync).
+  const checkoutReturn = useCheckoutReturn({
+    enabled: BILLING_ENABLED,
+    userId: session?.user?.id || null,
+    ready: !subscription.loading,
+    full: subscription.level === "full",
+    refresh: subscription.refresh,
+    sync: syncSubscriptionFromStripe,
+  });
+  const beginCheckoutReturn = checkoutReturn.begin;
 
   // ---- First-login company details ----------------------------------------
   // "unknown" until we know whether this account has a company_profile row;
@@ -202,6 +217,7 @@ function AppGates({ children }) {
   // Resolves to "" when signed out, or a message when it didn't go through
   // (e.g. offline: Supabase keeps the session until it can reach the server).
   // Callers that don't show messages can ignore it.
+  const forgetCheckoutReturn = checkoutReturn.forget;
   const signOut = useCallback(async () => {
     const failed = "Couldn't log out. Check your connection and try again.";
     try {
@@ -211,11 +227,14 @@ function AppGates({ children }) {
       // device (lib/deviceData.js). Only on success -- a failed sign-out keeps
       // the session, so it keeps the crash-recovery draft too.
       clearSignedOutDeviceData();
+      // Nor a remembered return from Stripe: signing out on purpose isn't the
+      // "session expired on the way back" case that sends them to sign-in.
+      forgetCheckoutReturn();
       return "";
     } catch {
       return failed;
     }
-  }, []);
+  }, [forgetCheckoutReturn]);
 
   // Open the Stripe Customer Portal (change plan / card / cancel).
   const manageBilling = useCallback(async () => {
@@ -224,8 +243,9 @@ function AppGates({ children }) {
   }, []);
 
   // Read the ?checkout= flag Stripe appends to our return URL, then strip it so
-  // a reload doesn't re-trigger. success → poll until the webhook lands the row;
-  // cancelled → just show a gentle note on the paywall.
+  // a reload doesn't re-trigger. success → wait for the webhook (remembered for
+  // this tab, so a reload keeps waiting); cancelled → a gentle note on the
+  // paywall.
   useEffect(() => {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
@@ -234,26 +254,12 @@ function AppGates({ children }) {
     params.delete("checkout");
     const qs = params.toString();
     window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash);
-    if (flag === "success") setActivating(true);
+    if (flag === "success") beginCheckoutReturn();
     else if (flag === "cancelled" || flag === "canceled") {
       setBillingNotice("Checkout cancelled — subscribe whenever you're ready.");
       setShowSubscribe(true);
     }
-  }, []);
-
-  // While activating, poll for the subscription row the webhook writes. Stops as
-  // soon as access unlocks, or gives up after ~24s and falls back to the paywall.
-  useEffect(() => {
-    if (!activating) return;
-    if (subscription.isActive) { setActivating(false); return; }
-    let tries = 0;
-    const t = setInterval(() => {
-      tries += 1;
-      subscription.refresh();
-      if (tries >= 16) { clearInterval(t); setActivating(false); }
-    }, 1500);
-    return () => clearInterval(t);
-  }, [activating, subscription.isActive, subscription.refresh]);
+  }, [beginCheckoutReturn]);
 
   // Load the account's saved settings (title block + BOQ preset) once signed in.
   useEffect(() => {
@@ -333,7 +339,9 @@ function AppGates({ children }) {
   if (checking) return <Splash />;
   if (recovery) return <LoginScreen recovery onRecovered={() => setRecovery(false)} />;
   if (!session) {
-    const wantLogin = showLogin ||
+    // Back from Stripe but signed out (session expired, or another address):
+    // straight to sign-in, never the holding page, then on to confirming.
+    const wantLogin = showLogin || checkoutReturn.awaitingSignIn ||
       (typeof window !== "undefined" && /[?&#]login(=1)?\b/.test(window.location.search + window.location.hash));
     if (COMING_SOON && !wantLogin) return <ComingSoon onSignIn={() => setShowLogin(true)} />;
     return <LoginScreen />;
@@ -352,8 +360,16 @@ function AppGates({ children }) {
   const level = BILLING_ENABLED ? subscription.level : "full";
   if (BILLING_ENABLED) {
     if (subscription.loading) return <Splash />;
-    if (activating && !subscription.isActive) return <Splash label="Activating your subscription…" />;
+    // Just back from Stripe and not unlocked yet. In place of the app: this
+    // only follows a fresh page load (the return from Stripe), so there is no
+    // open drawing to lose.
+    if (checkoutReturn.confirming) {
+      return <ConfirmingPayment canContinue={checkoutReturn.canContinue} onContinue={checkoutReturn.continueNow} />;
+    }
   }
+  // Still waiting on Stripe after the confirming screen: say so instead of
+  // pitching Try or "your subscription has ended" as if they hadn't paid.
+  const paymentPending = BILLING_ENABLED && checkoutReturn.pending && level !== "full";
   // Drawn OVER the app, not instead of it: swapping the app out would unmount
   // an open drawing and lose unsaved work.
   const subscribeScreen = BILLING_ENABLED && showSubscribe && level !== "full" ? (
@@ -363,9 +379,23 @@ function AppGates({ children }) {
       onManageBilling={manageBilling}
       onBack={() => setShowSubscribe(false)}
       hasLapsed={level === "lapsed"}
-      notice={billingNotice}
+      notice={billingNotice || (paymentPending ? PAYMENT_PENDING_MESSAGE : "")}
     />
   ) : null;
+  const paymentNote = !BILLING_ENABLED || subscribeScreen ? null
+    : paymentPending && checkoutReturn.showPendingBanner ? (
+      <PaymentNote
+        message={PAYMENT_PENDING_MESSAGE}
+        onCheck={checkoutReturn.checkAgain}
+        checking={checkoutReturn.checking}
+        onDismiss={checkoutReturn.dismissPending}
+      />
+    ) : checkoutReturn.showConfirmedNote && level === "full" ? (
+      <PaymentNote
+        message="Payment confirmed. Thanks for subscribing to Plotwire."
+        onDismiss={checkoutReturn.dismissConfirmed}
+      />
+    ) : null;
 
   // Waiting on the profile check -- brief, and only on a fresh sign-in.
   if (profileStep === "unknown") return <Splash />;
@@ -389,6 +419,8 @@ function AppGates({ children }) {
         readOnly: level === "lapsed",
         symbolLimit: TRY_SYMBOL_LIMIT,
         openSubscribe,
+        // Back from Stripe, payment not confirmed yet (see paymentPending).
+        paymentPending,
       },
     }}>
       {profileStep === "needed" ? (
@@ -400,6 +432,7 @@ function AppGates({ children }) {
         />
       ) : children}
       {subscribeScreen}
+      {paymentNote}
     </AppCtx.Provider>
   );
 }

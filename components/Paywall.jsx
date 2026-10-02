@@ -12,16 +12,31 @@ const FEATURES = [
   "All your jobs in one place",
 ];
 
+// What to say when the server sends them to their billing page instead of a
+// second checkout. A subscription whose payment failed (past_due, unpaid) is
+// the usual reason a lapsed account ends up here: the billing page is where
+// that invoice is paid or the card changed.
+export function portalHandOffNote(status) {
+  if (status === "past_due" || status === "unpaid") {
+    return "Your last payment didn’t go through, so we’re opening your billing page, where you can pay it or update your card. You won’t be charged twice.";
+  }
+  return "You already have a Plotwire subscription, so we’re opening your billing page instead. You won’t be charged twice.";
+}
+
 // The Subscribe screen. Opened from Subscribe buttons inside the app (onBack
 // returns there); Try mode means nobody has to see it before using Plotwire.
 export default function Paywall({ user, onSignOut, onManageBilling, onBack, hasLapsed = false, notice = "" }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Set when the server sends an existing subscriber to their billing page
+  // instead of a second checkout (app/api/billing/checkout/route.js).
+  const [portalNote, setPortalNote] = useState("");
 
   const choose = async () => {
-    setError(""); setBusy(true);
+    setError(""); setPortalNote(""); setBusy(true);
     try {
-      await startCheckout(); // redirects away on success
+      const r = await startCheckout(); // redirects away on success
+      if (r?.portal) setPortalNote(portalHandOffNote(r.status));
     } catch (e) {
       setBusy(false);
       setError(e?.message || "Couldn't start checkout. Try again in a moment.");
@@ -60,8 +75,8 @@ export default function Paywall({ user, onSignOut, onManageBilling, onBack, hasL
           </p>
         </div>
 
-        {(notice || error) && (
-          <div className={`pay-banner ${error ? "is-error" : ""}`}>{error || notice}</div>
+        {(notice || error || portalNote) && (
+          <div className={`pay-banner ${error ? "is-error" : ""}`} role="status">{error || portalNote || notice}</div>
         )}
 
         <div className="card">
@@ -79,7 +94,7 @@ export default function Paywall({ user, onSignOut, onManageBilling, onBack, hasL
             ))}
           </ul>
           <button type="button" className="pick primary" onClick={choose} disabled={busy}>
-            {busy ? "Redirecting…" : (hasLapsed ? "Re-subscribe" : "Subscribe")}
+            {busy ? (portalNote ? "Opening billing…" : "Redirecting…") : (hasLapsed ? "Re-subscribe" : "Subscribe")}
           </button>
           <div className="reassure">
             <span>Billed monthly</span><i /><span>Cancel anytime</span>

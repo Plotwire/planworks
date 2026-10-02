@@ -94,6 +94,9 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
   const isTry = Boolean(access.isTry);
   const readOnly = Boolean(access.readOnly);
   const symbolLimit = access.symbolLimit || 0;
+  // Back from Stripe, payment not confirmed yet: AppShell shows a "still
+  // confirming" note, so don't also pitch Try or "your subscription has ended".
+  const paymentPending = Boolean(access.paymentPending);
   // Lapsed accounts can't start new work; the start buttons open Subscribe.
   const startNew = (fn) => (...args) => (readOnly ? access.openSubscribe?.() : fn?.(...args));
   onNewProject = startNew(onNewProject);
@@ -269,7 +272,7 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
           </header>
 
           <div className="scroll">
-            {readOnly && (
+            {readOnly && !paymentPending && (
               <div className="access-banner is-lapsed" role="status">
                 <div>
                   <strong>Your subscription has ended.</strong>
@@ -278,7 +281,7 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
                 <button className="mg-primary" onClick={access.openSubscribe}>Re-subscribe</button>
               </div>
             )}
-            {isTry && (
+            {isTry && !paymentPending && (
               <div className="access-banner" role="status">
                 <div>
                   <strong>You&rsquo;re trying Plotwire.</strong>

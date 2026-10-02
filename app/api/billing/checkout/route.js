@@ -1,12 +1,46 @@
 ﻿import { NextResponse } from "next/server";
-import { getStripe } from "@/lib/stripe";
-import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
-import { bearer, userFromToken, STRIPE_PRICE, returnOrigin, LIVE_STATUSES, isMissingCustomer } from "@/lib/billing";
-import { rowMatchesKeyMode, stripeKeyMode } from "@/lib/stripeWebhook";
+import { bearer, userFromToken, STRIPE_PRICE, returnOrigin, beginCheckout } from "@/lib/billing";
+import { rateCheck } from "@/lib/checkoutGuard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// The guard looks Stripe up several ways before a session is made
+// (lib/billing.js beginCheckout); 30 s is well within every Vercel plan.
+export const maxDuration = 30;
 
+// Recent checkout starts per person, on this server instance only
+// (lib/checkoutGuard.js rateCheck). A brake on a stuck page or a script, not a
+// guarantee: the double-charge guard itself doesn't depend on it.
+const recentStarts = new Map();
+
+function allowStart(userId) {
+  const nowMs = Date.now();
+  const verdict = rateCheck(recentStarts.get(userId), nowMs);
+  recentStarts.set(userId, verdict.stamps);
+  if (recentStarts.size > 1000) {
+    // Forget people with nothing recent, so the map stays small.
+    for (const [id, stamps] of recentStarts) {
+      if (!rateCheck(stamps, nowMs).stamps.length) recentStarts.delete(id);
+    }
+  }
+  return verdict;
+}
+
+// POST /api/billing/checkout (Bearer: the Supabase access token).
+//   200 { url }                        a Stripe Checkout page to send the
+//                                      browser to
+//   200 { url, portal: true, status }  they already have a subscription that
+//                                      is running or can still be paid
+//                                      (status: its Stripe status): the
+//                                      billing portal for it instead, never a
+//                                      second checkout
+//   409 { error, existing }            the same, but no portal link could be
+//                                      made
+//   409 { error, inProgress }          another checkout of theirs is being
+//                                      paid right now
+//   429 { error }                      too many attempts in a minute
+//   401 / 400 / 500 { error }
+// The browser goes to url either way (lib/billingClient.js).
 export async function POST(req) {
   try {
     const user = await userFromToken(bearer(req));
@@ -15,67 +49,38 @@ export async function POST(req) {
     const price = STRIPE_PRICE;
     if (!price) return NextResponse.json({ error: "Billing isn't configured yet." }, { status: 400 });
 
-    const admin = getSupabaseAdmin();
-    const stripe = getStripe();
-
-    // "*" so the read still works before billing-hardening.sql adds livemode.
-    const { data: existing, error: readError } = await admin
-      .from("subscriptions")
-      .select("*")
-      .eq("user_id", user.id)
-      .limit(1);
-    if (readError) throw readError;
-    // Previews and production share one database: a row from the other Stripe
-    // mode (e.g. a preview's test subscription seen by the live site) is
-    // treated as no subscription, and its customer id isn't reused.
-    const row = existing?.[0] || null;
-    const current = rowMatchesKeyMode(row, stripeKeyMode(process.env.STRIPE_SECRET_KEY)) ? row : null;
-
-    // Never start a second subscription for someone who already has a live one.
-    if (current && LIVE_STATUSES.has(current.status)) {
+    const allowed = allowStart(user.id);
+    if (!allowed.ok) {
       return NextResponse.json(
-        { error: "You already have an active subscription. Use Manage billing to change it." },
+        { error: "Too many attempts. Wait a minute, then try again." },
+        { status: 429, headers: { "Retry-After": String(allowed.retryAfterSec) } }
+      );
+    }
+
+    const result = await beginCheckout(user, { origin: returnOrigin(req), price });
+
+    if (result.kind === "portal") {
+      return NextResponse.json({ url: result.url, portal: true, status: result.status || null });
+    }
+    if (result.kind === "blocked" && result.reason === "payment-in-progress") {
+      return NextResponse.json(
+        {
+          error: "A payment for Plotwire is already going through. Wait a minute, then refresh — you won’t be charged twice.",
+          inProgress: true,
+        },
         { status: 409 }
       );
     }
-
-    // Reuse an existing Stripe customer if this user has subscribed before.
-    const customerId = current?.stripe_customer_id || null;
-    const origin = returnOrigin(req);
-
-    const params = {
-      mode: "subscription",
-      // The account id, three ways: the webhook maps a completed checkout back
-      // to the account from client_reference_id (or the session metadata), and
-      // every later subscription event from the subscription metadata.
-      client_reference_id: user.id,
-      metadata: { user_id: user.id },
-      line_items: [{ price, quantity: 1 }],
-      allow_promotion_codes: true,
-      // No trial: the first month is charged at checkout. People try Plotwire
-      // before paying through Try mode instead (lib/access.js).
-      subscription_data: {
-        metadata: { user_id: user.id },
-      },
-      success_url: `${origin}/?checkout=success`,
-      cancel_url: `${origin}/?checkout=cancelled`,
-    };
-
-    let session;
-    try {
-      session = await stripe.checkout.sessions.create(
-        customerId ? { ...params, customer: customerId } : { ...params, customer_email: user.email }
+    if (result.kind === "blocked") {
+      return NextResponse.json(
+        {
+          error: "You already have a Plotwire subscription, but we couldn’t open your billing page just now. Try again in a moment.",
+          existing: true,
+        },
+        { status: 409 }
       );
-    } catch (e) {
-      // A stored customer this Stripe account doesn't know (saved under a
-      // previous account) -- start fresh from the email instead of failing.
-      // The webhook then overwrites the stale ID with the new customer.
-      if (!customerId || !isMissingCustomer(e)) throw e;
-      console.warn("[billing/checkout] stored customer not found in Stripe; starting fresh:", customerId);
-      session = await stripe.checkout.sessions.create({ ...params, customer_email: user.email });
     }
-
-    return NextResponse.json({ url: session.url });
+    return NextResponse.json({ url: result.url });
   } catch (e) {
     console.error("[billing/checkout]", e);
     return NextResponse.json({ error: "Could not start checkout. Try again shortly." }, { status: 500 });
