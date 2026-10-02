@@ -1,42 +1,28 @@
 -- ============================================================================
--- Paywall enforced in the database  (projects + sketches + planner_jobs)
+-- SUPERSEDED by supabase/try-mode.sql.  NEVER RUN THIS FILE.
 -- ----------------------------------------------------------------------------
--- >>> RUN AT STRIPE GO-LIVE ONLY, after inserting billing_exempt rows for Joe
--- >>> and any comped testers -- otherwise every current user loses the ability
--- >>> to save.
+-- An early draft of the paywall in the database. It was never run. The billing
+-- SQL that replaces it is supabase/try-mode.sql, and supabase/RUN-ORDER.md has
+-- the go-live steps: follow that, not this file.
 --
--- WHY
--- Today the paywall is only a React check (AppShell.jsx, subscription.isActive).
--- A signed-in account without a subscription can still write drawings by
--- calling Supabase directly with its own access token. This file moves the
--- write side of the paywall into row-level security, where it can't be skipped.
+-- Running this draft would have dropped the live owner policies on projects,
+-- sketches and planner_jobs and stopped every account without a subscription
+-- from saving, straight away: it isn't gated by app_flags.enforce_billing, it
+-- knows nothing about Try mode or Stripe test mode, and previews share the
+-- production database.
 --
--- WHAT CHANGES
---   * READ and DELETE stay owner-only, with NO subscription check -- a lapsed
---     customer can still open, export and tidy up their own drawings and jobs.
---   * INSERT and UPDATE additionally require public.has_active_subscription().
---   * planner_settings, company_logos, company_profile and user_settings are
---     deliberately NOT gated, so a lapsed user's onboarding, business details
---     and share-link settings keep working.
---   * The React paywall stays as the UX layer. When a save is refused by these
---     policies the app shows "Your subscription isn't active" (lib/writeErrors.js).
---
--- WHAT COUNTS AS ACTIVE
--- A subscriptions row for the caller with status 'active', 'trialing' or
--- 'past_due', OR a row in public.billing_exempt for the caller.
---
--- past_due is included on purpose, to match the React gate
--- (lib/useSubscription.js): Stripe retries a failed renewal card, and the
--- customer keeps saving during that window rather than being cut off mid-job.
---
--- BEFORE RUNNING -- comp yourself and any testers, e.g.:
---
---   insert into public.billing_exempt (user_id, note)
---   select id, 'Owner' from auth.users where email = 'you@example.com';
---
--- (Step 1 below creates the table, so run step 1 on its own first, insert the
---  exempt rows, check them with the verification query (e), then run the rest.)
+-- So it can't happen by accident: the statement below stops with an error
+-- (the SQL editor runs a paste as one transaction, so nothing is applied),
+-- and the old SQL is kept only inside a comment, as a record.
 -- ============================================================================
+
+do $$
+begin
+  raise exception 'paywall-policies.sql is superseded by supabase/try-mode.sql and must never be run. Nothing was applied. Follow supabase/RUN-ORDER.md.';
+end;
+$$;
+
+/* ---- THE NEVER-RUN DRAFT, kept as a record only ---------------------------
 
 -- ---------------------------------------------------------------------------
 -- 1. billing_exempt: accounts that get full access without a subscription
@@ -216,3 +202,5 @@ select e.user_id, u.email, e.note, e.created_at
 --   3. Signed out, open an existing /planner/view?t=<token> link -> the
 --      shared week still loads.
 -- ----------------------------------------------------------------------------
+
+---- end of the never-run draft ------------------------------------------- */

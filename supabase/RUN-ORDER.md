@@ -203,6 +203,14 @@ and the live Stripe settings, and wait until the deploy is live. Doing it the
 other way round, with the database switch on while the app still shows
 everyone as full, would refuse some saves with no explanation on screen.
 
+Opening the site to the public is a separate switch, and can be done on a
+different day: set `NEXT_PUBLIC_COMING_SOON=false` in Vercel for
+**Production only**, then **redeploy**. `NEXT_PUBLIC_*` values are fixed when
+the app is built, so changing one in Vercel does nothing until the next
+deploy. Leave it unset on Preview so previews stay behind the Coming Soon
+page; `?login` still reaches sign-in there. Unset, or any value other than
+`false`, `0` or `off`, keeps the Coming Soon page up.
+
 **6d. Switch enforcement on.** This block first checks that 6a is done and that
 the three exempt accounts are in place and confirmed:
 
@@ -234,7 +242,7 @@ to stop:
 
 ```sql
 update public.planner_settings
-   set data = data - 'shareToken'
+   set data = data - 'shareToken', updated_at = now()
  where data ? 'shareToken'
    and public.access_level(user_id) in ('try', 'lapsed');
 ```

@@ -166,3 +166,19 @@ was true before fix 6 too. Nothing found logs an email on those paths today,
 so it was left. To fix, make `beforeBreadcrumb` in `lib/sentryScrub.js` also
 replace email-shaped strings with `[email]` (the same regex as `lib/alert.js`),
 for the browser, server and edge alike.
+
+## Sentry build plugin: local builds upload and send usage data
+
+*Deferred 2 Oct 2026 (billing fix 7 review; branch prelaunch).*
+
+A plain local `npm run build` runs the Sentry webpack plugin set up by
+`withSentryConfig` in `next.config.js`. The plugin reads the gitignored
+`.env.sentry-build-plugin` at the repo root, so with a valid token a local
+build uploads source maps and creates a release in `plotwire-uk-ltd`, just as
+a Vercel build does. It also sends the plugin's own usage data to
+`o1.ingest.sentry.io` on every build. Local builds during the billing fixes
+probably did both. That is harmless, because the same code is deployed later,
+but it isn't intended. It was left because the fix changes the production
+build config. To fix: in `withSentryConfig` add `telemetry: false` and
+`sourcemaps: { disable: !process.env.VERCEL }` (or pass `authToken` only when
+`VERCEL` is set), then check that a Vercel build still uploads source maps.

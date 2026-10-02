@@ -512,6 +512,19 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const readOnly = Boolean(access.readOnly);
   const readOnlyRef = useRef(readOnly);
   readOnlyRef.current = readOnly;
+  // Went read-only while this drawing was open (the 7-day past_due grace
+  // ended, or the subscription was cancelled): changes since the last save
+  // can't be saved any more, so leaving asks first (leaveToDashboard).
+  const editableWhileOpen = useRef(!readOnly);
+  const lapsedWhileOpen = useRef(false);
+  useEffect(() => {
+    if (!readOnly) { editableWhileOpen.current = true; lapsedWhileOpen.current = false; }
+    else if (editableWhileOpen.current) lapsedWhileOpen.current = true;
+  }, [readOnly]);
+  // Read-only because a payment is owed, not because the subscription ended.
+  const readOnlyNotice = access.paymentOverdue
+    ? "Your last payment didn’t go through, so this drawing is view-only until it’s paid. You can still download and print it, and its quote."
+    : "Your subscription has ended, so this drawing is view-only. You can still download and print it, and its quote.";
   const [floorPlanOpen, setFloorPlanOpen] = useState(false);
   const [floorPlanArgs, setFloorPlanArgs] = useState(null);
   const [planGone, setPlanGone] = useState(false); // linked sketch was deleted
@@ -1831,9 +1844,14 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   // than silently creating or discarding anything.
   const leaveToDashboard = async () => {
     if (!onHome) return;
-    if (readOnlyRef.current) { onHome(); return; } // lapsed: nothing to save
     const p = projectRef.current;
     const hasWork = countPlaced(p) > 0 || (p?.sheets || []).some(s => s && s.bgImage);
+    if (readOnlyRef.current) { // lapsed: nothing can be saved
+      if (lapsedWhileOpen.current && hasWork &&
+          !confirm("Your account is now view-only, so any changes since your last save can't be saved. Download or print a copy from this screen first if you need them. Leave anyway?")) return;
+      onHome();
+      return;
+    }
     if (hasWork) {
       if (currentProjectIdRef.current) {
         const ok = await saveProject();
@@ -2124,7 +2142,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
           DRAW={DRAW}
           onClose={readOnly ? leaveToDashboard : () => setPrintPreview(false)}
           onPrint={printSheet}
-          notice={readOnly ? "Your subscription has ended, so this drawing is view-only. You can still download and print it, and its quote." : null}
+          notice={readOnly ? readOnlyNotice : null}
           onShowBoq={readOnly ? () => setShowBoq(true) : null}
           closeLabel={readOnly ? "Back to dashboard" : null}
         />

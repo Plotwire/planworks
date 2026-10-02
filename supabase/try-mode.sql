@@ -543,11 +543,12 @@ grant  execute on function public.my_access() to authenticated;
 -- The token lives in planner_settings.data->>'shareToken'. A try or lapsed
 -- account can't create or change it; its other settings still save -- keeping
 -- the token it already has, or removing it.
--- The app saves settings with an upsert (insert ... on conflict do update),
--- and Postgres runs the BEFORE INSERT trigger on the proposed row before it
--- finds the existing one, so an INSERT is compared with the token the account
--- already has, not with nothing; otherwise every settings save of a try or
--- lapsed account that still has a link would be refused.
+-- The app UPDATEs an existing row and INSERTs only an account's first save,
+-- but a direct upsert through the API (insert ... on conflict do update) runs
+-- the BEFORE INSERT trigger on the proposed row before Postgres finds the
+-- existing one. So an INSERT is compared with the token the account already
+-- has, not with nothing; otherwise an upsert that only keeps the link a try
+-- or lapsed account already has would be refused.
 create or replace function public.guard_planner_share_token()
 returns trigger
 language plpgsql security definer set search_path = ''
@@ -583,7 +584,7 @@ create trigger planner_settings_share_guard
 -- revoked -- optional, see supabase/RUN-ORDER.md:
 --
 --   update public.planner_settings
---      set data = data - 'shareToken'
+--      set data = data - 'shareToken', updated_at = now()
 --    where data ? 'shareToken'
 --      and public.access_level(user_id) in ('try', 'lapsed');
 
