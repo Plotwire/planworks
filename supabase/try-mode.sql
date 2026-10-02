@@ -4,6 +4,12 @@
 -- >>> NOT YET APPLIED. <<<  Replaces supabase/paywall-policies.sql, which was
 -- never run (do not run that file).
 --
+-- RUN ORDER: supabase/billing-hardening.sql FIRST (it adds the
+-- subscriptions.payment_failed_at and .livemode columns the access rule
+-- reads), THEN this file. Run out of order, this file stops at its first
+-- statement with "Run supabase/billing-hardening.sql first" and changes
+-- nothing. Safe to re-run.
+--
 -- SAFE TO INSTALL BEFORE LAUNCH: everything below is dormant until the
 -- enforce_billing switch (section 0) is set to true. While it is false, every
 -- signed-in account can save exactly as today -- previews and production share
@@ -12,15 +18,33 @@
 --   update public.app_flags set value = true, updated_at = now()
 --    where key = 'enforce_billing';
 --
--- ACCESS LEVELS (public.access_level)
---   full   : billing_exempt, or a subscription that is active, trialing or
---            past_due. Coupon (promotion code) subscribers are 'active' in
+-- ACCESS LEVELS (public.access_level, section 2) -- the ONE access rule. The
+-- app shows the level my_access() returns; lib/access.js is a documented copy
+-- of this rule (kept identical) for the browser.
+--   full   : billing_exempt; or a subscription that is active or trialing; or
+--            past_due for at most past_due_grace_days() = 7 days after the
+--            failed payment (subscriptions.payment_failed_at, taken from
+--            Stripe's failed invoice by the webhook). A past_due row without
+--            payment_failed_at (written before billing-hardening.sql) counts
+--            from the start of the unpaid month: current_period_end minus one
+--            month. Coupon (promotion code) subscribers are 'active' in
 --            Stripe, so they are full too.
---   lapsed : has had a real subscription that is no longer live (canceled,
---            unpaid, paused, ...). Can read and delete; cannot save.
+--   lapsed : has had a real subscription that isn't full -- canceled, unpaid,
+--            paused, past_due beyond the 7 days, ... Can read and delete;
+--            cannot save.
 --   try    : has never paid -- no subscriptions row, or only an abandoned /
 --            failed first checkout (incomplete, incomplete_expired). Can save,
 --            but all their drawings together may hold at most 25 symbols.
+--   The 7 days are measured when the question is asked (now()), so nothing
+--   has to run for the grace to end.
+--
+-- WHICH SUBSCRIPTION ROW COUNTS: only a LIVE-mode Stripe subscription
+-- (subscriptions.livemode = true). Previews and production share this
+-- database, and the Stripe TEST-mode preview writes test subscriptions for
+-- real accounts, so a test card must never unlock anything. The one
+-- exception is billing_test_accounts (section 1b): accounts set up to test
+-- billing on that preview, whose test-mode rows count too. A row that doesn't
+-- count is ignored, so the account is Try (as if it had never subscribed).
 --
 -- WHAT IS ENFORCED (only while enforce_billing = true)
 --   * projects / sketches / planner_jobs: insert + update need full or try.
@@ -44,10 +68,26 @@
 -- The React app mirrors all of this for the user experience; these rules are
 -- what stop anyone skipping the app and calling Supabase directly.
 --
--- ORDER: run the whole file (the switch starts OFF), add the billing_exempt
--- rows (section 1), check with the verification queries, test, and only then
+-- ORDER: run supabase/billing-hardening.sql, then the whole of this file (the
+-- switch starts OFF), add the billing_exempt rows (section 1) and, for
+-- testing on the Stripe test-mode preview, the billing_test_accounts rows
+-- (section 1b), check with the verification queries, test, and only then
 -- flip the switch.
 -- ============================================================================
+
+-- ---------------------------------------------------------------------------
+-- Before anything else: billing-hardening.sql must have been run (RUN ORDER).
+-- ---------------------------------------------------------------------------
+do $$
+begin
+  if (select count(*) from pg_catalog.pg_attribute a
+       where a.attrelid = to_regclass('public.subscriptions')
+         and a.attname in ('payment_failed_at', 'livemode')
+         and a.attnum > 0 and not a.attisdropped) < 2 then
+    raise exception 'Run supabase/billing-hardening.sql first: public.subscriptions has no payment_failed_at / livemode column yet. Nothing in try-mode.sql was applied.';
+  end if;
+end;
+$$;
 
 -- ---------------------------------------------------------------------------
 -- 0. The enforcement switch
@@ -96,11 +136,95 @@ alter table public.billing_exempt enable row level security;
 --   on conflict (user_id) do nothing;
 
 -- ---------------------------------------------------------------------------
--- 2. Access level
+-- 1b. billing_test_accounts: accounts whose TEST-mode subscriptions count
 -- ---------------------------------------------------------------------------
+-- For testing billing on the Stripe test-mode preview (stripe-plotwire-test)
+-- with Stripe's test cards. A test-mode subscription gives access ONLY to the
+-- accounts listed here -- and, the database being shared, it does so in
+-- production too, so list only accounts made for testing, never a customer's.
+-- RLS on, NO policies, no grants for the API roles: only the dashboard /
+-- service role can add or remove rows.
+create table if not exists public.billing_test_accounts (
+  user_id    uuid primary key references auth.users (id) on delete cascade,
+  note       text,
+  created_at timestamptz not null default now()
+);
+alter table public.billing_test_accounts enable row level security;
+revoke all on table public.billing_test_accounts from anon, authenticated;
+grant select, insert, update, delete on table public.billing_test_accounts to service_role;
+
+-- Add a test account once it has signed up:
+--
+--   insert into public.billing_test_accounts (user_id, note)
+--   select id, 'Preview billing test' from auth.users where email = '<test account email>'
+--   on conflict (user_id) do nothing;
+--
+-- When testing is over:   delete from public.billing_test_accounts;
+
+-- ---------------------------------------------------------------------------
+-- 2. Access level -- the ONE rule (lib/access.js is an exact copy)
+-- ---------------------------------------------------------------------------
+-- The past_due grace: how many days after the failed payment a past_due
+-- subscription keeps full access. Must match PAST_DUE_GRACE_DAYS in
+-- lib/access.js.
+create or replace function public.past_due_grace_days()
+returns integer language sql immutable as $$ select 7 $$;
+
+-- When a past_due subscription's grace ends: payment_failed_at + 7 days.
+-- A row written before payment_failed_at existed counts from the start of the
+-- unpaid month instead, current_period_end minus one month (one monthly
+-- plan): at a renewal Stripe moves the period on BEFORE it charges, so on a
+-- past_due row current_period_end is the END of the month that wasn't paid.
+-- Null when the status isn't past_due, or when neither date is known (which
+-- makes the row lapsed, not full). The month is a UTC calendar month (pinned
+-- below, whatever the session's time zone); lib/access.js does the same.
+create or replace function public.past_due_grace_until(
+  status text, payment_failed_at timestamptz, current_period_end timestamptz)
+returns timestamptz
+language sql stable set search_path = '' set timezone = 'UTC'
+as $$
+  select case when status = 'past_due' then
+    coalesce(payment_failed_at, current_period_end - interval '1 month')
+      + make_interval(days => public.past_due_grace_days())
+  end;
+$$;
+
+-- The level ONE subscriptions row gives at the moment as_of. No table reads.
+-- lib/access.js subscriptionLevel() is the same rule.
+create or replace function public.subscription_access_level(
+  status text, payment_failed_at timestamptz, current_period_end timestamptz, as_of timestamptz)
+returns text
+language sql stable set search_path = ''
+as $$
+  select case
+    when status is null or status in ('incomplete', 'incomplete_expired') then 'try'
+    when status in ('active', 'trialing') then 'full'
+    when status = 'past_due'
+     and as_of <= public.past_due_grace_until(status, payment_failed_at, current_period_end) then 'full'
+    else 'lapsed'
+  end;
+$$;
+
+-- The account's subscriptions rows that count (WHICH SUBSCRIPTION ROW COUNTS,
+-- at the top): live-mode rows, plus test-mode ones for billing_test_accounts.
+-- Internal, like access_level().
+create or replace function public.counted_subscriptions(uid uuid)
+returns setof public.subscriptions
+language sql stable security definer set search_path = ''
+as $$
+  select s.*
+    from public.subscriptions s
+   where s.user_id = uid
+     and (s.livemode is true
+          or exists (select 1 from public.billing_test_accounts t where t.user_id = uid));
+$$;
+revoke execute on function public.counted_subscriptions(uuid) from public, anon, authenticated;
+
 -- Internal: takes any user id, so it is NOT callable by clients (it would tell
 -- anyone whether another account pays). Policies and triggers reach it through
 -- the SECURITY DEFINER wrappers below; the app uses my_access() (section 6).
+-- One row per account (subscriptions.user_id is unique); were there ever more,
+-- the best level wins.
 create or replace function public.access_level(uid uuid)
 returns text
 language sql stable security definer set search_path = ''
@@ -108,11 +232,13 @@ as $$
   select case
     when uid is null then 'try'
     when exists (select 1 from public.billing_exempt e where e.user_id = uid) then 'full'
-    when exists (select 1 from public.subscriptions s
-                  where s.user_id = uid and s.status in ('active', 'trialing', 'past_due')) then 'full'
-    when exists (select 1 from public.subscriptions s
-                  where s.user_id = uid and s.status not in ('incomplete', 'incomplete_expired')) then 'lapsed'
-    else 'try'
+    else coalesce((
+      select case when bool_or(x.level = 'full') then 'full'
+                  when bool_or(x.level = 'lapsed') then 'lapsed' end
+        from (select public.subscription_access_level(
+                       s.status, s.payment_failed_at, s.current_period_end, now()) as level
+                from public.counted_subscriptions(uid) s) x
+    ), 'try')
   end;
 $$;
 revoke execute on function public.access_level(uuid) from public, anon, authenticated;
@@ -244,19 +370,48 @@ create policy "planner jobs delete own" on public.planner_jobs for delete to aut
   using (auth.uid() = user_id);
 
 -- ---------------------------------------------------------------------------
--- 6. my_access(): what the app asks on sign-in
+-- 6. my_access(): what the app asks on sign-in (and on every refresh)
 -- ---------------------------------------------------------------------------
+-- The app SHOWS the level this returns (lib/useSubscription.js); it doesn't
+-- work its own out. Only ever about the signed-in account (auth.uid()).
+--   level        'full' | 'try' | 'lapsed' (access_level, section 2)
+--   exempt       billing_exempt
+--   test_account billing_test_accounts (its test-mode subscriptions count)
+--   row_counts   the account has a subscriptions row and it counts (a row
+--                that doesn't count is one the app should ignore)
+--   status       that row's Stripe status, else null
+--   grace_until  past_due only: when full access ends (past_due_grace_until),
+--                so the app can say so and look again then
+--   grace_days   past_due_grace_days()
+--   enforced     the enforce_billing switch
+--   symbols_used / symbol_limit   the Try total, as the database counts it
 create or replace function public.my_access()
 returns json
 language sql stable security definer set search_path = ''
 as $$
+  with me as (
+    select auth.uid() as uid
+  ),
+  counted as (
+    select s.status, s.payment_failed_at, s.current_period_end
+      from me, public.counted_subscriptions(me.uid) s
+     order by s.updated_at desc nulls last
+     limit 1
+  )
   select json_build_object(
-    'level',        public.access_level(auth.uid()),
-    'exempt',       exists (select 1 from public.billing_exempt e where e.user_id = auth.uid()),
+    'level',        public.access_level(me.uid),
+    'exempt',       exists (select 1 from public.billing_exempt e where e.user_id = me.uid),
+    'test_account', exists (select 1 from public.billing_test_accounts t where t.user_id = me.uid),
+    'row_counts',   exists (select 1 from counted),
+    'status',       (select c.status from counted c),
+    'grace_until',  (select public.past_due_grace_until(c.status, c.payment_failed_at, c.current_period_end)
+                       from counted c),
+    'grace_days',   public.past_due_grace_days(),
     'enforced',     public.billing_enforced(),
-    'symbols_used', (select coalesce(sum(p.symbol_count), 0) from public.projects p where p.user_id = auth.uid()),
+    'symbols_used', (select coalesce(sum(p.symbol_count), 0) from public.projects p where p.user_id = me.uid),
     'symbol_limit', public.try_symbol_limit()
-  );
+  )
+  from me;
 $$;
 revoke execute on function public.my_access() from public, anon;
 grant  execute on function public.my_access() to authenticated;
@@ -324,6 +479,16 @@ select e.user_id, u.email, e.note, e.created_at
   from public.billing_exempt e join auth.users u on u.id = e.user_id
  order by e.created_at;
 
+-- (f) Every subscriptions row: does it count, and the level the account gets.
+--     Before launch expect livemode false/null on every row (test rows), and
+--     level 'try' for them unless the account is a test account.
+select u.email, s.status, s.livemode, s.payment_failed_at,
+       public.past_due_grace_until(s.status, s.payment_failed_at, s.current_period_end) as grace_until,
+       exists (select 1 from public.billing_test_accounts t where t.user_id = s.user_id) as test_account,
+       public.access_level(s.user_id) as level
+  from public.subscriptions s join auth.users u on u.id = s.user_id
+ order by u.email;
+
 -- ----------------------------------------------------------------------------
 -- TEST (switch ON, on a test account in try mode):
 --   1. Save drawings totalling 25 symbols: works. A save that makes it 26:
@@ -332,4 +497,14 @@ select e.user_id, u.email, e.note, e.created_at
 --   3. A canceled subscription account: opens drawings, cannot save.
 --   4. Try account: creating a planner share link fails; a full account's
 --      existing /planner/view?t=<token> link still loads signed out.
+--   5. past_due: full for 7 days after payment_failed_at, then lapsed. A
+--      Stripe test clock moves only Stripe's time, not the database's, so to
+--      see day 8 back-date the failure on a test account's past_due row:
+--        update public.subscriptions set payment_failed_at = now() - interval '8 days'
+--         where user_id = (select id from auth.users where email = '<test account email>');
+--      and check straight away: the account is lapsed (my_access().level).
+--      The next webhook event for that subscription may set the date back
+--      from Stripe's invoice.
+--   6. A test-card subscription on an account NOT in billing_test_accounts:
+--      level 'try' (the test row is ignored).
 -- ----------------------------------------------------------------------------

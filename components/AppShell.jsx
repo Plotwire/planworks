@@ -17,6 +17,7 @@ import { useCheckoutReturn } from "@/lib/useCheckoutReturn";
 import { PAYMENT_PENDING_MESSAGE } from "@/lib/checkoutReturn";
 import { ConfirmingPayment, PaymentNote } from "@/components/PaymentStatus";
 import { TRY_SYMBOL_LIMIT } from "@/lib/pricing";
+import { isPaymentOverdue } from "@/lib/access";
 import { openBillingPortal, syncSubscriptionFromStripe } from "@/lib/billingClient";
 import { LEGAL_LINKS } from "@/lib/legal";
 import TermsGate from "@/components/TermsGate";
@@ -30,6 +31,41 @@ function Splash({ label = "Loading Plotwire…" }) {
   return (
     <div className="w-full h-screen flex items-center justify-center bg-[#F4F6F9] dark:bg-[#0B1117]">
       <div className="text-[10px] tracking-[0.3em] text-slate-400 uppercase">{label}</div>
+    </div>
+  );
+}
+
+const ACTION_BTN = "bg-[var(--action)] hover:bg-[var(--action-hover)] text-[color:var(--action-ink)]";
+
+// Billing is on and the account's access level couldn't be checked yet (the
+// database didn't answer). In place of the app, never Try: showing a paying or
+// exempt account the Try limits because of a network blip would be wrong. It
+// keeps retrying by itself (lib/useSubscription.js); "Try again" checks now.
+function AccessCheckFailed({ onRetry, onSignOut }) {
+  const [busy, setBusy] = useState(false);
+  const retry = async () => {
+    setBusy(true);
+    try { await onRetry?.(); } finally { setBusy(false); }
+  };
+  return (
+    <div className="w-full min-h-screen flex items-center justify-center px-4 text-white"
+      style={{ background: "linear-gradient(150deg,#1A2530 0%,#233241 55%,#2C4150 100%)" }}>
+      <main role="alert" className="max-w-[420px] w-full text-center">
+        <h1 className="text-[22px] leading-tight font-semibold tracking-[-0.01em]">We couldn&rsquo;t check your subscription</h1>
+        <p className="mt-3 text-[14px] leading-relaxed text-[#aab8c6]">
+          Check your connection. We&rsquo;ll keep trying, or you can try again now. Your drawings are safe.
+        </p>
+        <div className="mt-6 flex flex-wrap justify-center gap-2">
+          <button type="button" onClick={retry} disabled={busy}
+            className={`h-11 px-5 rounded-[11px] text-[14px] font-semibold transition-colors disabled:opacity-60 ${ACTION_BTN}`}>
+            {busy ? "Checking…" : "Try again"}
+          </button>
+          <button type="button" onClick={onSignOut}
+            className={`h-11 px-5 rounded-[11px] text-[14px] font-semibold transition-colors ${ACTION_BTN}`}>
+            Sign out
+          </button>
+        </div>
+      </main>
     </div>
   );
 }
@@ -355,11 +391,17 @@ function AppGates({ children }) {
 
   // Then billing, only when it's switched on. Every signed-in account gets into
   // the app: "full" as normal, "try" with the symbol cap, watermark and locked
-  // exports, "lapsed" read-only (lib/access.js). With billing off, everyone is
-  // full, exactly as before.
+  // exports, "lapsed" read-only. The level is the one the database decides and
+  // enforces (my_access(), lib/useSubscription.js; the rule is written out in
+  // lib/access.js). With billing off, everyone is full, exactly as before.
   const level = BILLING_ENABLED ? subscription.level : "full";
   if (BILLING_ENABLED) {
-    if (subscription.loading) return <Splash />;
+    // Not known yet: the splash, retrying -- never Try because a check failed.
+    if (subscription.loading) {
+      return subscription.failed
+        ? <AccessCheckFailed onRetry={subscription.refresh} onSignOut={signOut} />
+        : <Splash />;
+    }
     // Just back from Stripe and not unlocked yet. In place of the app: this
     // only follows a fresh page load (the return from Stripe), so there is no
     // open drawing to lose.
@@ -370,6 +412,10 @@ function AppGates({ children }) {
   // Still waiting on Stripe after the confirming screen: say so instead of
   // pitching Try or "your subscription has ended" as if they hadn't paid.
   const paymentPending = BILLING_ENABLED && checkoutReturn.pending && level !== "full";
+  // Lapsed because a payment is owed (past_due beyond the grace, or unpaid),
+  // not because the subscription ended: told to pay in Billing, not to
+  // re-subscribe (lib/access.js isPaymentOverdue).
+  const paymentOverdue = BILLING_ENABLED && isPaymentOverdue(level, subscription.status);
   // Drawn OVER the app, not instead of it: swapping the app out would unmount
   // an open drawing and lose unsaved work.
   const subscribeScreen = BILLING_ENABLED && showSubscribe && level !== "full" ? (
@@ -379,6 +425,7 @@ function AppGates({ children }) {
       onManageBilling={manageBilling}
       onBack={() => setShowSubscribe(false)}
       hasLapsed={level === "lapsed"}
+      paymentOverdue={paymentOverdue}
       notice={billingNotice || (paymentPending ? PAYMENT_PENDING_MESSAGE : "")}
     />
   ) : null;
@@ -417,6 +464,8 @@ function AppGates({ children }) {
         level,
         isTry: level === "try",
         readOnly: level === "lapsed",
+        // readOnly because a payment is owed, not because it ended.
+        paymentOverdue,
         symbolLimit: TRY_SYMBOL_LIMIT,
         openSubscribe,
         // Back from Stripe, payment not confirmed yet (see paymentPending).

@@ -4,11 +4,15 @@
 -- >>> NOT YET APPLIED. <<<  RUN ONCE in the Supabase SQL editor BEFORE the
 -- webhook code that uses it is deployed anywhere (previews and production
 -- share this database). Safe to re-run: every statement is idempotent.
+-- RUN ORDER: this file BEFORE supabase/try-mode.sql, whose access rule
+-- (public.access_level) reads the two columns added in section 2.
 --
--- Until it is applied the webhook still works, with less protection: it
--- processes events without the duplicate check (a repeat still writes nothing,
--- because the row already matches Stripe) and saves rows without the two new
--- columns. It logs an error each time, so apply it first.
+-- Until it is applied the webhook processes events without the duplicate
+-- check (a repeat still writes nothing, because the row already matches
+-- Stripe), but it can't save a subscription: subscriptions.livemode decides
+-- whether a row gives access (try-mode.sql), so a write without it fails, the
+-- webhook answers 500 and Stripe retries until this file is applied. Apply it
+-- first.
 --
 -- 1. public.stripe_events: one row per Stripe webhook event id
 --    (app/api/billing/webhook/route.js, lib/billing.js beginStripeEvent /
