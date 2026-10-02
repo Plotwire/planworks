@@ -19,6 +19,7 @@
 --   plan text, price_id text, current_period_end timestamptz,
 --   cancel_at_period_end boolean, trial_end timestamptz, updated_at timestamptz,
 --   cancel_at timestamptz (added by subscriptions-cancel-at.sql)
+--   payment_failed_at timestamptz, livemode boolean (added by billing-hardening.sql)
 -- ============================================================================
 
 alter table public.subscriptions enable row level security;

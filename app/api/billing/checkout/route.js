@@ -2,6 +2,7 @@
 import { getStripe } from "@/lib/stripe";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { bearer, userFromToken, STRIPE_PRICE, returnOrigin, LIVE_STATUSES, isMissingCustomer } from "@/lib/billing";
+import { rowMatchesKeyMode, stripeKeyMode } from "@/lib/stripeWebhook";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,13 +18,18 @@ export async function POST(req) {
     const admin = getSupabaseAdmin();
     const stripe = getStripe();
 
+    // "*" so the read still works before billing-hardening.sql adds livemode.
     const { data: existing, error: readError } = await admin
       .from("subscriptions")
-      .select("stripe_customer_id, status")
+      .select("*")
       .eq("user_id", user.id)
       .limit(1);
     if (readError) throw readError;
-    const current = existing?.[0] || null;
+    // Previews and production share one database: a row from the other Stripe
+    // mode (e.g. a preview's test subscription seen by the live site) is
+    // treated as no subscription, and its customer id isn't reused.
+    const row = existing?.[0] || null;
+    const current = rowMatchesKeyMode(row, stripeKeyMode(process.env.STRIPE_SECRET_KEY)) ? row : null;
 
     // Never start a second subscription for someone who already has a live one.
     if (current && LIVE_STATUSES.has(current.status)) {
@@ -39,7 +45,11 @@ export async function POST(req) {
 
     const params = {
       mode: "subscription",
+      // The account id, three ways: the webhook maps a completed checkout back
+      // to the account from client_reference_id (or the session metadata), and
+      // every later subscription event from the subscription metadata.
       client_reference_id: user.id,
+      metadata: { user_id: user.id },
       line_items: [{ price, quantity: 1 }],
       allow_promotion_codes: true,
       // No trial: the first month is charged at checkout. People try Plotwire
