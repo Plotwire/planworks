@@ -1453,6 +1453,9 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   // ---------- Keyboard ----------
   useEffect(() => {
     const onKey = (e) => {
+      // The floor-plan sketch open over the editor owns the keyboard: no
+      // editor shortcut (Delete, R, W, Ctrl+Z...) may act on the hidden sheet.
+      if (floorPlanOpen) return;
       const isInput = e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.isContentEditable;
       if (e.code === "Space" && !isInput) {
         e.preventDefault();
