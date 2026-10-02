@@ -7,9 +7,9 @@
 -- as checked in the pre-launch security audit on 24 Sep 2026. It exists so the
 -- repo matches the database; it is not a migration.
 --
--- Once supabase/paywall-policies.sql is run (at Stripe go-live), the insert
--- and update policies below are replaced by versions that also require an
--- active subscription. Update this file when that happens.
+-- These owner policies stay exactly as they are when billing is enforced:
+-- supabase/try-mode.sql adds RESTRICTIVE insert and update policies on top
+-- (saving needs full or try access). Never run supabase/paywall-policies.sql.
 --
 -- Columns, as the app uses them (lib/cad/sketchStore.js):
 --   id uuid, user_id uuid, name text, data jsonb, updated_at timestamptz

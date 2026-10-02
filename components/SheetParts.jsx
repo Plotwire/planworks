@@ -2555,7 +2555,9 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
 
         {readOnly && (
           <div className="px-6 py-2 bg-amber-50 border-b border-amber-200 text-[11.5px] text-amber-900 shrink-0">
-            Your subscription has ended, so this quote is view-only. You can still download the materials list and client quote.
+            {access.paymentOverdue
+              ? "Your last payment didn’t go through, so this quote is view-only until it’s paid. You can still download the materials list and client quote."
+              : "Your subscription has ended, so this quote is view-only. You can still download the materials list and client quote."}
           </div>
         )}
 

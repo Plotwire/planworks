@@ -98,6 +98,15 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
   const isTry = Boolean(access.isTry);
   const readOnly = Boolean(access.readOnly);
   const symbolLimit = access.symbolLimit || 0;
+  // Back from Stripe, payment not confirmed yet: AppShell shows a "still
+  // confirming" note, so don't also pitch Try or "your subscription has ended".
+  const paymentPending = Boolean(access.paymentPending);
+  // Read-only because a payment is owed (past_due beyond the grace, or
+  // unpaid), not because the subscription ended: pay in Billing, not
+  // re-subscribe. The header's Billing button is the way there when shown.
+  const paymentOverdue = readOnly && Boolean(access.paymentOverdue);
+  const billingButtonShown = Boolean(manageBilling && subscription?.sub);
+  const payInvoice = manageBilling || access.openSubscribe;
   // Lapsed accounts can't start new work; the start buttons open Subscribe.
   const startNew = (fn) => (...args) => (readOnly ? access.openSubscribe?.() : fn?.(...args));
   onNewProject = startNew(onNewProject);
@@ -252,8 +261,10 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
               {isTry && cards !== null && (
                 <TryPill used={symbolsUsed} limit={symbolLimit} onSubscribe={access.openSubscribe} />
               )}
-              {readOnly && (
-                <button className="billing-btn" onClick={access.openSubscribe}>Re-subscribe</button>
+              {readOnly && !(paymentOverdue && billingButtonShown) && (
+                <button className="billing-btn" onClick={paymentOverdue ? payInvoice : access.openSubscribe}>
+                  {paymentOverdue ? "Open billing" : "Re-subscribe"}
+                </button>
               )}
               {subscription?.cancelAtPeriodEnd && subscription?.cancelAt && (
                 <span className="cancel-chip" title="Your subscription is set to cancel. Undo it in Billing.">
@@ -273,7 +284,16 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
           </header>
 
           <div className="scroll">
-            {readOnly && (
+            {readOnly && !paymentPending && paymentOverdue && (
+              <div className="access-banner is-lapsed" role="status">
+                <div>
+                  <strong>Your last payment didn&rsquo;t go through.</strong>
+                  <span> Your drawings are view-only until it&rsquo;s paid. You can still open, print and download them. Pay the invoice or update your card in Billing to carry on.</span>
+                </div>
+                <button className="mg-primary" onClick={payInvoice}>Open billing</button>
+              </div>
+            )}
+            {readOnly && !paymentPending && !paymentOverdue && (
               <div className="access-banner is-lapsed" role="status">
                 <div>
                   <strong>Your subscription has ended.</strong>
@@ -282,7 +302,20 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
                 <button className="mg-primary" onClick={access.openSubscribe}>Re-subscribe</button>
               </div>
             )}
-            {isTry && (
+            {/* A renewal failed and Stripe is retrying: full access lasts
+                PAST_DUE_GRACE_DAYS from the failure (lib/access.js), then the
+                account is read-only until it's paid. Say so, with the date. */}
+            {subscription?.status === "past_due" && access.level === "full" && !subscription?.exempt &&
+              subscription?.graceUntil && subscription.graceUntil > Date.now() && (
+              <div className="access-banner is-lapsed" role="status">
+                <div>
+                  <strong>Your last payment didn&rsquo;t go through.</strong>
+                  <span> Stripe will try your card again. Pay the invoice or update your card in Billing by {new Date(subscription.graceUntil).toLocaleDateString("en-GB", { day: "numeric", month: "short" })} to keep editing. After that your drawings are view-only until it&rsquo;s paid.</span>
+                </div>
+                {manageBilling && <button className="mg-primary" onClick={manageBilling}>Open billing</button>}
+              </div>
+            )}
+            {isTry && !paymentPending && (
               <div className="access-banner" role="status">
                 <div>
                   <strong>You&rsquo;re trying Plotwire.</strong>

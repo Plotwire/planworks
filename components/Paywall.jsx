@@ -12,16 +12,41 @@ const FEATURES = [
   "All your jobs in one place",
 ];
 
+// What to say when the server sends them to their billing page instead of a
+// second checkout. A subscription whose payment failed (past_due, unpaid) is
+// the usual reason a lapsed account ends up here: the billing page is where
+// that invoice is paid or the card changed.
+export function portalHandOffNote(status) {
+  if (status === "past_due" || status === "unpaid") {
+    return "Your last payment didn’t go through, so we’re opening your billing page, where you can pay it or update your card. You won’t be charged twice.";
+  }
+  return "You already have a Plotwire subscription, so we’re opening your billing page instead. You won’t be charged twice.";
+}
+
 // The Subscribe screen. Opened from Subscribe buttons inside the app (onBack
 // returns there); Try mode means nobody has to see it before using Plotwire.
-export default function Paywall({ user, onSignOut, onManageBilling, onBack, hasLapsed = false, notice = "" }) {
+// paymentOverdue: lapsed because a payment is owed (past_due beyond the grace,
+// or unpaid), not because the subscription ended. The subscription is still
+// running, so the way back is paying that invoice in Billing (Terms 4.6), not
+// a new subscription: the main button opens Billing.
+export default function Paywall({ user, onSignOut, onManageBilling, onBack, hasLapsed = false, paymentOverdue = false, notice = "" }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Set when the server sends an existing subscriber to their billing page
+  // instead of a second checkout (app/api/billing/checkout/route.js).
+  const [portalNote, setPortalNote] = useState("");
+
+  const payInBilling = async () => {
+    setError(""); setPortalNote(""); setBusy(true);
+    try { await onManageBilling(); } finally { setBusy(false); } // redirects away on success
+  };
+  const overdue = paymentOverdue && Boolean(onManageBilling);
 
   const choose = async () => {
-    setError(""); setBusy(true);
+    setError(""); setPortalNote(""); setBusy(true);
     try {
-      await startCheckout(); // redirects away on success
+      const r = await startCheckout(); // redirects away on success
+      if (r?.portal) setPortalNote(portalHandOffNote(r.status));
     } catch (e) {
       setBusy(false);
       setError(e?.message || "Couldn't start checkout. Try again in a moment.");
@@ -51,17 +76,19 @@ export default function Paywall({ user, onSignOut, onManageBilling, onBack, hasL
 
       <main className="pay-main">
         <div className="pay-intro">
-          <div className="eyebrow">{hasLapsed ? "Welcome back" : "Keep going"}</div>
-          <h1>{hasLapsed ? "Pick up where you left off" : "Subscribe to Plotwire"}</h1>
+          <div className="eyebrow">{overdue ? "Payment overdue" : hasLapsed ? "Welcome back" : "Keep going"}</div>
+          <h1>{overdue ? "Pay your invoice to carry on" : hasLapsed ? "Pick up where you left off" : "Subscribe to Plotwire"}</h1>
           <p className="lede">
-            {hasLapsed
+            {overdue
+              ? "Your last payment didn’t go through, so your drawings are view-only until it’s paid. Pay the invoice or update your card in Billing. You won’t be charged twice, and your drawings are all safe."
+              : hasLapsed
               ? "Your subscription has ended. Re-subscribe to edit and add to your drawings again — they're all safe."
               : `£${PRICE_GBP_MONTHLY} a month, charged today. No symbol limit, no watermark, and everything you've drawn so far is kept.`}
           </p>
         </div>
 
-        {(notice || error) && (
-          <div className={`pay-banner ${error ? "is-error" : ""}`}>{error || notice}</div>
+        {(notice || error || portalNote) && (
+          <div className={`pay-banner ${error ? "is-error" : ""}`} role="status">{error || portalNote || notice}</div>
         )}
 
         <div className="card">
@@ -69,7 +96,8 @@ export default function Paywall({ user, onSignOut, onManageBilling, onBack, hasL
           <div className="card-price">
             <span className="amt">£{PRICE_GBP_MONTHLY}</span><span className="per">/month</span>
           </div>
-          <p className="card-blurb">One simple plan. Unlimited users on your account.</p>
+          {/* Terms 3.3: a subscription is for one named user. */}
+          <p className="card-blurb">One simple plan. One user per subscription.</p>
           <ul className="feat">
             {FEATURES.map((f) => (
               <li key={f}>
@@ -78,8 +106,10 @@ export default function Paywall({ user, onSignOut, onManageBilling, onBack, hasL
               </li>
             ))}
           </ul>
-          <button type="button" className="pick primary" onClick={choose} disabled={busy}>
-            {busy ? "Redirecting…" : (hasLapsed ? "Re-subscribe" : "Subscribe")}
+          <button type="button" className="pick primary" onClick={overdue ? payInBilling : choose} disabled={busy}>
+            {overdue
+              ? (busy ? "Opening billing…" : "Open billing")
+              : busy ? (portalNote ? "Opening billing…" : "Redirecting…") : (hasLapsed ? "Re-subscribe" : "Subscribe")}
           </button>
           <div className="reassure">
             <span>Billed monthly</span><i /><span>Cancel anytime</span>
@@ -88,7 +118,7 @@ export default function Paywall({ user, onSignOut, onManageBilling, onBack, hasL
 
         <div className="secure">Secure checkout by Stripe</div>
 
-        {hasLapsed && onManageBilling && (
+        {hasLapsed && !overdue && onManageBilling && (
           <button type="button" className="manage-link" onClick={onManageBilling}>
             Manage existing billing
           </button>

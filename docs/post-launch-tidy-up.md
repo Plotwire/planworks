@@ -114,3 +114,126 @@ show a big plan's A3 drawing-area outline), it is further off at the far end.
 
 Proposed: size the bar and its label from `view.s` (1, 2 or 5 x 10^n m to
 about 60-120 px).
+
+## Lapsed accounts: read-only UI in the Work Planner and the floor-plan sketch
+
+*Deferred 2 Oct 2026 (billing fix 3, access rules; branch prelaunch).*
+
+A lapsed account (subscription ended, or a payment overdue past the 7-day
+grace) is read-only. The drawing editor and the quote show this, but
+`components/WorkPlanner.jsx` and `components/cad/CadSketch.jsx` still look
+editable: a save there fails because the database refuses it once
+`app_flags.enforce_billing` is on (`supabase/try-mode.sql`
+`can_save_work()`). WorkPlanner's existing `readOnly` flag is the
+contractor share-view layout (it hides the Dashboard button) and its comments
+deliberately allow lapsed users the image export, so it can't simply be
+reused. Proposed: a lapsed banner in both, with editing switched off and
+exports kept.
+
+## Billing: only the Plotwire price should unlock
+
+*Deferred 2 Oct 2026 (billing fixes 1 and 3; branch prelaunch).*
+
+Any running subscription on the Stripe account counts, whatever its price
+(`lib/billing.js` `planForPrice` only names the plan). That is fine while the
+Stripe account sells nothing but Plotwire and the customer portal doesn't
+allow plan switching. If another product or price is ever added, check
+`price_id` against `STRIPE_PRICE` in the access rule (`supabase/try-mode.sql`
+and its copy in `lib/access.js`). Until then the daily reconciliation report
+(`lib/reconcile.js`) lists every running subscription for another price, or
+with a quantity other than 1, under "Setup and data checks".
+
+## Planner share links keep working after the owner lapses
+
+*Deferred 2 Oct 2026 (billing fix 4, database enforcement; branch prelaunch).*
+
+Once billing is enforced, a Try or lapsed account can't create or change a
+planner share link (`supabase/try-mode.sql`, `guard_planner_share_token`). A
+link that already exists keeps serving, though, because `planner_shared()`
+checks only the token. That covers links made before launch and links made
+while subscribed by someone whose subscription later ended. The go-live run
+order (`supabase/RUN-ORDER.md` step 6e) revokes the existing ones once, but a
+customer who lapses after launch keeps a working link. `planner_shared()`'s
+body isn't recorded in the repo, so it was left untouched. To fix: record its
+current body in `supabase/`, then make it return nothing when
+`public.billing_enforced_for(owner)` is true and `public.access_level(owner)`
+isn't `full`. Keep it SECURITY DEFINER with an empty search_path, and never
+add "force row level security" to the planner tables.
+
+## Reconciliation: card disputes aren't checked
+
+*Deferred 2 Oct 2026 (billing fix 5, reconciliation; branch prelaunch).*
+
+The daily reconciliation (`lib/reconcile.js`, `GET /api/admin/reconcile`)
+flags a running subscription whose latest invoice was fully refunded, but not
+one whose payment is being disputed (a chargeback): Stripe keeps the
+subscription active, so the account stays full while the money is clawed
+back. The webhook doesn't handle `charge.dispute.created` either. Until then,
+treat a dispute email from Stripe like a refund: cancel the subscription in
+the Dashboard. To add it: list `stripe.disputes` created in the last 35 days,
+map each disputed charge's payment intent to its invoice (the same
+`invoicePayments.list({ payment: { type: "payment_intent", ... } })` lookup
+the refund check uses), and report it in the "Refunded but still running"
+section.
+
+## Sentry: the environment says "production" on previews
+
+*Deferred 2 Oct 2026 (billing fix 6, Sentry alerts; branch prelaunch).*
+
+`sentry.server.config.ts` and `instrumentation-client.ts` set
+`environment: process.env.NODE_ENV`, and Vercel builds previews with
+NODE_ENV=production, so preview events are filed under "production" (the edge
+config sets no environment at all). The billing alerts work round it: every
+event from `lib/alert.js` carries a `vercel_env` tag (and `stripe_mode`), and
+the Sentry alert rule can filter on that. Left because changing it moves every
+existing event and saved search. To fix: `environment: process.env.VERCEL_ENV
+|| process.env.NODE_ENV` on the server and edge, and
+`process.env.NEXT_PUBLIC_VERCEL_ENV || process.env.NODE_ENV` in the browser,
+then give the billing alert rule the "production" environment, plus a separate
+preview rule if wanted.
+
+## Daily reconciliation: no alert if the cron stops running
+
+*Deferred 2 Oct 2026 (billing fix 6, Sentry alerts; branch prelaunch).*
+
+Sentry is told when the reconciliation finds problems, can't run or can't
+email, but not when Vercel never calls it (cron removed, project paused,
+deployments failing). Today the only sign is that the daily "Plotwire billing"
+email stops arriving. `automaticVercelMonitors` in `next.config.js` doesn't
+cover App Router routes. To add it: in `app/api/admin/reconcile/route.js`,
+wrap the cron call (not `?email=0` runs) in
+`Sentry.withMonitor("billing-reconcile", ..., { schedule: { type: "crontab",
+value: "0 6 * * *" }, checkinMargin: 60, maxRuntime: 2, timezone: "Etc/UTC" })`,
+check the Sentry plan includes a cron monitor, and add a "missed or failed
+check-in" alert to admin@plotwire.uk.
+
+## Sentry: email redaction for breadcrumbs only covers the billing alerts
+
+*Deferred 2 Oct 2026 (billing fix 6 review; branch prelaunch).*
+
+Sentry attaches recent breadcrumbs to every event. That includes console lines,
+which can hold a raw error object with top-level fields such as `detail` or
+`param`, and outgoing request URLs. `lib/alert.js` redacts email addresses in
+the breadcrumbs of billing alert events only. It does this with an event
+processor on the alert's own scope. Other server and browser events still send
+breadcrumbs with only the token scrubber (`lib/sentryScrub.js`) applied. That
+was true before fix 6 too. Nothing found logs an email on those paths today,
+so it was left. To fix, make `beforeBreadcrumb` in `lib/sentryScrub.js` also
+replace email-shaped strings with `[email]` (the same regex as `lib/alert.js`),
+for the browser, server and edge alike.
+
+## Sentry build plugin: local builds upload and send usage data
+
+*Deferred 2 Oct 2026 (billing fix 7 review; branch prelaunch).*
+
+A plain local `npm run build` runs the Sentry webpack plugin set up by
+`withSentryConfig` in `next.config.js`. The plugin reads the gitignored
+`.env.sentry-build-plugin` at the repo root, so with a valid token a local
+build uploads source maps and creates a release in `plotwire-uk-ltd`, just as
+a Vercel build does. It also sends the plugin's own usage data to
+`o1.ingest.sentry.io` on every build. Local builds during the billing fixes
+probably did both. That is harmless, because the same code is deployed later,
+but it isn't intended. It was left because the fix changes the production
+build config. To fix: in `withSentryConfig` add `telemetry: false` and
+`sourcemaps: { disable: !process.env.VERCEL }` (or pass `authToken` only when
+`VERCEL` is set), then check that a Vercel build still uploads source maps.
