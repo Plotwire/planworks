@@ -84,8 +84,9 @@ Any running subscription on the Stripe account counts, whatever its price
 Stripe account sells nothing but Plotwire and the customer portal doesn't
 allow plan switching. If another product or price is ever added, check
 `price_id` against `STRIPE_PRICE` in the access rule (`supabase/try-mode.sql`
-and its copy in `lib/access.js`). Until then the reconciliation report should
-list rows whose `price_id` isn't `STRIPE_PRICE` or whose `plan` is null.
+and its copy in `lib/access.js`). Until then the daily reconciliation report
+(`lib/reconcile.js`) lists every running subscription for another price, or
+with a quantity other than 1, under "Setup and data checks".
 
 ## Planner share links keep working after the owner lapses
 
@@ -103,3 +104,19 @@ current body in `supabase/`, then make it return nothing when
 `public.billing_enforced_for(owner)` is true and `public.access_level(owner)`
 isn't `full`. Keep it SECURITY DEFINER with an empty search_path, and never
 add "force row level security" to the planner tables.
+
+## Reconciliation: card disputes aren't checked
+
+*Deferred 2 Oct 2026 (billing fix 5, reconciliation; branch prelaunch).*
+
+The daily reconciliation (`lib/reconcile.js`, `GET /api/admin/reconcile`)
+flags a running subscription whose latest invoice was fully refunded, but not
+one whose payment is being disputed (a chargeback): Stripe keeps the
+subscription active, so the account stays full while the money is clawed
+back. The webhook doesn't handle `charge.dispute.created` either. Until then,
+treat a dispute email from Stripe like a refund: cancel the subscription in
+the Dashboard. To add it: list `stripe.disputes` created in the last 35 days,
+map each disputed charge's payment intent to its invoice (the same
+`invoicePayments.list({ payment: { type: "payment_intent", ... } })` lookup
+the refund check uses), and report it in the "Refunded but still running"
+section.
