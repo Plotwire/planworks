@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useState } from "react";
-import { savedSymbolCounts } from "@/lib/db";
+import { savedSymbolCounts, symbolCount } from "@/lib/db";
 
 /* ============================================================================
  * TRY MODE -- the in-app side of "Try Plotwire" (lib/access.js). An account
@@ -18,11 +18,10 @@ import { savedSymbolCounts } from "@/lib/db";
 export const TRIAL_DRAWING_NUMBER = "TRIAL – NOT FOR ISSUE";
 
 // Symbols in a drawing: every sheet's placed symbols (furniture, wires and
-// notes don't count). Same rule as buildPreview().count in lib/db.js.
+// notes don't count). The one rule in lib/db.js symbolCount(), which the
+// database's own count (supabase/try-mode.sql) matches.
 export function drawingSymbolCount(project) {
-  if (!project) return 0;
-  if (Array.isArray(project.sheets)) return project.sheets.reduce((n, s) => n + ((s.placed && s.placed.length) || 0), 0);
-  return (project.placed && project.placed.length) || 0;
+  return symbolCount(project);
 }
 
 /* Live Try usage in the drawing editor: the symbols saved in the account's
