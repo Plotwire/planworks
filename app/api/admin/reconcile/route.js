@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { checkCronAuth, runReconciliation } from "@/lib/billingReconcile";
+import { ALERT_AREA, checkCronAuth, runReconciliation } from "@/lib/billingReconcile";
+import { alertError, alertMessage, flushAlerts } from "@/lib/alert";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,6 +10,11 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 const NO_STORE = { "Cache-Control": "no-store" };
+// A missing CRON_SECRET on production means the daily check can't run at all;
+// alerted at most once an hour per server instance (anyone can call this
+// URL). Vercel runs crons on production deployments only, so a preview
+// without it (manual runs only) is logged, not alerted.
+const NOT_CONFIGURED_THROTTLE_MS = 60 * 60 * 1000;
 
 // GET /api/admin/reconcile -- the daily billing reconciliation (vercel.json
 // runs it every morning). Admin only: Authorization: Bearer $CRON_SECRET,
@@ -34,9 +40,37 @@ const NO_STORE = { "Cache-Control": "no-store" };
 // invoice payments, events, webhook endpoints, refunds, charges and, in test
 // mode, test clocks), STRIPE_PRICE, VERCEL_ENV, NEXT_PUBLIC_BILLING_ENABLED,
 // NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.
+// Sentry (lib/alert.js, tag area=billing-reconcile): mismatches, a check that
+// couldn't run and a failed email (lib/billingReconcile.js), CRON_SECRET
+// missing on production, and any error in this route. Flushed before the
+// response.
 export async function GET(req) {
+  let res;
+  try {
+    res = await respond(req);
+  } catch (e) {
+    console.error("[admin/reconcile] unexpected error:", e);
+    alertError(e, { area: ALERT_AREA, problem: "route-error", title: "Billing reconciliation: unexpected error" });
+    res = NextResponse.json({ ok: false, error: "The check failed unexpectedly." }, { status: 500, headers: NO_STORE });
+  }
+  // Waits only when something was captured (lib/alert.js).
+  await flushAlerts();
+  return res;
+}
+
+async function respond(req) {
   const auth = checkCronAuth(req);
-  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status, headers: NO_STORE });
+  if (!auth.ok) {
+    if (auth.status === 503 && process.env.VERCEL_ENV === "production") {
+      alertMessage("Billing reconciliation: CRON_SECRET missing or too short, so the daily check can't run", {
+        area: ALERT_AREA,
+        problem: "not-configured",
+        level: "error",
+        throttleMs: NOT_CONFIGURED_THROTTLE_MS,
+      });
+    }
+    return NextResponse.json({ error: auth.error }, { status: auth.status, headers: NO_STORE });
+  }
 
   const sendEmail = req.nextUrl.searchParams.get("email") !== "0";
   const { status, body } = await runReconciliation({ sendEmail });

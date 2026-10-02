@@ -120,3 +120,49 @@ map each disputed charge's payment intent to its invoice (the same
 `invoicePayments.list({ payment: { type: "payment_intent", ... } })` lookup
 the refund check uses), and report it in the "Refunded but still running"
 section.
+
+## Sentry: the environment says "production" on previews
+
+*Deferred 2 Oct 2026 (billing fix 6, Sentry alerts; branch prelaunch).*
+
+`sentry.server.config.ts` and `instrumentation-client.ts` set
+`environment: process.env.NODE_ENV`, and Vercel builds previews with
+NODE_ENV=production, so preview events are filed under "production" (the edge
+config sets no environment at all). The billing alerts work round it: every
+event from `lib/alert.js` carries a `vercel_env` tag (and `stripe_mode`), and
+the Sentry alert rule can filter on that. Left because changing it moves every
+existing event and saved search. To fix: `environment: process.env.VERCEL_ENV
+|| process.env.NODE_ENV` on the server and edge, and
+`process.env.NEXT_PUBLIC_VERCEL_ENV || process.env.NODE_ENV` in the browser,
+then give the billing alert rule the "production" environment, plus a separate
+preview rule if wanted.
+
+## Daily reconciliation: no alert if the cron stops running
+
+*Deferred 2 Oct 2026 (billing fix 6, Sentry alerts; branch prelaunch).*
+
+Sentry is told when the reconciliation finds problems, can't run or can't
+email, but not when Vercel never calls it (cron removed, project paused,
+deployments failing). Today the only sign is that the daily "Plotwire billing"
+email stops arriving. `automaticVercelMonitors` in `next.config.js` doesn't
+cover App Router routes. To add it: in `app/api/admin/reconcile/route.js`,
+wrap the cron call (not `?email=0` runs) in
+`Sentry.withMonitor("billing-reconcile", ..., { schedule: { type: "crontab",
+value: "0 6 * * *" }, checkinMargin: 60, maxRuntime: 2, timezone: "Etc/UTC" })`,
+check the Sentry plan includes a cron monitor, and add a "missed or failed
+check-in" alert to admin@plotwire.uk.
+
+## Sentry: email redaction for breadcrumbs only covers the billing alerts
+
+*Deferred 2 Oct 2026 (billing fix 6 review; branch prelaunch).*
+
+Sentry attaches recent breadcrumbs to every event. That includes console lines,
+which can hold a raw error object with top-level fields such as `detail` or
+`param`, and outgoing request URLs. `lib/alert.js` redacts email addresses in
+the breadcrumbs of billing alert events only. It does this with an event
+processor on the alert's own scope. Other server and browser events still send
+breadcrumbs with only the token scrubber (`lib/sentryScrub.js`) applied. That
+was true before fix 6 too. Nothing found logs an email on those paths today,
+so it was left. To fix, make `beforeBreadcrumb` in `lib/sentryScrub.js` also
+replace email-shaped strings with `[email]` (the same regex as `lib/alert.js`),
+for the browser, server and edge alike.
