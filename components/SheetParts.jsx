@@ -269,7 +269,7 @@ export function TbMenuItem({ icon: Icon, label, onClick, title, checked, right =
 // "View" dropdown: Grid, Reset sizes, colour mode, Hide panels, Light/dark.
 function ViewMenu({ snapEnabled, onToggleSnap, onNormalise, normaliseFlash, colourMode, onToggleColour,
                     sidebarHidden, onToggleSidebar, theme, onToggleTheme }) {
-  const colourLabel = colourMode === "navy" ? "Navy" : colourMode === "red" ? "PB Red" : colourMode === "colour" ? "Colour" : "Mono";
+  const colourLabel = colourMode === "navy" ? "Navy" : colourMode === "red" ? "Classic Red" : colourMode === "colour" ? "Colour" : "Mono";
   return (
     <TbMenu icon={SlidersHorizontal} label="View" title="View options">
       <TbMenuItem icon={Grid3x3} label="Grid" checked={Boolean(snapEnabled)} onClick={onToggleSnap} />

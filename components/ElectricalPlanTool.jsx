@@ -108,7 +108,7 @@ function freshProject() {
     notes: "", // new drawings start with blank Installation Notes
     boq: null,
     titleBlock: null, // null = use the account default; set = job-specific
-    colourMode: "red",     // new drawings start on PB Red; the toolbar palette
+    colourMode: "red",     // new drawings start on Classic Red; the toolbar palette
                            // button still cycles red -> mono -> navy -> colour
     sheets: [sheet],
     activeSheetId: sheet.id,
