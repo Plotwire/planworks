@@ -228,3 +228,18 @@ but it isn't intended. It was left because the fix changes the production
 build config. To fix: in `withSentryConfig` add `telemetry: false` and
 `sourcemaps: { disable: !process.env.VERCEL }` (or pass `authToken` only when
 `VERCEL` is set), then check that a Vercel build still uploads source maps.
+
+## Global CSS: `body > div { height: 100% }` stretches anything mounted under body
+
+*Deferred 3 Oct 2026 (toast fix; branch prelaunch).*
+
+`app/globals.css` gives `#__next, body > div` a height of 100%. Any element
+that ends up as a direct child of `<body>` gets it, including fixed overlays
+that are meant to size to their content. That is what stretched the "Payment
+confirmed" toast to the full viewport height, and an earlier Try-mode chip the
+same way. Both are now protected with inline sizes (`components/Toast.jsx`,
+`components/TryMode.jsx`), which beat the rule. It was left because other
+layout may rely on it. To fix: find what needs the full-height wrapper (most
+likely the app root), give that element its own class or `h-full`, narrow the
+rule to it, then check the dashboard, the editor, the sketch tool and every
+modal and toast still lay out correctly.
