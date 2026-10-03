@@ -51,15 +51,6 @@ the 400 dpi export cap. Proposed: a named constant of about 3600 px (a square
 frame stays at about 13 MP, under the iOS canvas limit). Only new or
 re-applied plans benefit.
 
-## Remove the unused `docx` package
-
-*Deferred 26 Sep 2026 (BOQ outputs, branch boq-outputs).*
-
-`lib/boqDocx.js`, the only code that used `docx`, was deleted as dead code.
-The `docx` entry in `package.json` is now unused. Removing it with
-`npm uninstall docx` also rewrites `package-lock.json`, so it waits until after
-launch.
-
 ## Lapsed accounts: read-only UI in the Work Planner and the floor-plan sketch
 
 *Deferred 2 Oct 2026 (billing fix 3, access rules; branch prelaunch).*
