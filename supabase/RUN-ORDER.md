@@ -39,6 +39,9 @@ select
   (select count(*) from storage.buckets where id = 'plan-images')                                        as plan_images_bucket,
   (select count(*) from public.projects)                                                                 as drawings,
   pg_size_pretty(pg_total_relation_size('public.projects'))                                              as projects_size,
+  (select is_nullable from information_schema.columns
+    where table_schema = 'public' and table_name = 'projects' and column_name = 'id')                    as projects_id_nullable,
+  (select count(*) from public.projects where id is null)                                                as projects_null_ids,
   (select count(*) from public.subscriptions)                                                            as subscription_rows;
 ```
 
@@ -48,6 +51,7 @@ hasn't been applied (`planner_settings` and `planner_jobs` come from
 
 Expect:
 - `rls_on_everywhere` true and `plan_images_bucket` 1. **If either is wrong, stop here and ask.**
+- `projects_id_nullable` `NO` and `projects_null_ids` 0. The 25-symbol cap adds up an account's other drawings by `id`, so a drawing with no id would slip past it. **If either is wrong, stop here and ask.**
 - `hardening_columns` 0 and `try_mode_installed` false the first time. If they already show 2 and true, the later steps have run before; running them again is safe.
 - `has_cancel_at` 1 means step 1 has already been done.
 
@@ -122,8 +126,19 @@ info@fentonselectrical.co.uk exempt (full access with no subscription).
 Only accounts whose email address has been **confirmed** are made exempt, so a
 stranger who registers one of these addresses first gets nothing. This only
 works with "Confirm email" ON (step 0): with it off, Supabase marks every
-sign-up as confirmed at once. Before running this file, have each of the three
-owners sign up on plotwire.uk and click the link in the confirmation email.
+sign-up as confirmed at once. Before running this file, each of the three
+owners must:
+
+1. **Sign up at `https://app.plotwire.uk/?login`**. While the Coming Soon page
+   is up, the plain address only shows the holding page; `?login` opens the
+   sign-in screen, which has "Create an account".
+2. Click the link in the confirmation email.
+3. **Sign in once with their own password** and see their own (empty or
+   existing) dashboard. That proves the account under that address is really
+   theirs. If "Confirm email" was ever off, someone else could have registered
+   one of these addresses first and it would already count as confirmed. If an
+   owner finds the address already registered when they sign up, or can't sign
+   in with the password they chose, **don't run this file: stop and ask.**
 
 Check: the last result should read `expected 3, accounts_found 3, unconfirmed 0, exempt 3`.
 - `accounts_found` below 3: one of those accounts hasn't signed up yet.
@@ -136,7 +151,9 @@ switch billing on until all three are confirmed and exempt.
 
 ## Step 5 (preview test day only): billing test accounts
 
-Sign up the test accounts on the Stripe test preview first, then add each one:
+Sign up the test accounts on the Stripe test preview first (open the preview
+with `?login` on the end of its address to reach "Create an account"), then
+add each one:
 
 ```sql
 insert into public.billing_test_accounts (user_id, note)
@@ -199,7 +216,12 @@ report reads "All clear":
 `delete from public.subscriptions where livemode is not true;`
 
 **6c. Deploy first.** Deploy production with `NEXT_PUBLIC_BILLING_ENABLED=true`
-and the live Stripe settings, and wait until the deploy is live. Doing it the
+and the live Stripe settings, and wait until the deploy is live. Set those
+Production variables **in the same sitting as this deploy, straight before
+it**. Between setting them and this deploy being live, never Redeploy the
+current production deployment and don't push to `master`: either would build
+the OLD billing code (no double-charge guard, paying customers shown as Try)
+with the live keys. Doing it the
 other way round, with the database switch on while the app still shows
 everyone as full, would refuse some saves with no explanation on screen.
 
@@ -268,15 +290,22 @@ refund, cancel.
 
 ## Rollback
 
+**Always switch the database off FIRST:**
+
 ```sql
 update public.app_flags set value = false, updated_at = now() where key = 'enforce_billing';
+select value as enforce_billing from public.app_flags where key = 'enforce_billing';   -- false
 ```
 
 This lifts every database restriction at once. Nothing else needs undoing,
 because the tables, functions, policies and triggers do nothing while the
-switch is off, except for any accounts still in `billing_test_accounts`. To
-take the paywall out of the app as well, unset `NEXT_PUBLIC_BILLING_ENABLED`
-and redeploy.
+switch is off, except for any accounts still in `billing_test_accounts`.
+
+**Only then**, to take the paywall out of the app as well, unset
+`NEXT_PUBLIC_BILLING_ENABLED` and redeploy (or Instant Rollback to an older
+deployment). Never do the app part while `enforce_billing` is still true: the
+app would show no limits while the database keeps refusing Try saves over 25
+symbols and every Lapsed save, with no explanation on screen.
 
 ## What the database does and doesn't enforce
 
