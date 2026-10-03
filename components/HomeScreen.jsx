@@ -8,6 +8,7 @@ import { useApp } from "@/components/AppShell";
 import { LEGAL_LINKS } from "@/lib/legal";
 import { TryPill } from "@/components/TryMode";
 import Turnstile, { TURNSTILE_SITE_KEY, captchaPending } from "@/components/Turnstile";
+import Toast from "@/components/Toast";
 
 /* Sheet geometry — must match ElectricalPlanTool */
 const SHEET = { width: 1587, height: 1123, margin: 18, legendWidth: 230, notesWidth: 280, titleHeight: 110 };
@@ -433,7 +434,7 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
           onDeleted={onDeleted}
         />
       )}
-      {toast && <div className="pw-toast" role="status">{toast}</div>}
+      {toast && <Toast message={toast} onDismiss={() => setToast("")} />}
     </div>
   );
 }
@@ -680,7 +681,6 @@ html.dark .pw-home .access-banner.is-lapsed{background:#2a2114; border-color:#6b
 .pw-modal-actions button:disabled{opacity:.5; cursor:not-allowed}
 
 /* Post-delete confirmation */
-.pw-toast{position:fixed; left:50%; bottom:26px; transform:translateX(-50%); z-index:70; background:var(--navy); color:#eaf6f8; font-size:13px; font-weight:500; padding:10px 18px; border-radius:10px; box-shadow:0 10px 30px -8px rgba(11,17,23,.5)}
 .pw-home .badge-floors{left:auto; right:11px; background:rgba(63,183,201,.92); color:#08313a; font-weight:600}
 .pw-home .card-body{padding:14px 16px 15px; transition:background .2s cubic-bezier(.2,.7,.3,1)}
 .pw-home .card-title{font-size:14.5px; font-weight:600; letter-spacing:-.01em; margin-bottom:3px; transition:color .2s cubic-bezier(.2,.7,.3,1); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}

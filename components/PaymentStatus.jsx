@@ -6,7 +6,7 @@
 // changes when the subscription row says so.
 
 import React from "react";
-import { X } from "lucide-react";
+import Toast from "@/components/Toast";
 
 const ACTION = "bg-[var(--action)] hover:bg-[var(--action-hover)] text-[color:var(--action-ink)]";
 
@@ -59,38 +59,22 @@ export function ConfirmingPayment({ canContinue = false, onContinue }) {
   );
 }
 
-// A note over the app, bottom centre: never in the way of a drawing.
-// onCheck adds a "Check again" button; onDismiss a close button.
+// A note over the app, bottom centre: never in the way of a drawing. The
+// shared Toast (components/Toast.jsx). onCheck adds a "Check again" button;
+// onDismiss a close button.
 export function PaymentNote({ message, onCheck, checking = false, onDismiss }) {
   return (
-    <div
-      role="status"
-      aria-live="polite"
-      className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[2147481000] w-[calc(100%-32px)] max-w-[580px] rounded-xl border border-white/10 bg-[#1A2530] text-white px-4 py-3 flex items-center gap-3"
-      style={{ boxShadow: "0 18px 40px -12px rgba(0,0,0,.45)" }}
-    >
-      <p className="flex-1 min-w-0 text-[13.5px] leading-snug text-[#e3eaf1]">{message}</p>
+    <Toast message={message} onDismiss={onDismiss}>
       {onCheck && (
         <button
           type="button"
           onClick={onCheck}
           disabled={checking}
-          className={`shrink-0 h-9 px-3.5 rounded-lg text-[13px] font-semibold transition-colors disabled:opacity-60 ${ACTION}`}
+          className={`shrink-0 h-8 px-3 rounded-lg text-[13px] font-semibold transition-colors disabled:opacity-60 ${ACTION}`}
         >
           {checking ? "Checking…" : "Check again"}
         </button>
       )}
-      {onDismiss && (
-        <button
-          type="button"
-          onClick={onDismiss}
-          aria-label="Dismiss"
-          title="Dismiss"
-          className={`shrink-0 w-9 h-9 rounded-lg grid place-items-center transition-colors ${ACTION}`}
-        >
-          <X size={16} strokeWidth={2.4} />
-        </button>
-      )}
-    </div>
+    </Toast>
   );
 }
