@@ -23,7 +23,7 @@ import { wallSnap } from "@/lib/cad/snap";
 import { listSketches, getSketchData, insertSketch, updateSketch, deleteSketch } from "@/lib/cad/sketchStore";
 import { insertProject, getProjectData, updateProjectRow } from "@/lib/db";
 import { uploadPlanImage, dataUrlToBlob } from "@/lib/planImages";
-import { computeFrame, renderModelToPng } from "@/lib/cad/sketchToImage";
+import { renderModelToPng } from "@/lib/cad/sketchToImage";
 import { SCALES, MARGIN_MM, PLAN_PX, scalePrefOf, scaleLabel, planSheetFrame, applyPlanToSheet, outsideNote, legacyFrameOf } from "@/lib/cad/planScale";
 import { printStyle, labelSizeOf, LABEL_SIZE_NAMES, roomLabelLayout, wallWeightOf, WALL_WEIGHTS, WALL_WEIGHT_NAMES } from "@/lib/cad/printStyle";
 import { isTouchDevice } from "@/lib/touch";
@@ -427,14 +427,18 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     const s = Math.min((sz.w - pad * 2) / planW, (sz.h - pad * 2) / planH);
     setView({ s, tx: (sz.w - planW * s) / 2 - planX0 * s, ty: (sz.h - planH * s) / 2 - planY0 * s });
   }, [size]);
-  const DEFAULT_FRAME = { x: -2300, y: -2300, w: 11800, h: 11800 };
+  // The view fits the A3 drawing area at the plan's scale (the dashed outline),
+  // so the outline and its scale are in sight from the start - an empty
+  // sketch opens on the 1:50 sheet.
+  const sheetViewOf = (m) => planSheetFrame(m, { scalePref: scalePrefOf(m) }).frame;
+  const DEFAULT_FRAME = sheetViewOf({ walls: [] });
   const fitFrame = useCallback((frame, sz) => {
     sz = sz || size;
     const pad = 90;
     const s = Math.max(SCALE_MIN, Math.min(SCALE_MAX, Math.min((sz.w - pad * 2) / frame.w, (sz.h - pad * 2) / frame.h)));
     setView({ s, tx: sz.w / 2 - (frame.x + frame.w / 2) * s, ty: sz.h / 2 - (frame.y + frame.h / 2) * s });
   }, [size]);
-  const fit = useCallback((sz) => fitFrame((model.walls && model.walls.length) ? computeFrame(model, 900) : DEFAULT_FRAME, sz), [fitFrame, model]);
+  const fit = useCallback((sz) => fitFrame(sheetViewOf(model), sz), [fitFrame, model]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -1040,7 +1044,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       setFrame(_link?.frame || null); setLinkScale(_link?.scale || null); setLegacyFrame(legacyFrameOf(_link));
       setSketchId(id); setSketchName(meta?.name || "Untitled sketch");
       setSel(null); setDraftPts([]); setDimP1(null); setTool("select");
-      fitFrame((geo.walls && geo.walls.length) ? computeFrame(geo, 900) : DEFAULT_FRAME);
+      fitFrame(sheetViewOf(geo));
       setSaveState("saved"); setOpenPanel(false); setNameGate(false);
     } catch (e) { console.error(e); window.alert("Couldn't open: " + (e.message || e)); }
   };
@@ -1189,7 +1193,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       setSketchId(id);
       setSketchName(linkName || "Floor plan");
       setSel(null); setDraftPts([]); setDimP1(null); setTool("select");
-      fitFrame((geo.walls && geo.walls.length) ? computeFrame(geo, 900) : DEFAULT_FRAME);
+      fitFrame(sheetViewOf(geo));
       setSaveState("saved"); setNameGate(false);
     } catch (e) { console.error(e); setNameGate(false); setSaveState("idle"); }
     setPlanBusy(null);
@@ -1305,7 +1309,8 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   // The A3 drawing area at the plan's scale, where sending it will put it
   // (sheetPlan): faint and dashed under the plan, red when a picked scale
   // cuts the plan off; its label over the plan, haloed, so walls never hide
-  // it. Only once there are walls. On screen only - never in the plan image.
+  // it. Always shown, from an empty sketch (1:50) on, resizing as Auto steps
+  // the scale up. On screen only - never in the plan image.
   const sf = sheetPlan.frame, hasWalls = model.walls.length > 0, sheetCls = sheetPlan.cut ? "cadv-sheet over" : "cadv-sheet";
   // The label at the outline's top-left corner, kept in sight (screen px):
   // below the canvas top when that edge is above it, and clear of the tool
@@ -1313,12 +1318,12 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const fx0 = sf.x * view.s + view.tx, fy0 = sf.y * view.s + view.ty;
   const lyS = Math.max(fy0 - 7, Math.min(18, (sf.y + sf.h) * view.s + view.ty - 6));
   const lxS = Math.max(fx0, Math.min(lyS < 104 ? 64 : 8, (sf.x + sf.w) * view.s + view.tx - 40));
-  const sheetOutline = hasWalls && (
+  const sheetOutline = (
     <g className={sheetCls} pointerEvents="none">
       <rect x={sf.x} y={sf.y} width={sf.w} height={sf.h} fill="none" strokeWidth={1.2} strokeDasharray="10 7" vectorEffect="non-scaling-stroke" />
     </g>
   );
-  const sheetLabel = hasWalls && (
+  const sheetLabel = (
     <g className={sheetCls} pointerEvents="none">
       <text x={(lxS - view.tx) / view.s} y={(lyS - view.ty) / view.s} fontSize={11 / view.s} stroke="#FFFFFF" strokeWidth={3 / view.s} strokeLinejoin="round" paintOrder="stroke">
         {`A3 · 1:${sheetPlan.scale}${sheetPlan.cut ? " · PLAN DOESN'T FIT" : ""}`}
@@ -1518,14 +1523,16 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
                   onChange={(v) => v !== scalePrefOf(model) && change((m) => ({ ...m, sheetScale: v }))}
                   options={[{ value: "auto", label: "Auto" }, ...SCALES.map((s) => ({ value: s, label: "1:" + s }))]} />
                 {!hasWalls ? (
-                  <div className={`mt-2 ${PANEL_HELP}`}>Draw the walls to see the scale and the A3 drawing area.</div>
+                  <div className={`mt-2 ${PANEL_HELP}`}>
+                    {!sheetPlan.manual ? `Auto - 1:${sheetPlan.scale}. As the drawing outgrows the sheet, Auto steps up (1:100, 1:200...).` : `1:${sheetPlan.scale}.`} The dashed outline shows the A3 drawing area.
+                  </div>
                 ) : sheetPlan.cut ? (
                   <div role="alert" className={SCALE_WARN}>The plan doesn&apos;t fit A3 at 1:{sheetPlan.scale} - {scaleCure(sheetPlan)}.</div>
                 ) : !sheetPlan.manual && sheetPlan.tooBig ? (
                   <div role="alert" className={SCALE_WARN}>Too big for A3 even at 1:500 - Auto draws it at 1:{sheetPlan.scale} so none of it is cut off.</div>
                 ) : (
                   <div className={`mt-2 ${PANEL_HELP}`}>
-                    {!sheetPlan.manual ? `Auto - 1:${sheetPlan.scale}, the largest scale that fits A3.`
+                    {!sheetPlan.manual ? `Auto - 1:${sheetPlan.scale}. Auto starts at 1:50 and steps up only when the drawing outgrows the sheet.`
                       : sheetPlan.fits ? `1:${sheetPlan.scale} fits the A3 drawing area.`
                       : `1:${sheetPlan.scale} fits, but closer to the edge than the ${MARGIN_MM} mm margin Auto keeps.`} The dashed outline shows the drawing area.
                   </div>
