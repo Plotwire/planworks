@@ -18,13 +18,14 @@ import {
 import { findNode, endAt, moveNode, moveWall } from "@/lib/cad/edit";
 import { angled, placeOpening, openingHost, slideOpening, planCentre, openingSide } from "@/lib/cad/openings";
 import { startRun, runEnd, retraces, afterWall } from "@/lib/cad/chain";
-import { isAuto, roomSpaces, areaAt, roomAt, onWall } from "@/lib/cad/rooms";
+import { isAuto, roomSpaces, areaAt, roomAt, onWall, spacesOf, spaceBoxAt } from "@/lib/cad/rooms";
 import { wallSnap } from "@/lib/cad/snap";
 import { listSketches, getSketchData, insertSketch, updateSketch, deleteSketch } from "@/lib/cad/sketchStore";
 import { insertProject, getProjectData, updateProjectRow } from "@/lib/db";
 import { uploadPlanImage, dataUrlToBlob } from "@/lib/planImages";
 import { computeFrame, renderModelToPng } from "@/lib/cad/sketchToImage";
 import { SCALES, MARGIN_MM, PLAN_PX, scalePrefOf, scaleLabel, planSheetFrame, applyPlanToSheet, outsideNote, legacyFrameOf } from "@/lib/cad/planScale";
+import { printStyle, labelSizeOf, LABEL_SIZE_NAMES, roomLabelLayout } from "@/lib/cad/printStyle";
 import { isTouchDevice } from "@/lib/touch";
 import {
   ChevronLeft, FolderOpen, FilePlus, Save, Send, Undo2, Redo2, SlidersHorizontal, Grid3x3, Magnet, Compass,
@@ -1089,7 +1090,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     if (ps.cut && !window.confirm(`The plan doesn't fit A3 at 1:${ps.scale}, so part of it will be cut off the drawing, and anything placed on that part will be hidden.\n\nSend it anyway? Cancel to ${scaleCure(ps)}.`)) return;
     setPlanBusy("Preparing plan");
     try {
-      const png = await renderModelToPng(model, ps.frame, PLAN_PX);
+      const png = await renderModelToPng(model, ps.frame, PLAN_PX, { scale: ps.scale });
       setPlanBusy("Uploading plan");
       const { path } = await uploadPlanImage(dataUrlToBlob(png.dataUrl));
       const lk = { projectId: linkProjectId, sheetId: linkSheetId, frame: ps.frame, scale: ps.scale, ...keptLegacy() };
@@ -1226,13 +1227,16 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     if (layers.rooms) {
       // Automatic area: worked out from the walls, none when not enclosed.
       // Older labels show the area typed in, as always.
+      // Names and areas laid out as they will print on the A3 sheet (Label
+      // size, wrapped / stepped down to fit the room, never under 3 mm).
+      const lab = printStyle(model, sheetPlan.scale), labSp = spacesOf(model.walls);
       g.push(<g key="rooms">{model.rooms.map((r, i) => {
-        const a = isAuto(r) ? areaAt(spaces, r.x, r.y) : null;
+        const a = isAuto(r) ? areaAt(spaces, r.x, r.y) : r.area ? Number(r.area) : null;
+        const L = roomLabelLayout(r.name, a != null ? a.toFixed(1) + " m\u00B2" : null, lab, spaceBoxAt(labSp, r.x, r.y));
         return (
           <g key={"room" + i} className={sel && sel.kind === "room" && sel.index === i ? "cadv-room sel" : "cadv-room"}>
-            <text x={r.x} y={r.y} className="nm" fontSize={230} textAnchor="middle">{r.name.toUpperCase()}</text>
-            {isAuto(r) ? (a != null ? <text x={r.x} y={r.y + 300} className="ar" fontSize={165} textAnchor="middle">{a.toFixed(1) + " m\u00B2"}</text> : null)
-              : r.area ? <text x={r.x} y={r.y + 300} className="ar" fontSize={165} textAnchor="middle">{r.area.toFixed(1) + " m\u00B2"}</text> : null}
+            {L.lines.map((l, k) => <text key={k} x={r.x} y={r.y + l.dy} className="nm" fontSize={L.nameFs} textAnchor="middle">{l.text}</text>)}
+            {L.area && L.area.lines.map((l, k) => <text key={"a" + k} x={r.x} y={r.y + l.dy} className="ar" fontSize={L.area.fs} textAnchor="middle">{l.text}</text>)}
           </g>
         );
       })}</g>);
@@ -1253,7 +1257,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       g.push(<g key="tags">{tags}</g>);
     }
     return g;
-  }, [model, sel, layers, joined, spaces]);
+  }, [model, sel, layers, joined, spaces, sheetPlan.scale]);
 
   // Snap to walls markers (screen-constant): a diamond where a point lands on
   // a wall's side, a ring on a guide; each guide dashed from its tracking
@@ -1532,6 +1536,13 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
                 <ChoiceGroup label="Wall style" value={wallStyleOf(model)}
                   onChange={(v) => v !== wallStyleOf(model) && change((m) => ({ ...m, wallStyle: v }))}
                   options={[{ value: "solid", label: "Solid" }, { value: "light", label: "Light" }]} />
+              </section>
+              <section className="mb-5">
+                <SectionLabel>Label size</SectionLabel>
+                <ChoiceGroup label="Label size" value={labelSizeOf(model)}
+                  onChange={(v) => v !== labelSizeOf(model) && change((m) => ({ ...m, labelSize: v }))}
+                  options={["small", "medium", "large"].map((v) => ({ value: v, label: LABEL_SIZE_NAMES[v] }))} />
+                <div className={`mt-1.5 ${PANEL_HELP}`}>Room names and areas on the printed plan. Never smaller than 3 mm.</div>
               </section>
               <section className="mb-5">
                 <SectionLabel>Snap grid</SectionLabel>
