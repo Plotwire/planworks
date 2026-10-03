@@ -25,7 +25,7 @@ import { insertProject, getProjectData, updateProjectRow } from "@/lib/db";
 import { uploadPlanImage, dataUrlToBlob } from "@/lib/planImages";
 import { computeFrame, renderModelToPng } from "@/lib/cad/sketchToImage";
 import { SCALES, MARGIN_MM, PLAN_PX, scalePrefOf, scaleLabel, planSheetFrame, applyPlanToSheet, outsideNote, legacyFrameOf } from "@/lib/cad/planScale";
-import { printStyle, labelSizeOf, LABEL_SIZE_NAMES, roomLabelLayout } from "@/lib/cad/printStyle";
+import { printStyle, labelSizeOf, LABEL_SIZE_NAMES, roomLabelLayout, wallWeightOf, WALL_WEIGHTS, WALL_WEIGHT_NAMES } from "@/lib/cad/printStyle";
 import { isTouchDevice } from "@/lib/touch";
 import {
   ChevronLeft, FolderOpen, FilePlus, Save, Send, Undo2, Redo2, SlidersHorizontal, Grid3x3, Magnet, Compass,
@@ -1543,6 +1543,15 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
                   onChange={(v) => v !== labelSizeOf(model) && change((m) => ({ ...m, labelSize: v }))}
                   options={["small", "medium", "large"].map((v) => ({ value: v, label: LABEL_SIZE_NAMES[v] }))} />
                 <div className={`mt-1.5 ${PANEL_HELP}`}>Room names and areas on the printed plan. Never smaller than 3 mm.</div>
+              </section>
+              <section className="mb-5">
+                <SectionLabel>Wall thickness</SectionLabel>
+                <ChoiceGroup label="Wall thickness" value={wallWeightOf(model)}
+                  onChange={(v) => v !== wallWeightOf(model) && change((m) => ({ ...m, wallWeight: v }))}
+                  options={["thin", "standard", "bold"].map((v) => ({ value: v, label: WALL_WEIGHT_NAMES[v] }))} />
+                <div className={`mt-1.5 ${PANEL_HELP}`}>
+                  Thinnest the walls print on A3: {WALL_WEIGHTS[wallWeightOf(model)].external} mm outside, {WALL_WEIGHTS[wallWeightOf(model)].internal} mm inside.
+                </div>
               </section>
               <section className="mb-5">
                 <SectionLabel>Snap grid</SectionLabel>
