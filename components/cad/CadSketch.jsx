@@ -16,7 +16,7 @@ import {
   nearestWall, hitTest, joinWalls, pocheD, outlinePathD,
 } from "@/lib/cad/plan";
 import { findNode, endAt, moveNode, moveWall } from "@/lib/cad/edit";
-import { angled, placeOpening, openingHost, slideOpening, planCentre, openingSide } from "@/lib/cad/openings";
+import { angled, placeOpeningClear, openingAxes, openingHost, slideOpening, planCentre, openingSide } from "@/lib/cad/openings";
 import { startRun, runEnd, retraces, afterWall } from "@/lib/cad/chain";
 import { isAuto, roomSpaces, areaAt, roomAt, onWall, spacesOf, spaceBoxAt } from "@/lib/cad/rooms";
 import { wallSnap } from "@/lib/cad/snap";
@@ -334,6 +334,8 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   // Select tool: a wall end / whole wall / door or window being dragged (see armDrag).
   const dragRef = useRef(null);
   const [dragUi, setDragUi] = useState(null);
+  // Door / window tool: where a click would put it (placeOpeningClear), for the preview.
+  const [openPrev, setOpenPrev] = useState(null);
 
   // New sketches start with Solid walls; saved ones keep what they have (see wallStyleOf).
   const [model, setModel] = useState(() => ({ EXTENT: { w: 8400, h: 8800, margin: 2600 }, walls: [], doors: [], windows: [], dims: [], rooms: [], notes: [], boundary: null, rooflights: [], stairs: null, wallStyle: "solid" }));
@@ -762,8 +764,11 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       // Moves along its wall as far as the pointer has (wherever it was
       // grabbed), kept inside the wall; Snap to grid steps its gap to the
       // nearer wall end.
+      // Kept clear of the other openings in the wall: edge to edge near one,
+      // and where it would overlap with no room beside, it stays put (red).
       const r = slideOpening(d.base, d.okind, d.id, d.host, d.src.x + raw.x - d.w0.x, d.src.y + raw.y - d.w0.y, flags.gridSnap ? settings.grid : 0);
-      next = r.model; ui = { kind: "opening", id: d.id, gap: r.gap };
+      next = r.blocked ? null : r.model;
+      ui = { kind: "opening", okind: d.okind, id: d.id, gap: r.gap, snapped: r.snapped, blocked: r.blocked, edge: r.edge };
       at = raw;
     } else if (d.kind === "room") {
       // By whole mm, as a label is placed (no grid); its area follows live.
@@ -788,6 +793,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       at = raw;
     }
     if (next) { modelRef.current = next; setModel(next); setDragUi(ui); } // null: not allowed (see lib/cad/edit), keep the last good one
+    else if (ui && ui.kind === "opening") setDragUi(ui); // blocked: stays, shown red
     setCur({ x: at.x, y: at.y, rx: raw.x, ry: raw.y, sx: e.clientX, sy: e.clientY, on: true, ep: false });
   };
   // Back to the pre-drag model and save state: skip the "unsaved" mark if a
@@ -829,6 +835,11 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     const from = draftPts.length ? draftPts[draftPts.length - 1] : null;
     const p = isWallTool ? wallPoint(raw, from) : (flags.gridSnap ? { x: snap(raw.x, settings.grid), y: snap(raw.y, settings.grid) } : raw);
     const pk = tool === "select" ? pickAt(model, raw) : null, hov = !!pk && (!!pk.end || pk.ri >= 0); // a wall end or a room label
+    if (tool === "door" || tool === "window") {
+      const nw = model.walls.length ? nearestWall(model.walls, raw.x, raw.y) : null;
+      const ow = tool === "door" ? settings.doorW : settings.winW;
+      setOpenPrev(nw ? { ...placeOpeningClear(model, nw.seg, raw.x, raw.y, ow), w: ow, t: nw.seg.type === "external" ? T_EXT : T_INT } : null);
+    } else if (openPrev) setOpenPrev(null);
     setCur({ x: p.x, y: p.y, rx: raw.x, ry: raw.y, sx: e.clientX, sy: e.clientY, on: true, ep: !!p.ep, snap: p.ep ? "end" : p.kind || null, guides: p.guides || null, hov });
   };
   const handleDown = (e) => {
@@ -910,14 +921,18 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       // On the nearest wall, kept inside it and clear of the walls joined at its
       // ends: { x, y, dir } in a square wall as always, plus ang (turned with
       // the wall) in an angled one.
+      // Never over another door or window in the wall: near one it sits edge to
+      // edge (placeOpeningClear); with no room beside it the click is refused.
       const nw = nearestWall(model.walls, raw.x, raw.y);
       if (!nw) return;
-      const t = nw.seg.type === "external" ? T_EXT : T_INT;
+      const t = nw.seg.type === "external" ? T_EXT : T_INT, ow = tool === "door" ? settings.doorW : settings.winW;
+      const pc = placeOpeningClear(model, nw.seg, raw.x, raw.y, ow);
+      if (pc.blocked) return;
       if (tool === "door") {
-        const d = { id: "D" + Date.now(), ...placeOpening(nw.seg, raw.x, raw.y, settings.doorW, model.walls), w: settings.doorW, t, hinge: -1, fold: 1, ref: "" };
+        const d = { id: "D" + Date.now(), ...pc.pos, w: settings.doorW, t, hinge: -1, fold: 1, ref: "" };
         change((m) => ({ ...m, doors: m.doors.concat([d]) }));
       } else {
-        const wn = { id: "W" + Date.now(), ...placeOpening(nw.seg, raw.x, raw.y, settings.winW, model.walls), w: settings.winW, t, escape: false, ref: "" };
+        const wn = { id: "W" + Date.now(), ...pc.pos, w: settings.winW, t, escape: false, ref: "" };
         change((m) => ({ ...m, windows: m.windows.concat([wn]) }));
       }
       finishAction();
@@ -1306,6 +1321,20 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     overlay.push(<rect key={"hd" + k} x={x - 4.5 / view.s} y={y - 4.5 / view.s} width={9 / view.s} height={9 / view.s} className="cadv-handle" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />));
   if (dragUi && dragUi.ep) overlay.push(<rect key="dep" x={dragUi.x - 9 / view.s} y={dragUi.y - 9 / view.s} width={18 / view.s} height={18 / view.s} fill="none" className="cadv-active" strokeWidth={2} vectorEffect="non-scaling-stroke" />);
   if (dragUi && dragUi.kind === "node" && flags.wallSnap) overlay.push(...snapMarks("d", dragUi));
+  // Door / window: its footprint in the wall where it would go (teal, red
+  // when there's no room), and the shared mullion line when it snaps edge to
+  // edge to another opening.
+  const openingMarks = (k, o, w, t, blocked, edge) => {
+    const [H, F] = openingAxes(o), hw = w / 2, ht = t / 2, pts = [[hw, ht], [-hw, ht], [-hw, -ht], [hw, -ht]].map(([a, b]) => [o.x + H[0] * a + F[0] * b, o.y + H[1] * a + F[1] * b]);
+    const out = [<polygon key={k + "f"} points={ptStr(pts)} className={blocked ? "cadv-op-block" : "cadv-op-prev"} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />];
+    if (edge) { const L = ht + 14 / view.s; out.push(<line key={k + "e"} x1={edge[0] - F[0] * L} y1={edge[1] - F[1] * L} x2={edge[0] + F[0] * L} y2={edge[1] + F[1] * L} className="cadv-op-edge" strokeWidth={3} vectorEffect="non-scaling-stroke" />); }
+    return out;
+  };
+  if ((tool === "door" || tool === "window") && openPrev && cur.on && !dragUi) overlay.push(...openingMarks("op", openPrev.pos, openPrev.w, openPrev.t, openPrev.blocked, openPrev.snapped ? openPrev.edge : null));
+  if (dragUi && dragUi.kind === "opening" && (dragUi.blocked || dragUi.snapped)) {
+    const o = (dragUi.okind === "door" ? model.doors : model.windows).find((q) => q.id === dragUi.id);
+    if (o) overlay.push(...openingMarks("od", o, o.w, o.t, dragUi.blocked, dragUi.snapped ? dragUi.edge : null));
+  }
   // The A3 drawing area at the plan's scale, where sending it will put it
   // (sheetPlan): faint and dashed under the plan, red when a picked scale
   // cuts the plan off; its label over the plan, haloed, so walls never hide
@@ -1354,7 +1383,10 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   } else if (dragUi && dragUi.kind === "opening") {
     // Gap from the opening's nearer edge to the nearer end of its wall.
     const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
-    hud = <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>To wall end <b>{fmtMM(dragUi.gap)} mm</b></div>;
+    hud = <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>To wall end <b>{fmtMM(dragUi.gap)} mm</b>{dragUi.blocked ? <span className="snap cadv__hud-bad">NO ROOM</span> : dragUi.snapped ? <span className="snap">EDGE TO EDGE</span> : null}</div>;
+  } else if ((tool === "door" || tool === "window") && openPrev && cur.on && (openPrev.blocked || openPrev.snapped)) {
+    const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
+    hud = <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>{openPrev.blocked ? <span className="snap cadv__hud-bad">NO ROOM - overlaps</span> : <span className="snap">EDGE TO EDGE</span>}</div>;
   } else if (dragUi && dragUi.kind === "room") {
     // The area the label will show where it is now.
     const r = model.rooms[dragUi.index], a = r ? (isAuto(r) ? areaAt(spaces, r.x, r.y) : r.area || null) : null;
@@ -1806,6 +1838,10 @@ const CSS = `
 .cadv-tag-txt{font-family:var(--font-jetbrains-mono),monospace; fill:#16212B}
 .cadv-note{font-family:var(--font-jetbrains-mono),monospace; fill:#54616E}
 .cadv-sheet rect{stroke:#2C97A8; opacity:.6}
+.cadv-op-prev{fill:rgba(63,183,201,.28); stroke:#2C97A8}
+.cadv-op-block{fill:rgba(196,86,75,.32); stroke:#C4564B}
+.cadv-op-edge{stroke:#2C97A8; stroke-linecap:round}
+.cadv__hud .snap.cadv__hud-bad{background:#C4564B; color:#fff}
 .cadv-sheet text{fill:#22808F; font-family:var(--font-jetbrains-mono),monospace; font-weight:600; letter-spacing:.06em; opacity:.85}
 .cadv-sheet.over rect{stroke:#C4564B; opacity:.95}
 .cadv-sheet.over text{fill:#C4564B; opacity:1}
