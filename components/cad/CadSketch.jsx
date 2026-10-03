@@ -24,7 +24,7 @@ import { listSketches, getSketchData, insertSketch, updateSketch, deleteSketch }
 import { insertProject, getProjectData, updateProjectRow } from "@/lib/db";
 import { uploadPlanImage, dataUrlToBlob } from "@/lib/planImages";
 import { renderModelToPng } from "@/lib/cad/sketchToImage";
-import { SCALES, MARGIN_MM, PLAN_PX, scalePrefOf, scaleLabel, planSheetFrame, applyPlanToSheet, outsideNote, legacyFrameOf } from "@/lib/cad/planScale";
+import { SCALES, MARGIN_MM, PLAN_PX, scalePrefOf, scaleLabel, planSheetFrame, applyPlanToSheet, outsideNote, legacyFrameOf, sheetOriginFor, validOrigin } from "@/lib/cad/planScale";
 import { printStyle, labelSizeOf, LABEL_SIZE_NAMES, roomLabelLayout, wallWeightOf, WALL_WEIGHTS, WALL_WEIGHT_NAMES } from "@/lib/cad/printStyle";
 import { isTouchDevice } from "@/lib/touch";
 import {
@@ -338,7 +338,9 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const [openPrev, setOpenPrev] = useState(null);
 
   // New sketches start with Solid walls; saved ones keep what they have (see wallStyleOf).
-  const [model, setModel] = useState(() => ({ EXTENT: { w: 8400, h: 8800, margin: 2600 }, walls: [], doors: [], windows: [], dims: [], rooms: [], notes: [], boundary: null, rooflights: [], stairs: null, wallStyle: "solid" }));
+  // The A3 outline's corner (sheetOrigin) is fixed from the start: where you
+  // draw in it is where it goes on the sheet (lib/cad/planScale).
+  const [model, setModel] = useState(() => ({ EXTENT: { w: 8400, h: 8800, margin: 2600 }, walls: [], doors: [], windows: [], dims: [], rooms: [], notes: [], boundary: null, rooflights: [], stairs: null, wallStyle: "solid", sheetOrigin: sheetOriginFor({ walls: [] }) }));
   const [tool, setTool] = useState("select");
   const [view, setView] = useState({ s: 0.08, tx: 200, ty: 200 });
   const [draftPts, setDraftPts] = useState([]);
@@ -1016,7 +1018,10 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     return { s: ns, tx: cxp - wx * ns, ty: cyp - wy * ns };
   });
 
-  const blankModel = () => ({ EXTENT: { w: 8400, h: 8800, margin: 2600 }, walls: [], doors: [], windows: [], dims: [], rooms: [], notes: [], boundary: null, rooflights: [], stairs: null, wallStyle: "solid" });
+  const blankModel = () => ({ EXTENT: { w: 8400, h: 8800, margin: 2600 }, walls: [], doors: [], windows: [], dims: [], rooms: [], notes: [], boundary: null, rooflights: [], stairs: null, wallStyle: "solid", sheetOrigin: sheetOriginFor({ walls: [] }) });
+  // A sketch saved without an outline corner gets the one it had: the frame it
+  // was last sent with, else the one it would have had - so it opens as it was.
+  const withOrigin = (m, geo, link) => (validOrigin(geo && geo.sheetOrigin) ? m : { ...m, sheetOrigin: sheetOriginFor(m, link) });
   // Old sketches keep their link as it was ({ projectId, sheetId, frame }) until a send.
   const keptLegacy = () => (legacyFrame ? { legacyFrame } : {});
   const currentLink = () => (linkProjectId ? { projectId: linkProjectId, sheetId: linkSheetId, frame, ...(linkScale ? { scale: linkScale, ...keptLegacy() } : {}) } : null);
@@ -1053,7 +1058,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       const meta = sketches.find((sk) => sk.id === id);
       const { _link, ...geo } = data;
       skipDirty.current = true;
-      setModel({ ...blankModel(), wallStyle: "light", ...geo }); resetHistory();
+      setModel(withOrigin({ ...blankModel(), wallStyle: "light", ...geo }, geo, _link)); resetHistory();
       setLinkProjectId(_link?.projectId || null);
       setLinkSheetId(_link?.sheetId || null);
       setFrame(_link?.frame || null); setLinkScale(_link?.scale || null); setLegacyFrame(legacyFrameOf(_link));
@@ -1198,7 +1203,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       if (!data) { setNameGate(false); setSaveState("idle"); setPlanBusy(null); return; }
       const { _link, ...geo } = data;
       skipDirty.current = true;
-      const loaded = { ...blankModel(), wallStyle: "light", ...geo };
+      const loaded = withOrigin({ ...blankModel(), wallStyle: "light", ...geo }, geo, _link);
       setModel(loaded); resetHistory();
       openedModelRef.current = loaded;
       // Opened from a drawing: that drawing and sheet are the ones to update.
@@ -1228,6 +1233,10 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   // the drawing-area outline on the canvas and the Scale section.
   const sheetPlan = useMemo(() => sheetPlanOf(model, embedded || !!linkProjectId, joined.polys),
     [model, joined, frame, linkScale, embedded, linkProjectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Walls as they will print: the Wall thickness choice's weight at the plan's
+  // scale (lib/cad/printStyle), so Thin / Standard / Bold show here at once.
+  const drawStyle = useMemo(() => printStyle(model, sheetPlan.scale), [model.wallWeight, model.labelSize, sheetPlan.scale]); // eslint-disable-line react-hooks/exhaustive-deps
+  const drawJoined = useMemo(() => joinWalls(model.walls, drawStyle.tf), [model.walls, drawStyle]);
   const planEls = useMemo(() => {
     const g = [], c = planCentre(model.walls);
     if (layers.boundary && model.boundary) g.push(<polyline key="bnd" points={ptStr(model.boundary)} className="cadv-boundary" fill="none" strokeWidth={1.4} strokeDasharray="14 10" vectorEffect="non-scaling-stroke" />);
@@ -1236,10 +1245,13 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
         <rect x={rl.x} y={rl.y} width={rl.w} height={rl.h} fill="none" className="cadv-ink" strokeWidth={0.8} strokeDasharray="20 14" vectorEffect="non-scaling-stroke" opacity={0.6} />
         <text x={rl.x + rl.w / 2} y={rl.y + rl.h / 2} className="cadv-note" fontSize={150} textAnchor="middle" fontWeight={600}>{rl.ref}</text>
       </g>));
-    if (layers.walls) g.push(<WallsNode key="walls" joined={joined} solid={wallStyleOf(model) === "solid"} selId={sel && sel.kind === "wall" ? sel.id : null} />);
+    // Drawn at their printed weight (Wall thickness, at the plan's scale);
+    // snapping, dimensions and picking use the real walls (joined).
+    if (layers.walls) g.push(<WallsNode key="walls" joined={drawJoined} solid={wallStyleOf(model) === "solid"} selId={sel && sel.kind === "wall" ? sel.id : null} />);
     if (layers.openings) {
-      g.push(<g key="doors">{model.doors.map((d) => <DoorNode key={d.id} d={d} selected={sel && sel.kind === "door" && sel.id === d.id} />)}</g>);
-      g.push(<g key="wins">{model.windows.map((wn) => <WindowNode key={wn.id} wn={wn} side={openingSide(wn, c)} selected={sel && sel.kind === "window" && sel.id === wn.id} />)}</g>);
+      // Openings cut to the walls' drawn weight, as on the sent plan.
+      g.push(<g key="doors">{model.doors.map((d) => <DoorNode key={d.id} d={{ ...d, t: drawStyle.opening(d.t) }} selected={sel && sel.kind === "door" && sel.id === d.id} />)}</g>);
+      g.push(<g key="wins">{model.windows.map((wn) => <WindowNode key={wn.id} wn={{ ...wn, t: drawStyle.opening(wn.t) }} side={openingSide(wn, c)} selected={sel && sel.kind === "window" && sel.id === wn.id} />)}</g>);
     }
     if (layers.stairs && model.stairs) g.push(<StairNode key="stairs" s={model.stairs} />);
     if (layers.dims) g.push(<g key="dims">{model.dims.map((d) => <DimNode key={d.id} d={d} />)}</g>);
@@ -1276,7 +1288,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       g.push(<g key="tags">{tags}</g>);
     }
     return g;
-  }, [model, sel, layers, joined, spaces, sheetPlan.scale]);
+  }, [model, sel, layers, joined, drawJoined, drawStyle, spaces, sheetPlan.scale]);
 
   // Snap to walls markers (screen-constant): a diamond where a point lands on
   // a wall's side, a ring on a guide; each guide dashed from its tracking
@@ -1589,7 +1601,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
                   onChange={(v) => v !== wallWeightOf(model) && change((m) => ({ ...m, wallWeight: v }))}
                   options={["thin", "standard", "bold"].map((v) => ({ value: v, label: WALL_WEIGHT_NAMES[v] }))} />
                 <div className={`mt-1.5 ${PANEL_HELP}`}>
-                  Thinnest the walls print on A3: {WALL_WEIGHTS[wallWeightOf(model)].external} mm outside, {WALL_WEIGHTS[wallWeightOf(model)].internal} mm inside.
+                  Walls print {WALL_WEIGHTS[wallWeightOf(model)].external} mm thick outside, {WALL_WEIGHTS[wallWeightOf(model)].internal} mm inside, at any scale - as drawn here.
                 </div>
               </section>
               <section className="mb-5">
