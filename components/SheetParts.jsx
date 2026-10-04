@@ -2632,13 +2632,13 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
                       <td className="py-0.5 text-slate-400 tabular-nums text-[11px] align-middle">{ii + 1}</td>
                       <td className="py-0.5 pr-1"><input value={it.item} onChange={(e) => setItem(si, it.id, "item", e.target.value)} className={`${cell} text-[12px] font-medium text-slate-800`} placeholder="Item"/></td>
                       <td className="py-0.5 pr-1"><input value={it.spec} onChange={(e) => setItem(si, it.id, "spec", e.target.value)} className={`${cell} text-[11px] text-slate-500`} placeholder="Spec / notes"/></td>
-                      <td className="py-0.5 pr-1"><input value={it.qty} onChange={(e) => setItem(si, it.id, "qty", e.target.value)} inputMode="decimal"
+                      <td className="py-0.5 pr-1"><NumField value={it.qty} onChange={(v) => setItem(si, it.id, "qty", v)} keepBlank={isDrawingLinked(it)}
                         title={badTitle(it.qty) || (!isDrawingLinked(it) ? undefined : it.qtyManual ? "Typed quantity. Kept when the quote reopens; clear it to use the drawing count." : "Counted from the drawing")}
                         className={`${cell} text-[12px] text-right tabular-nums ${isDrawingLinked(it) && it.qtyManual ? "italic" : ""}${badCell(it.qty)}`} placeholder="—"/></td>
                       <td className="py-0.5 pr-1">
                         <div className="flex items-center justify-end gap-0.5">
                           <span className="text-slate-400 text-[11px]">£</span>
-                          <input value={it.rate} onChange={(e) => setItem(si, it.id, "rate", e.target.value)} inputMode="decimal" title={badTitle(it.rate)} className={`${cell} text-[12px] text-right tabular-nums${badCell(it.rate)}`} placeholder="0.00"/>
+                          <NumField value={it.rate} onChange={(v) => setItem(si, it.id, "rate", v)} title={badTitle(it.rate)} className={`${cell} text-[12px] text-right tabular-nums${badCell(it.rate)}`} placeholder="0.00"/>
                         </div>
                       </td>
                       <td className="py-0.5 text-right tabular-nums text-[12px] font-semibold text-slate-900 pr-1">{lineTotal(it) ? gbp(lineTotal(it)) : "\u2014"}</td>
@@ -2837,6 +2837,38 @@ export function MetaEditor({ meta, updateMeta, onSheetField, onClose }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/* A quote number cell (Qty, Unit rate). Focused on a 0, it is empty with 0
+ * as a grey placeholder, so typing starts fresh; any other value is selected
+ * on focus (click or iPad tap) so typing replaces it. Left empty, it becomes
+ * "0" - except keepBlank (a Qty counted from the drawing, where empty means
+ * "use the drawing count"). Untouched, the value is never rewritten, so
+ * totals and saved quotes don't change. */
+function NumField({ value, onChange, keepBlank = false, placeholder, ...rest }) {
+  const [zeroEdit, setZeroEdit] = useState(false); // showing "" for a 0
+  const touched = useRef(false), justFocused = useRef(false);
+  const isZero = (v) => { const p = parseNum(v); return !p.bad && p.value === 0 && String(v ?? "").trim() !== ""; };
+  return (
+    <input {...rest} inputMode="decimal"
+      value={zeroEdit ? "" : (value ?? "")}
+      placeholder={zeroEdit ? "0" : placeholder}
+      onFocus={(e) => {
+        touched.current = false;
+        if (isZero(value)) { setZeroEdit(true); return; }
+        // Select it all, after the tap / click has placed the caret (iOS needs the delay).
+        const el = e.target; justFocused.current = true;
+        requestAnimationFrame(() => { try { el.setSelectionRange(0, el.value.length); } catch { el.select(); } });
+      }}
+      onMouseUp={(e) => { if (justFocused.current) { justFocused.current = false; e.preventDefault(); } }}
+      onChange={(e) => { touched.current = true; setZeroEdit(false); onChange(e.target.value); }}
+      onBlur={() => {
+        justFocused.current = false;
+        if (zeroEdit) { setZeroEdit(false); return; }          // a 0, left as it was
+        if (touched.current && String(value ?? "").trim() === "" && !keepBlank) onChange("0");
+      }}
+    />
   );
 }
 
