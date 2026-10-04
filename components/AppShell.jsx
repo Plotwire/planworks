@@ -375,6 +375,16 @@ function AppGates({ children }) {
     if (prefs) setBoqPrefs(prefs);
   }, []);
 
+  // One BOQ preference (e.g. the last quote export choice), merged in and saved
+  // with the account's settings. Best effort: a failed save only means it
+  // isn't remembered next time.
+  const saveBoqPrefs = useCallback(async (patch) => {
+    const next = { ...(settingsRef.current.boqPrefs || {}), ...patch };
+    settingsRef.current = { ...settingsRef.current, boqPrefs: next };
+    setBoqPrefs(next);
+    try { await saveSettings(settingsRef.current); } catch (e) { console.warn("BOQ preference save failed:", e?.message); }
+  }, []);
+
   if (isPublic) {
     return (
       <AppCtx.Provider value={{ theme, toggleTheme, user: null }}>
@@ -464,7 +474,7 @@ function AppGates({ children }) {
       // Merged, not replaced: the profile wins per field, and any legacy line
       // or scheme logo it does not cover is carried through.
       titleBlock: mergeTitleBlocks(companyBlock, titleBlock) || DEFAULT_TITLEBLOCK, saveTitleBlock, refreshCompany,
-      boqTemplate, boqPrefs, saveBoqTemplate,
+      boqTemplate, boqPrefs, saveBoqTemplate, saveBoqPrefs,
       // Business information, for document headers: the company logo alone and
       // the profile's detail lines (name first).
       companyBrand: { logo: companyLogo, details: companyBlock?.details || [] },
