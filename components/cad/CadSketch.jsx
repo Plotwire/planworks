@@ -15,20 +15,28 @@ import {
   T_EXT, T_INT, DOOR_W, WIN_W, ptStr, wallStyleOf, hyp, segLen, snap, fmtMM,
   nearestWall, hitTest, joinWalls, pocheD, outlinePathD,
 } from "@/lib/cad/plan";
+import { findNode, endAt, moveNode, moveWall } from "@/lib/cad/edit";
+import { angled, placeOpeningClear, openingAxes, openingHost, slideOpening, planCentre, openingSide } from "@/lib/cad/openings";
+import { startRun, runEnd, retraces, afterWall } from "@/lib/cad/chain";
+import { isAuto, roomSpaces, areaAt, roomAt, onWall, spacesOf, spaceBoxAt } from "@/lib/cad/rooms";
+import { wallSnap } from "@/lib/cad/snap";
 import { listSketches, getSketchData, insertSketch, updateSketch, deleteSketch } from "@/lib/cad/sketchStore";
 import { insertProject, getProjectData, updateProjectRow } from "@/lib/db";
 import { uploadPlanImage, dataUrlToBlob } from "@/lib/planImages";
-import { computeFrame, renderModelToPng } from "@/lib/cad/sketchToImage";
+import { renderModelToPng } from "@/lib/cad/sketchToImage";
+import { SCALES, MARGIN_MM, PLAN_PX, scalePrefOf, scaleLabel, planSheetFrame, applyPlanToSheet, outsideNote, legacyFrameOf, sheetOriginFor, validOrigin } from "@/lib/cad/planScale";
+import { printStyle, labelSizeOf, LABEL_SIZE_NAMES, roomLabelLayout, wallWeightOf, WALL_WEIGHTS, WALL_WEIGHT_NAMES } from "@/lib/cad/printStyle";
 import { isTouchDevice } from "@/lib/touch";
 import {
   ChevronLeft, FolderOpen, FilePlus, Save, Send, Undo2, Redo2, SlidersHorizontal, Grid3x3, Magnet, Compass,
-  Maximize2, Trash2, Eye, EyeOff, BrickWall, DoorOpen, Tag as TagIcon, Type, MousePointer2, Hand, PencilRuler,
+  Maximize2, Trash2, Eye, EyeOff, BrickWall, DoorOpen, Tag as TagIcon, Type, MousePointer2, Hand, PencilRuler, Link2, Crosshair,
 } from "lucide-react";
 import {
   TopBarShell, TbGroup, TbButton, TbBrand, TbProjectPill, TbTrialSlot, TbMenu, TbMenuItem, TbPanelsItem, TbThemeItem,
   SidePanel, CollapsedPanel, PANEL_LABEL, PANEL_HELP, SectionLabel, ChoiceGroup, ToggleRow, ScheduleRows, PanelAction,
-  FloatingToolbar, ZoomControls, StatusBar, StatusCount, SheetTabs,
+  FloatingToolbar, ZoomControls, StatusBar, StatusCount, SheetTabs, TbShortcutsButton,
 } from "@/components/SheetParts";
+import { ShortcutsCard, ShortcutsTip, StatusHint, useOnceTip, TOUCH } from "@/components/Shortcuts";
 import { useApp } from "@/components/AppShell";
 import { TryPill, useTryUsage } from "@/components/TryMode";
 
@@ -38,7 +46,9 @@ import { TryPill, useTryUsage } from "@/components/TryMode";
 // smooth panning on a drawing.
 const PROMOTE = isTouchDevice() ? "auto" : "transform";
 
-const SCALE_MIN = 0.02, SCALE_MAX = 0.6;
+// Zoom limits (screen px per mm). Out far enough to see a big plan's whole A3
+// drawing-area outline (54 m across for a 36.5 m house at 1:200).
+const SCALE_MIN = 0.005, SCALE_MAX = 0.6;
 
 // ------------------------- node renderers -------------------------
 // Every wall drawn as one joined solid: a single poche path, then the outline
@@ -59,7 +69,20 @@ function WallsNode({ joined, selId, solid }) {
   );
 }
 
+// In an angled wall a door / window is its 'h' form drawn about its centre and
+// turned with the wall (lib/cad/openings); hinge and fold are in that frame.
+const turnedAt = (o) => `translate(${o.x} ${o.y}) rotate(${o.ang})`;
+
+// Is (px,py) on door / window o itself: its width along the wall and the
+// wall's thickness across, + mg (mm)?
+function onOpening(o, px, py, mg) {
+  const a = angled(o) ? o.ang * Math.PI / 180 : o.dir === "v" ? Math.PI / 2 : 0, c = Math.cos(a), s = Math.sin(a);
+  const dx = px - o.x, dy = py - o.y;
+  return Math.abs(dx * c + dy * s) <= o.w / 2 + mg && Math.abs(dy * c - dx * s) <= (o.t || T_EXT) / 2 + mg;
+}
+
 function DoorNode({ d, selected }) {
+  if (angled(d)) return <g transform={turnedAt(d)}><DoorNode d={{ ...d, x: 0, y: 0, dir: "h", ang: undefined }} selected={selected} /></g>;
   const { x, y, w, t } = d;
   const ink = selected ? "cadv-sel" : "cadv-ink";
   const els = [];
@@ -83,7 +106,14 @@ function DoorNode({ d, selected }) {
   return <g>{els}</g>;
 }
 
-function WindowNode({ wn, selected }) {
+// side (angled only, see openingSide): which side of the wall the escape label runs along.
+function WindowNode({ wn, selected, side = 1 }) {
+  if (angled(wn)) return (
+    <g transform={turnedAt(wn)}>
+      <WindowNode wn={{ ...wn, x: 0, y: 0, dir: "h", ang: undefined, escape: false }} selected={selected} />
+      {wn.escape ? <text x={0} y={side * 620} className="cadv-note" fontSize={150} textAnchor="middle">ESCAPE WINDOW</text> : null}
+    </g>
+  );
   const { x, y, w, t } = wn, g6 = t / 6, els = [];
   const ink = selected ? "cadv-sel" : "cadv-ink";
   if (wn.dir === "h") {
@@ -151,6 +181,26 @@ function Tag({ refTxt, x, y }) {
   );
 }
 
+// Inspector text field: commits on Enter or on leaving it, Esc puts it back;
+// left empty it keeps the old value. Only a real edit saves: stray spaces
+// round an old name are left as they are.
+function NameField({ value, onCommit, label }) {
+  const cur = value == null ? "" : String(value);
+  const [v, setV] = useState(cur);
+  const escRef = useRef(false);
+  useEffect(() => { setV(cur); }, [cur]);
+  const done = () => {
+    const t = v.trim();
+    if (!escRef.current && t && t !== cur.trim()) onCommit(t); else setV(cur);
+    escRef.current = false;
+  };
+  return (
+    <input type="text" aria-label={label} value={v} onChange={(e) => setV(e.target.value)} onBlur={done}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === "Escape") { escRef.current = e.key === "Escape"; e.currentTarget.blur(); } }}
+      className="w-full h-9 px-3 text-[13px] font-medium bg-white dark:bg-[#0E141B] rounded-lg ring-1 ring-slate-300 dark:ring-[#2A3947] focus:ring-[#3FB7C9] focus:outline-none text-slate-900 dark:text-slate-100 select-text" />
+  );
+}
+
 // Plan glyphs for the toolbar, drawn like lucide icons (24 grid, currentColor)
 // so they sit in the shared TbButton next to lucide ones.
 const glyph = (body) => function PlanGlyph({ size = 15, className = "" }) {
@@ -166,13 +216,15 @@ const DimIcon = glyph(<g><path d="M4 12h16M4 8v8M20 8v8" /><path d="M7 10l-3 2 3
 // Draw tools in the top bar (Select and Pan float on the canvas, as in the
 // editor). Walls are one button; External / Internal is chosen beside the
 // canvas while it is active.
+// kbd: the key (see the keyboard handler), badged on the button; Wall's
+// tooltip names both of its keys.
 const DRAW_TOOLS = [
-  { id: "wall", icon: BrickWall, label: "Wall", key: "E / I" },
-  { id: "door", icon: DoorOpen, label: "Door", key: "D" },
-  { id: "window", icon: WindowIcon, label: "Window", key: "W" },
-  { id: "dim", icon: DimIcon, label: "Dimension", key: "M" },
-  { id: "room", icon: TagIcon, label: "Room label", key: "R" },
-  { id: "text", icon: Type, label: "Note", key: "T" },
+  { id: "wall", icon: BrickWall, label: "Wall", kbd: "e", kbdTip: "E external, I internal" },
+  { id: "door", icon: DoorOpen, label: "Door", kbd: "d" },
+  { id: "window", icon: WindowIcon, label: "Window", kbd: "w" },
+  { id: "dim", icon: DimIcon, label: "Dimension", kbd: "m" },
+  { id: "room", icon: TagIcon, label: "Room label", kbd: "r" },
+  { id: "text", icon: Type, label: "Note", kbd: "t" },
 ];
 const CANVAS_TOOLS = [
   ["select", { icon: MousePointer2, label: "Select", hint: "V" }],
@@ -189,12 +241,81 @@ const LAYER_LIST = [
   ["boundary", "Site boundary"],
   ["grid", "Grid"],
 ];
+// The layer each selectable kind is on: hiding it drops that selection, so
+// nothing hidden can be edited or deleted.
+const SEL_LAYER = { wall: "walls", door: "openings", window: "openings", room: "rooms" };
 
+// The Scale section's warning (the plan would be cut off, or is too big for A3).
+const SCALE_WARN = "mt-2 rounded-lg px-2.5 py-2 text-[12px] leading-snug font-medium bg-red-50 text-red-800 ring-1 ring-red-200 dark:bg-red-500/10 dark:text-red-200 dark:ring-red-400/30";
 const SAVE_LABEL = { idle: "NOT SAVED", unsaved: "UNSAVED CHANGES", saving: "SAVING…", saved: "SAVED", error: "SAVE FAILED" };
+// The snap a wall point is on (Snap to walls), shown by the cursor.
+const SNAP_LABEL = { end: "END", side: "SIDE", guide: "GUIDE" };
 
 // The editor's grid (components/SheetParts.jsx).
 const GRID_LINE = "rgba(37,99,235,0.18)";
 const GRID_MM = 500;
+
+// The shortcuts card (components/Shortcuts.jsx, "?" or the Shortcuts button):
+// every key the keyboard handler in CadSketch below takes, and the touch
+// gestures its canvas handles. Keep them in step with the handlers.
+const SHORTCUTS = [
+  { title: "Draw", items: [
+    ["External wall", ["e"]],
+    ["Internal wall", ["i"]],
+    ["Door", ["d"]],
+    ["Window", ["w"]],
+    ["Dimension", ["m"]],
+    ["Room label", ["r"]],
+    ["Note", ["t"]],
+    ["Type a wall length (mm) while drawing a wall", ["digits"]],
+    ["Place the wall at the typed length", ["enter"]],
+    ["Correct the typed length", ["backspace"]],
+    ["Cancel the wall or dimension in progress (ends a chained run)", ["esc"]],
+  ] },
+  { title: "Edit", items: [
+    ["Select tool", ["v"]],
+    ["Delete the selected wall, door, window or room label", ["del", "backspace"]],
+    ["Put back what you are dragging", ["esc"]],
+    ["Clear the selection, back to Select", ["esc"]],
+    ["Undo", ["mod+z"]],
+    ["Redo", ["mod+shift+z", "mod+y"]],
+    ["Save", ["mod+s"]],
+  ] },
+  { title: "View", items: [
+    ["Keyboard shortcuts (this card)", ["?"]],
+    ["Close this card", ["esc"]],
+  ] },
+  { title: "Navigate", items: [
+    ["Pan tool", ["h"]],
+    ["Pan with any tool", ["shift+drag", "mdrag"]],
+    ["Zoom in or out at the pointer", ["wheel"]],
+  ] },
+];
+const TOUCH_GESTURES = [
+  { title: "Draw", items: [
+    ["Pick a tool", "Tap it in the top bar"],
+    ["Wall", "Tap the start, then the end"],
+    ["Door or window", "Tap on a wall"],
+    ["Dimension", "Tap the two points"],
+    ["Room label or note", "Tap where it goes"],
+    ["End a run of chained walls", "Tap Finish run in the inspector"],
+  ] },
+  { title: "Edit", items: [
+    ["Select", "With Select, tap a wall, door, window or label"],
+    ["Move a wall, corner, door, window or label", "With Select, drag it with one finger"],
+    ["Delete", "Tap Delete in the inspector"],
+    ["Undo or redo", "Tap the arrows in the top bar"],
+    ["Rename the sketch", "Tap its name in the top bar, or double-tap its tab"],
+  ] },
+  { title: "View", items: [
+    ["Zoom", "Pinch with two fingers"],
+    ["Zoom in, out or to fit", "The buttons at the top right"],
+  ] },
+  { title: "Navigate", items: [
+    ["Pan", "Drag with two fingers"],
+    ["Pan with one finger", "Pick the hand tool, then drag"],
+  ] },
+];
 
 // ------------------------- main screen -------------------------
 export default function CadSketch({ title = "Maple House \u2014 First floor", ref: codeRef = "PW-0247", openSketchId = null, linkProject = null, linkSheet = null, linkName = null, embedded = false, onClose = null, onApplyPlan = null }) {
@@ -210,17 +331,30 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const pinchActiveRef = useRef(false);
   const livePinchRef = useRef(null);
   const suppressClickRef = useRef(false);
+  // Select tool: a wall end / whole wall / door or window being dragged (see armDrag).
+  const dragRef = useRef(null);
+  const [dragUi, setDragUi] = useState(null);
+  // Door / window tool: where a click would put it (placeOpeningClear), for the preview.
+  const [openPrev, setOpenPrev] = useState(null);
 
   // New sketches start with Solid walls; saved ones keep what they have (see wallStyleOf).
-  const [model, setModel] = useState(() => ({ EXTENT: { w: 8400, h: 8800, margin: 2600 }, walls: [], doors: [], windows: [], dims: [], rooms: [], notes: [], boundary: null, rooflights: [], stairs: null, wallStyle: "solid" }));
+  // The A3 outline's corner (sheetOrigin) is fixed from the start: where you
+  // draw in it is where it goes on the sheet (lib/cad/planScale).
+  const [model, setModel] = useState(() => ({ EXTENT: { w: 8400, h: 8800, margin: 2600 }, walls: [], doors: [], windows: [], dims: [], rooms: [], notes: [], boundary: null, rooflights: [], stairs: null, wallStyle: "solid", sheetOrigin: sheetOriginFor({ walls: [] }) }));
   const [tool, setTool] = useState("select");
   const [view, setView] = useState({ s: 0.08, tx: 200, ty: 200 });
   const [draftPts, setDraftPts] = useState([]);
+  // Exact wall length typed while a wall is in progress (digits, mm).
+  const [typedLen, setTypedLen] = useState("");
+  // The run of walls the wall in progress belongs to (lib/cad/chain): its
+  // first point and how many walls it has. Set by every wall's first click,
+  // so it is only read while draftPts has a point.
+  const [run, setRun] = useState(null);
   const [cur, setCur] = useState({ x: 0, y: 0, sx: -99, sy: -99, on: false });
   const [sel, setSel] = useState(null);
   const [dimP1, setDimP1] = useState(null);
   const [settings, setSettings] = useState({ grid: 100, doorW: DOOR_W, winW: WIN_W });
-  const [flags, setFlags] = useState({ ortho: true, gridSnap: true });
+  const [flags, setFlags] = useState({ ortho: true, gridSnap: true, chain: false, wallSnap: true });
   const [layers, setLayers] = useState({ walls: true, openings: true, dims: true, rooms: true, stairs: true, boundary: true, grid: true });
   const [size, setSize] = useState({ w: 900, h: 600 });
   const [sketchId, setSketchId] = useState(null);
@@ -231,7 +365,13 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const skipDirty = useRef(true);
   const [linkProjectId, setLinkProjectId] = useState(linkProject || null);
   const [linkSheetId, setLinkSheetId] = useState(linkSheet || null);
+  // The plan frame (mm) and scale the plan was last sent with (_link): null
+  // scale = sent before scales (lib/cad/planScale converts it on the next send).
   const [frame, setFrame] = useState(null);
+  const [linkScale, setLinkScale] = useState(null);
+  // The frame plans were sent at before scales (legacyFrameOf), kept once the
+  // link moves on, for a Save As copy of an older drawing that still has one.
+  const [legacyFrame, setLegacyFrame] = useState(null);
   const [planModal, setPlanModal] = useState(false);
   const [planBusy, setPlanBusy] = useState(null);
   const [nameGate, setNameGate] = useState(!(openSketchId || linkProject || embedded));
@@ -240,6 +380,10 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const [savedFlash, setSavedFlash] = useState(false);
   const [panelsHidden, setPanelsHidden] = useState(false);
   const [inspectorHidden, setInspectorHidden] = useState(false);
+  // The shortcuts card, and the first-run tip pointing to it (once per device).
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [tipShow, dismissTip] = useOnceTip("plotwire.sketch.shortcutsTip");
+  const openShortcuts = () => { setShortcutsOpen(true); dismissTip(); };
   const doSaveRef = useRef(null);
 
   viewRef.current = view;
@@ -253,15 +397,20 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   // sketch clears the history.
   const modelRef = useRef(model);
   modelRef.current = model;
+  const shownRef = useRef(model); // the model last rendered (modelRef runs ahead of it mid-drag)
+  shownRef.current = model;
   const histRef = useRef({ past: [], future: [] });
   const openedModelRef = useRef(model); // the model as opened, for Back to drawing
   const [, setHistVer] = useState(0);
+  const pushPast = (m) => {
+    const h = histRef.current;
+    h.past.push(m); if (h.past.length > 200) h.past.shift();
+    h.future = [];
+  };
   const change = (fn) => {
     const cur = modelRef.current, next = fn(cur);
     if (next === cur) return;
-    const h = histRef.current;
-    h.past.push(cur); if (h.past.length > 200) h.past.shift();
-    h.future = [];
+    pushPast(cur);
     modelRef.current = next; setModel(next); setHistVer((v) => v + 1);
   };
   const step = (from, to) => {
@@ -282,14 +431,18 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     const s = Math.min((sz.w - pad * 2) / planW, (sz.h - pad * 2) / planH);
     setView({ s, tx: (sz.w - planW * s) / 2 - planX0 * s, ty: (sz.h - planH * s) / 2 - planY0 * s });
   }, [size]);
-  const DEFAULT_FRAME = { x: -2300, y: -2300, w: 11800, h: 11800 };
+  // The view fits the A3 drawing area at the plan's scale (the dashed outline),
+  // so the outline and its scale are in sight from the start - an empty
+  // sketch opens on the 1:50 sheet.
+  const sheetViewOf = (m) => planSheetFrame(m, { scalePref: scalePrefOf(m) }).frame;
+  const DEFAULT_FRAME = sheetViewOf({ walls: [] });
   const fitFrame = useCallback((frame, sz) => {
     sz = sz || size;
     const pad = 90;
     const s = Math.max(SCALE_MIN, Math.min(SCALE_MAX, Math.min((sz.w - pad * 2) / frame.w, (sz.h - pad * 2) / frame.h)));
     setView({ s, tx: sz.w / 2 - (frame.x + frame.w / 2) * s, ty: sz.h / 2 - (frame.y + frame.h / 2) * s });
   }, [size]);
-  const fit = useCallback((sz) => fitFrame((model.walls && model.walls.length) ? computeFrame(model, 900) : DEFAULT_FRAME, sz), [fitFrame, model]);
+  const fit = useCallback((sz) => fitFrame(sheetViewOf(model), sz), [fitFrame, model]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -301,10 +454,20 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     return () => ro.disconnect();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // keyboard shortcuts
+  // keyboard shortcuts (listed for the shortcuts card in SHORTCUTS, above)
   useEffect(() => {
     const onKey = (e) => {
       if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
+      // A wall drag (or a press that may become one) owns the keyboard: Esc
+      // puts the walls back, nothing else applies until release.
+      if (dragRef.current) { if (e.key === "Escape") { e.preventDefault(); cancelDrag(); } return; }
+      // "?" opens the shortcuts card (not over a dialog). While it is open the
+      // card takes every key first (components/Shortcuts.jsx), so none of
+      // these reach here.
+      if (e.key === "?" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (!e.repeat && !e.target.isContentEditable && !nameGate && !renameOpen && !planModal && !planBusy) { e.preventDefault(); openShortcuts(); }
+        return;
+      }
       const k = e.key.toLowerCase();
       if (e.metaKey || e.ctrlKey) {
         if (k === "z" && !e.shiftKey) { e.preventDefault(); undo(); }
@@ -314,6 +477,13 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       }
       if (e.altKey) return;
       const map = { v: "select", e: "ext", i: "int", d: "door", w: "window", m: "dim", r: "room", t: "text", h: "pan" };
+      // Typed wall length: digits build the number, Backspace edits it, Enter
+      // places the wall that long towards the mouse.
+      if (isWallTool && draftPts.length) {
+        if (/^[0-9]$/.test(e.key)) { e.preventDefault(); setTypedLen((t) => (t.length < 6 ? (t === "0" ? "" : t) + e.key : t)); return; }
+        if (e.key === "Backspace" && typedLen) { e.preventDefault(); setTypedLen((t) => t.slice(0, -1)); return; }
+        if (e.key === "Enter") { e.preventDefault(); placeTypedWall(); return; }
+      }
       if (map[k]) { setTool(map[k]); setDraftPts([]); setDimP1(null); }
       else if (e.key === "Escape") {
         // First Esc cancels the item in progress; with nothing in progress it
@@ -325,7 +495,13 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [sel, draftPts, dimP1]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sel, draftPts, dimP1, typedLen, cur, flags, tool, run, nameGate, renameOpen, planModal, planBusy]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A typed length belongs to the wall in progress; it goes when that does.
+  useEffect(() => { if (!draftPts.length) setTypedLen(""); }, [draftPts]);
+  // Snap to walls markers belong to the pointer's last move: a click, Esc, a
+  // tool change or an edit clears them until the next move works them out again.
+  useEffect(() => { setCur((c) => (c.snap || c.guides ? { ...c, snap: null, guides: null } : c)); }, [draftPts, tool, model.walls]);
 
   // wheel zoom toward cursor (native, non-passive)
   useEffect(() => {
@@ -451,22 +627,30 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   };
   // Snap to an existing wall end within 12px on screen. Wins over angle lock
   // and grid, so walls (diagonal ones included) can always meet exactly.
-  const endpointSnap = (raw) => {
+  // skip: "id:end" keys of ends to ignore (the ones being dragged).
+  const endpointSnap = (raw, skip = null, walls = model.walls) => {
     let best = null, bd = 12 / viewRef.current.s;
-    for (const w of model.walls) for (const [x, y] of [[w.x1, w.y1], [w.x2, w.y2]]) {
+    for (const w of walls) for (const [x, y, k] of [[w.x1, w.y1, 0], [w.x2, w.y2, 1]]) {
+      if (skip && skip.has(w.id + ":" + k)) continue;
       const d = hyp(raw.x - x, raw.y - y);
       if (d < bd) { bd = d; best = { x, y, ep: true }; }
     }
     return best;
   };
-  const wallPoint = (raw, from) => endpointSnap(raw) || snapPt(raw, from);
-  const snapPt = (raw, from) => {
+  // Snap to walls (lib/cad/snap): after a wall end, a wall's side or an
+  // alignment guide, before angle lock and grid. Off: exactly as before.
+  // half: the drawn wall's half thickness, so a side point leaves it room.
+  const snapWalls = (raw, from, o = null, walls = model.walls) => wallSnap(walls, raw, { scale: viewRef.current.s, from, lock: flags.ortho && !!from, grid: flags.gridSnap ? settings.grid : 0, half: (tool === "ext" ? T_EXT : T_INT) / 2, ...o });
+  const wallPoint = (raw, from) => endpointSnap(raw) || (flags.wallSnap && snapWalls(raw, from)) || snapPt(raw, from);
+  // proj (dragging a corner): the pointer's distance along the locked
+  // direction rather than its straight-line distance from `from`.
+  const snapPt = (raw, from, proj = false) => {
     let x = raw.x, y = raw.y;
     if (flags.ortho && from) {
       const dx = x - from.x, dy = y - from.y;
       const step = Math.PI / 4;
       const ang = Math.round(Math.atan2(dy, dx) / step) * step;
-      let dist = Math.hypot(dx, dy);
+      let dist = proj ? Math.max(0, dx * Math.cos(ang) + dy * Math.sin(ang)) : Math.hypot(dx, dy);
       if (flags.gridSnap) dist = Math.round(dist / settings.grid) * settings.grid;
       return { x: from.x + Math.cos(ang) * dist, y: from.y + Math.sin(ang) * dist };
     }
@@ -477,26 +661,212 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const isWallTool = tool === "ext" || tool === "int";
   const drawingTool = tool !== "select" && tool !== "pan";
 
+  // ---- Select tool: drag a wall end (the whole corner), a whole wall, a
+  // door / window along its wall, or a room label ----
+  // What a press or a click takes (pickAt): a wall end (10px), else a door /
+  // window or a room label, else a wall. Where a label and an opening's pick
+  // circle overlap, the label wins unless the point is on the opening itself
+  // (in its wall, + 6px). A label's text gives way to a wall under the press
+  // (in it, + 4px); its point (300mm round) never does. Nothing on a hidden
+  // layer is taken: the wall under a hidden opening or label is. A press arms
+  // a drag; it starts once the pointer has moved 4px (10px for touch / pen),
+  // so a press without moving is still a click. Each move previews from the
+  // pre-drag model (lib/cad/edit, lib/cad/openings); release commits it as ONE
+  // undo step. Esc, a pinch or a cancelled pointer puts it back.
+  const r3 = (v) => Math.round(v * 1000) / 1000;
+  const pickAt = (m, raw, selId = null) => {
+    const end = layers.walls && endAt(m.walls, raw.x, raw.y, 10 / viewRef.current.s, selId);
+    if (end) return { end, op: null, ri: -1 };
+    let op = layers.openings ? openingAt(raw.x, raw.y) : null, ri = layers.rooms ? roomAt(m.rooms, raw.x, raw.y) : -1;
+    if (op && ri >= 0) {
+      const o = (op.kind === "door" ? m.doors : m.windows).find((x) => x.id === op.id);
+      if (o && onOpening(o, raw.x, raw.y, 6 / viewRef.current.s)) ri = -1; else op = null;
+    }
+    if (ri >= 0 && layers.walls && (Math.abs(raw.x - m.rooms[ri].x) > 300 || Math.abs(raw.y - m.rooms[ri].y) > 300)) {
+      const nw = nearestWall(m.walls, raw.x, raw.y);
+      if (nw && nw.dist <= (nw.seg.type === "external" ? T_EXT : T_INT) / 2 + 4 / viewRef.current.s) ri = -1;
+    }
+    return { end: null, op, ri };
+  };
+  // The ends at a picked corner, their walls, and the wall a press there takes
+  // (the selected one if it's there, else the nearest): a click selects it, a
+  // drag moves the corner from it.
+  const nodeAt = (ws, hit, raw, selId) => {
+    const ends = findNode(ws, hit.x, hit.y), mine = ws.filter((w) => ends.some((n) => n.id === w.id));
+    return { ends, mine, g: mine.find((w) => w.id === selId) || nearestWall(mine, raw.x, raw.y).seg };
+  };
+  const armDrag = (e, raw) => {
+    const base = modelRef.current, ws = base.walls;
+    const selId = sel && sel.kind === "wall" ? sel.id : null;
+    const { end: hit, op, ri } = pickAt(base, raw, selId);
+    let d = null;
+    if (hit) {
+      // Every end at that corner moves. Angle lock works from the far end of
+      // one of the walls there (see dragMove): fars lists them, the grabbed
+      // wall (nodeAt) first.
+      const { ends, mine, g } = nodeAt(ws, hit, raw, selId);
+      const fars = [g, ...mine.filter((w) => w !== g)].map((w) => (ends.find((n) => n.id === w.id).end === 0 ? { id: w.id, x: w.x2, y: w.y2 } : { id: w.id, x: w.x1, y: w.y1 }));
+      // No end snap to the corner itself, nor to those far corners (that would
+      // shrink a wall to nothing, which is never allowed).
+      const skip = new Set([...ends, ...fars.flatMap((f) => findNode(ws, f.x, f.y))].map((n) => n.id + ":" + n.end));
+      // Snap to walls: no guides from the corner's own ends, no sides of its own
+      // walls; a side point leaves room for the thickest wall there.
+      const own = { skipEnds: new Set(ends.map((n) => n.id + ":" + n.end)), skipWalls: new Set(mine.map((w) => w.id)),
+        half: (mine.some((w) => w.type === "external") ? T_EXT : T_INT) / 2 };
+      d = { kind: "node", id: g.id, ends, home: { x: hit.x, y: hit.y }, skip, fars, own };
+    } else if (op) {
+      // A door / window slides along the wall it sits in now, never onto another.
+      const o = (op.kind === "door" ? base.doors : base.windows).find((x) => x.id === op.id), host = o && openingHost(ws, o);
+      if (host) d = { kind: "opening", okind: op.kind, id: op.id, src: o, host };
+    } else if (ri >= 0) {
+      d = { kind: "room", index: ri, src: base.rooms[ri] };
+    } else if (layers.walls) {
+      const h = hitTest(ws, raw.x, raw.y), w = h && ws.find((o) => o.id === h.id);
+      if (w) { const L = segLen(w) || 1; d = { kind: "wall", id: w.id, src: w, n: [-(w.y2 - w.y1) / L, (w.x2 - w.x1) / L] }; }
+    }
+    if (!d) return;
+    // Capture now, so the release (or a cancel) always comes back here.
+    try { svgRef.current.setPointerCapture(e.pointerId); } catch {}
+    dragRef.current = { ...d, base, pid: e.pointerId, mx: e.clientX, my: e.clientY, w0: raw, moved: false, slop: e.pointerType === "mouse" ? 4 : 10 };
+  };
+  const dragMove = (e) => {
+    const d = dragRef.current;
+    if (!d.moved) {
+      if (Math.hypot(e.clientX - d.mx, e.clientY - d.my) <= d.slop) return;
+      // The model changed under the press (an edit saved since): drop it
+      // rather than drag a stale copy over that edit.
+      if (modelRef.current !== d.base) { dragRef.current = null; return; }
+      d.moved = true; d.save = saveState;
+      setSel(d.kind === "room" ? { kind: "room", index: d.index } : { kind: d.okind || "wall", id: d.id });
+      setDragUi({ kind: d.kind, id: d.id, index: d.index, off: 0, gap: 0 });
+    }
+    const raw = toWorld(e.clientX, e.clientY);
+    // Each preview is worked out from the pre-drag model; the last one shown
+    // (modelRef) lets lib/cad/edit judge the step from there.
+    let next, ui, at;
+    if (d.kind === "node") {
+      // Back over its own spot puts it back exactly; another wall end wins
+      // next; else angle lock along whichever wall at the corner the pointer
+      // fits best (the grabbed one on a tie), then grid. Snap to walls comes
+      // in before angle lock: a wall's side or a guide, on that wall's locked
+      // line when angles are locked.
+      const home = hyp(raw.x - d.home.x, raw.y - d.home.y) <= 12 / viewRef.current.s;
+      const ep = !home && endpointSnap(raw, d.skip, d.base.walls);
+      let p = home ? d.home : ep, f = d.fars[0];
+      if (!p) for (const o of flags.ortho ? d.fars : [f]) {
+        const q = snapPt(raw, o, true);
+        if (!p || hyp(q.x - raw.x, q.y - raw.y) < hyp(p.x - raw.x, p.y - raw.y) - 1e-6) { p = q; f = o; }
+      }
+      const sw = !home && !ep && flags.wallSnap ? snapWalls(raw, f, { lock: flags.ortho, proj: true, ...d.own }, d.base.walls) : null;
+      if (sw) p = sw;
+      at = home || ep || sw ? { x: p.x, y: p.y } : { x: Math.abs(p.x - f.x) < 1e-6 ? f.x : r3(p.x), y: Math.abs(p.y - f.y) < 1e-6 ? f.y : r3(p.y) };
+      next = home ? d.base : moveNode(d.base, d.ends, at, modelRef.current);
+      ui = { kind: "node", id: f.id, ep: !!ep, snap: ep ? "end" : sw ? sw.kind : null, guides: sw ? sw.guides : null, x: at.x, y: at.y };
+    } else if (d.kind === "opening") {
+      // Moves along its wall as far as the pointer has (wherever it was
+      // grabbed), kept inside the wall; Snap to grid steps its gap to the
+      // nearer wall end.
+      // Kept clear of the other openings in the wall: edge to edge near one,
+      // and where it would overlap with no room beside, it stays put (red).
+      const r = slideOpening(d.base, d.okind, d.id, d.host, d.src.x + raw.x - d.w0.x, d.src.y + raw.y - d.w0.y, flags.gridSnap ? settings.grid : 0);
+      next = r.blocked ? null : r.model;
+      ui = { kind: "opening", okind: d.okind, id: d.id, gap: r.gap, snapped: r.snapped, blocked: r.blocked, edge: r.edge };
+      at = raw;
+    } else if (d.kind === "room") {
+      // By whole mm, as a label is placed (no grid); its area follows live.
+      const dx = Math.round(raw.x - d.w0.x), dy = Math.round(raw.y - d.w0.y);
+      next = !dx && !dy ? d.base : { ...d.base, rooms: d.base.rooms.map((r, i) => (i === d.index ? { ...r, x: d.src.x + dx, y: d.src.y + dy } : r)) };
+      ui = { kind: "room", index: d.index };
+      at = raw;
+    } else {
+      // Lock angles: only square to the wall, so its neighbours keep their run.
+      let dx = raw.x - d.w0.x, dy = raw.y - d.w0.y, off = null;
+      if (flags.ortho) {
+        off = dx * d.n[0] + dy * d.n[1];
+        if (flags.gridSnap) off = snap(off, settings.grid);
+        dx = d.n[0] * off; dy = d.n[1] * off;
+      } else if (flags.gridSnap) { dx = snap(dx, settings.grid); dy = snap(dy, settings.grid); }
+      dx = r3(dx); dy = r3(dy);
+      next = moveWall(d.base, d.id, dx, dy, modelRef.current);
+      // How far the wall really went (its ends may slide along walls they end on).
+      const a = d.src, b = next && next.walls.find((o) => o.id === d.id);
+      const mx = b ? (b.x1 + b.x2 - a.x1 - a.x2) / 2 : 0, my = b ? (b.y1 + b.y2 - a.y1 - a.y2) / 2 : 0;
+      ui = { kind: "wall", id: d.id, off: flags.ortho ? Math.abs(mx * d.n[0] + my * d.n[1]) : hyp(mx, my) };
+      at = raw;
+    }
+    if (next) { modelRef.current = next; setModel(next); setDragUi(ui); } // null: not allowed (see lib/cad/edit), keep the last good one
+    else if (ui && ui.kind === "opening") setDragUi(ui); // blocked: stays, shown red
+    setCur({ x: at.x, y: at.y, rx: raw.x, ry: raw.y, sx: e.clientX, sy: e.clientY, on: true, ep: false });
+  };
+  // Back to the pre-drag model and save state: skip the "unsaved" mark if a
+  // preview was shown, and never restore a stale "Saving…".
+  const putBack = (d) => {
+    skipDirty.current = shownRef.current !== d.base;
+    if (modelRef.current !== d.base) { modelRef.current = d.base; setModel(d.base); }
+    setSaveState((st) => (st === "unsaved" && d.save !== "saving" ? d.save : st));
+  };
+  const endDrag = () => {
+    const d = dragRef.current;
+    dragRef.current = null;
+    if (!d || !d.moved) return false;
+    setDragUi(null);
+    if (modelRef.current !== d.base) { pushPast(d.base); setHistVer((v) => v + 1); }
+    else putBack(d); // dropped where it started: nothing to undo or save
+    return true;
+  };
+  const cancelDrag = () => {
+    const d = dragRef.current;
+    dragRef.current = null;
+    if (!d || !d.moved) return;
+    setDragUi(null); suppressClickRef.current = true;
+    putBack(d);
+  };
+
   const handleMove = (e) => {
-    if (pinchActiveRef.current) return;
+    if (pinchActiveRef.current) { if (dragRef.current) cancelDrag(); return; }
     if (panRef.current) {
       setView({ s: viewRef.current.s, tx: panRef.current.tx + (e.clientX - panRef.current.mx), ty: panRef.current.ty + (e.clientY - panRef.current.my) });
       return;
     }
+    if (dragRef.current) {
+      if (e.pointerId !== dragRef.current.pid) return;
+      if (e.buttons) { dragMove(e); return; }
+      endDrag(); // the release was missed (outside the window): keep what was shown
+    }
     const raw = toWorld(e.clientX, e.clientY);
     const from = draftPts.length ? draftPts[draftPts.length - 1] : null;
     const p = isWallTool ? wallPoint(raw, from) : (flags.gridSnap ? { x: snap(raw.x, settings.grid), y: snap(raw.y, settings.grid) } : raw);
-    setCur({ x: p.x, y: p.y, sx: e.clientX, sy: e.clientY, on: true, ep: !!p.ep });
+    const pk = tool === "select" ? pickAt(model, raw) : null, hov = !!pk && (!!pk.end || pk.ri >= 0); // a wall end or a room label
+    if (tool === "door" || tool === "window") {
+      const nw = model.walls.length ? nearestWall(model.walls, raw.x, raw.y) : null;
+      const ow = tool === "door" ? settings.doorW : settings.winW;
+      setOpenPrev(nw ? { ...placeOpeningClear(model, nw.seg, raw.x, raw.y, ow), w: ow, t: nw.seg.type === "external" ? T_EXT : T_INT } : null);
+    } else if (openPrev) setOpenPrev(null);
+    setCur({ x: p.x, y: p.y, rx: raw.x, ry: raw.y, sx: e.clientX, sy: e.clientY, on: true, ep: !!p.ep, snap: p.ep ? "end" : p.kind || null, guides: p.guides || null, hov });
   };
   const handleDown = (e) => {
-    if (pinchActiveRef.current) return;
+    if (pinchActiveRef.current) { cancelDrag(); return; }
     suppressClickRef.current = false;
     if (tool === "pan" || e.button === 1 || e.shiftKey) {
       panRef.current = { mx: e.clientX, my: e.clientY, tx: view.tx, ty: view.ty };
       e.preventDefault();
+      return;
+    }
+    if (tool === "select" && e.button === 0 && !dragRef.current) {
+      // An Inspector field being edited saves as it loses focus (via change()):
+      // blur it now, so the press starts from the edited model, not on the
+      // mousedown that follows.
+      const ae = document.activeElement;
+      if (ae && /^(INPUT|TEXTAREA)$/.test(ae.tagName)) ae.blur();
+      armDrag(e, toWorld(e.clientX, e.clientY));
     }
   };
-  const handleUp = () => { panRef.current = null; };
+  // After a real drag the click that follows must not change the selection.
+  const handleUp = (e) => {
+    panRef.current = null;
+    if (dragRef.current && e.pointerId === dragRef.current.pid && endDrag()) suppressClickRef.current = true;
+  };
+  const handleCancel = (e) => { panRef.current = null; if (dragRef.current && e.pointerId === dragRef.current.pid) cancelDrag(); };
 
   const commitWallSeg = (a, b) => {
     if (a.x === b.x && a.y === b.y) return;
@@ -505,8 +875,36 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   };
   // A tool stays active until Esc (with nothing in progress) or Select. Each
   // item is complete on its own: after a wall's end click the next click starts
-  // a NEW wall where you click, never chained from the last wall's end.
+  // a NEW wall where you click - unless Chain walls is on (placeWall).
   const finishAction = () => { setDraftPts([]); setDimP1(null); };
+  // Place the wall a -> b. Chain walls on: the next wall starts at b, the same
+  // numbers so the corner joins seamlessly, until a wall ends on the run's
+  // first point (closing the shape) or Esc. Off, or turned off mid-run, the
+  // tool waits for a new start point as always.
+  const placeWall = (a, b) => {
+    commitWallSeg(a, b);
+    const nx = afterWall(flags.chain, run, a, b);
+    if (!nx.draft.length) { finishAction(); return; }
+    setDraftPts(nx.draft); setRun(nx.run); setTypedLen("");
+  };
+  // End point for a typed length: from the start point towards the mouse
+  // (raw position, so endpoint/grid snap can't skew it), on a 45deg step when
+  // angles are locked. Rounded to 0.001mm so straight walls stay exactly square.
+  const typedEnd = () => {
+    const from = draftPts[draftPts.length - 1], L = parseInt(typedLen, 10);
+    if (!from || !(L > 0) || cur.rx == null) return null;
+    const dx = cur.rx - from.x, dy = cur.ry - from.y;
+    if (!dx && !dy) return null;
+    let ang = Math.atan2(dy, dx);
+    if (flags.ortho) { const st = Math.PI / 4; ang = Math.round(ang / st) * st; }
+    const r3 = (v) => Math.round(v * 1000) / 1000;
+    return { x: r3(from.x + Math.cos(ang) * L), y: r3(from.y + Math.sin(ang) * L) };
+  };
+  const placeTypedWall = () => {
+    const end = typedEnd();
+    if (!end || retraces(run, end)) return; // straight back over the last wall: keep waiting
+    placeWall(draftPts[draftPts.length - 1], runEnd(flags.chain, run, end));
+  };
   const handleClick = (e) => {
     if (suppressClickRef.current) { suppressClickRef.current = false; return; }
     if (panRef.current) return;
@@ -514,21 +912,29 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     if (isWallTool) {
       const from = draftPts.length ? draftPts[draftPts.length - 1] : null;
       const p = wallPoint(raw, from);
-      if (!from) { setDraftPts([p]); return; }
-      if (p.x === from.x && p.y === from.y) return; // zero length: keep waiting for the end point
-      commitWallSeg(from, p);
-      finishAction();
+      if (!from) { setDraftPts([p]); setRun(startRun(p)); return; }
+      const end = runEnd(flags.chain, run, p); // on the run's first point: exactly there
+      if (end.x === from.x && end.y === from.y) return; // zero length: keep waiting for the end point
+      if (retraces(run, end)) return; // chained: straight back over the last wall - keep waiting
+      placeWall(from, end);
       return;
     }
     if (tool === "door" || tool === "window") {
+      // On the nearest wall, kept inside it and clear of the walls joined at its
+      // ends: { x, y, dir } in a square wall as always, plus ang (turned with
+      // the wall) in an angled one.
+      // Never over another door or window in the wall: near one it sits edge to
+      // edge (placeOpeningClear); with no room beside it the click is refused.
       const nw = nearestWall(model.walls, raw.x, raw.y);
       if (!nw) return;
-      const t = nw.seg.type === "external" ? T_EXT : T_INT;
+      const t = nw.seg.type === "external" ? T_EXT : T_INT, ow = tool === "door" ? settings.doorW : settings.winW;
+      const pc = placeOpeningClear(model, nw.seg, raw.x, raw.y, ow);
+      if (pc.blocked) return;
       if (tool === "door") {
-        const d = { id: "D" + Date.now(), x: Math.round(nw.cx), y: Math.round(nw.cy), dir: nw.dir, w: settings.doorW, t, hinge: -1, fold: 1, ref: "" };
+        const d = { id: "D" + Date.now(), ...pc.pos, w: settings.doorW, t, hinge: -1, fold: 1, ref: "" };
         change((m) => ({ ...m, doors: m.doors.concat([d]) }));
       } else {
-        const wn = { id: "W" + Date.now(), x: Math.round(nw.cx), y: Math.round(nw.cy), dir: nw.dir, w: settings.winW, t, escape: false, ref: "" };
+        const wn = { id: "W" + Date.now(), ...pc.pos, w: settings.winW, t, escape: false, ref: "" };
         change((m) => ({ ...m, windows: m.windows.concat([wn]) }));
       }
       finishAction();
@@ -548,14 +954,20 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     if (tool === "room" || tool === "text") {
       const nm = tool === "room" ? (window.prompt("Room name", "New room") || "") : (window.prompt("Note text", "") || "");
       if (!nm) return;
-      if (tool === "room") change((m) => ({ ...m, rooms: m.rooms.concat([{ name: nm, area: 0, x: Math.round(raw.x), y: Math.round(raw.y) }]) }));
+      // A new room label works its area out from the walls round it (auto).
+      if (tool === "room") change((m) => ({ ...m, rooms: m.rooms.concat([{ name: nm, area: 0, x: Math.round(raw.x), y: Math.round(raw.y), auto: true }]) }));
       else change((m) => ({ ...m, notes: m.notes.concat([{ text: nm, x: Math.round(raw.x), y: Math.round(raw.y) }]) }));
       finishAction();
       return;
     }
     if (tool === "select") {
-      const op = openingAt(raw.x, raw.y);
-      setSel(op || hitTest(model.walls, raw.x, raw.y));
+      // Rooms have no ids: selected by index (rooms are only ever added to the
+      // end or removed, and undo / redo clear the selection). Same order as a
+      // press (pickAt); a wall end selects the wall a drag there would move.
+      const selId = sel && sel.kind === "wall" ? sel.id : null;
+      const { end, op, ri } = pickAt(model, raw, selId);
+      setSel(end ? { kind: "wall", id: nodeAt(model.walls, end, raw, selId).g.id }
+        : op || (ri >= 0 ? { kind: "room", index: ri } : hitTest(model.walls, raw.x, raw.y)));
     }
   };
 
@@ -575,9 +987,15 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     change((m) => {
       if (sel.kind === "door") return { ...m, doors: m.doors.filter((d) => d.id !== sel.id) };
       if (sel.kind === "window") return { ...m, windows: m.windows.filter((w) => w.id !== sel.id) };
+      if (sel.kind === "room") return sel.index < m.rooms.length ? { ...m, rooms: m.rooms.filter((_, i) => i !== sel.index) } : m;
       return { ...m, walls: m.walls.filter((w) => w.id !== sel.id) };
     });
     setSel(null);
+  };
+  // Room label edits (name, Automatic area): explicit, so only this room changes.
+  const updRoom = (patch) => {
+    if (!sel || sel.kind !== "room") return;
+    change((m) => ({ ...m, rooms: m.rooms.map((r, i) => (i === sel.index ? { ...r, ...patch } : r)) }));
   };
   const convertSel = () => {
     if (!sel || sel.kind !== "wall") return;
@@ -600,12 +1018,18 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     return { s: ns, tx: cxp - wx * ns, ty: cyp - wy * ns };
   });
 
-  const blankModel = () => ({ EXTENT: { w: 8400, h: 8800, margin: 2600 }, walls: [], doors: [], windows: [], dims: [], rooms: [], notes: [], boundary: null, rooflights: [], stairs: null, wallStyle: "solid" });
-  const currentLink = () => (linkProjectId ? { projectId: linkProjectId, sheetId: linkSheetId, frame } : null);
-  const persistSketch = async (link) => {
+  const blankModel = () => ({ EXTENT: { w: 8400, h: 8800, margin: 2600 }, walls: [], doors: [], windows: [], dims: [], rooms: [], notes: [], boundary: null, rooflights: [], stairs: null, wallStyle: "solid", sheetOrigin: sheetOriginFor({ walls: [] }) });
+  // A sketch saved without an outline corner gets the one it had: the frame it
+  // was last sent with, else the one it would have had - so it opens as it was.
+  const withOrigin = (m, geo, link) => (validOrigin(geo && geo.sheetOrigin) ? m : { ...m, sheetOrigin: sheetOriginFor(m, link) });
+  // Old sketches keep their link as it was ({ projectId, sheetId, frame }) until a send.
+  const keptLegacy = () => (legacyFrame ? { legacyFrame } : {});
+  const currentLink = () => (linkProjectId ? { projectId: linkProjectId, sheetId: linkSheetId, frame, ...(linkScale ? { scale: linkScale, ...keptLegacy() } : {}) } : null);
+  // id: the sketch's id when it was saved earlier in the same send.
+  const persistSketch = async (link, knownId = sketchId) => {
     const lk = link === undefined ? currentLink() : link;
     const data = { ...model, _link: lk };
-    if (sketchId) { await updateSketch(sketchId, sketchName, data); return sketchId; }
+    if (knownId) { await updateSketch(knownId, sketchName, data); return knownId; }
     const id = await insertSketch(sketchName, data); setSketchId(id); return id;
   };
   const doSave = async () => {
@@ -622,7 +1046,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     skipDirty.current = true;
     setModel(blankModel()); resetHistory();
     setSketchId(null); setSketchName("");
-    setLinkProjectId(null); setLinkSheetId(null); setFrame(null);
+    setLinkProjectId(null); setLinkSheetId(null); setFrame(null); setLinkScale(null); setLegacyFrame(null);
     setSel(null); setDraftPts([]); setDimP1(null); setTool("select"); setSaveState("idle");
     setNameGate(true);
     setTimeout(() => fitFrame(DEFAULT_FRAME), 0);
@@ -634,13 +1058,13 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       const meta = sketches.find((sk) => sk.id === id);
       const { _link, ...geo } = data;
       skipDirty.current = true;
-      setModel({ ...blankModel(), wallStyle: "light", ...geo }); resetHistory();
+      setModel(withOrigin({ ...blankModel(), wallStyle: "light", ...geo }, geo, _link)); resetHistory();
       setLinkProjectId(_link?.projectId || null);
       setLinkSheetId(_link?.sheetId || null);
-      setFrame(_link?.frame || null);
+      setFrame(_link?.frame || null); setLinkScale(_link?.scale || null); setLegacyFrame(legacyFrameOf(_link));
       setSketchId(id); setSketchName(meta?.name || "Untitled sketch");
       setSel(null); setDraftPts([]); setDimP1(null); setTool("select");
-      fitFrame((geo.walls && geo.walls.length) ? computeFrame(geo, 900) : DEFAULT_FRAME);
+      fitFrame(sheetViewOf(geo));
       setSaveState("saved"); setOpenPanel(false); setNameGate(false);
     } catch (e) { console.error(e); window.alert("Couldn't open: " + (e.message || e)); }
   };
@@ -654,62 +1078,92 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     } catch (err) { console.error(err); window.alert("Couldn't delete: " + (err.message || err)); }
   };
 
-  const createDrawing = async (path, w, h, fr) => {
+  // A new drawing with this plan. ps: where it goes on the sheet and at what
+  // scale (planSheetFrame), which the title block's Scale says.
+  const createDrawing = async (path, w, h, ps) => {
     setPlanBusy("Creating drawing");
     const sheetId = "s_" + Math.random().toString(36).slice(2, 9);
     const today = new Date().toISOString().slice(0, 10);
     const name = sketchName || "Untitled drawing";
     const data = {
-      meta: { projectName: name, drawingNumber: "", date: today, revision: "A", revNote: "First Issue", company: "", clientName: "", clientEmail: "" },
+      meta: { projectName: name, drawingNumber: "", date: today, revision: "A", revNote: "First Issue", company: "", clientName: "", clientEmail: "", scale: scaleLabel(ps.scale) },
       boq: null, titleBlock: null, colourMode: "red",
       notes: "", // blank Installation Notes, like any new drawing
-      sheets: [{ id: sheetId, name, drawingNumber: "", bgImage: { path, w, h }, placed: [], furniture: [], walls: [], wires: [], annotations: [], notes: "", symbolScale: 1 }],
+      sheets: [{ id: sheetId, name, drawingNumber: "", bgImage: { path, w, h, planFrame: ps.frame, planScale: ps.scale }, placed: [], furniture: [], walls: [], wires: [], annotations: [], notes: "", symbolScale: 1 }],
       activeSheetId: sheetId,
     };
     const newId = await insertProject(name, data);
-    setLinkProjectId(newId); setLinkSheetId(sheetId); setFrame(fr);
-    const skId = await persistSketch({ projectId: newId, sheetId, frame: fr });
+    setLinkProjectId(newId); setLinkSheetId(sheetId); setFrame(ps.frame); setLinkScale(ps.scale);
+    const skId = await persistSketch({ projectId: newId, sheetId, frame: ps.frame, scale: ps.scale, ...keptLegacy() });
     try { await updateProjectRow(newId, name, { ...data, sheets: data.sheets.map((s) => s.id === sheetId ? { ...s, sketchId: skId } : s) }); } catch (e) { console.warn(e); }
     setPlanBusy(null);
     router.push("/drawing?id=" + newId);
   };
+  // Where the plan goes on the A3 sheet and at what scale (lib/cad/planScale).
+  // withLink: this send updates the drawing it was last sent to, so the frame
+  // and scale it went with then decide whether anything moves.
+  const sheetPlanOf = (m, withLink, polys = null) => planSheetFrame(m, { scalePref: scalePrefOf(m), link: withLink && frame ? { frame, scale: linkScale } : null, polys });
+  // A picked scale the plan doesn't fit at: what to choose instead. Too big
+  // for every standard scale, only Auto (past 1:500) shows all of it.
+  const scaleCure = (p) => (p.tooBig ? `choose Auto (1:${p.autoScale}) so none of it is cut off` : "choose a smaller scale or Auto");
   const runUsePlan = async (mode) => {
     setPlanModal(false);
+    const embed = !!(embedded && onApplyPlan);
+    const ps = sheetPlanOf(model, embed || mode === "update");
+    // Only a picked scale can cut the plan off (Auto never does): ask first.
+    if (ps.cut && !window.confirm(`The plan doesn't fit A3 at 1:${ps.scale}, so part of it will be cut off the drawing, and anything placed on that part will be hidden.\n\nSend it anyway? Cancel to ${scaleCure(ps)}.`)) return;
     setPlanBusy("Preparing plan");
     try {
-      if (embedded && onApplyPlan) {
-        const efr = frame || computeFrame(model);
-        const png = await renderModelToPng(model, efr, 2200);
-        setPlanBusy("Uploading plan");
-        const up = await uploadPlanImage(dataUrlToBlob(png.dataUrl));
-        const skId = await persistSketch({ projectId: linkProjectId, sheetId: linkSheetId, frame: efr });
-        setFrame(efr); setPlanBusy(null);
-        onApplyPlan({ path: up.path, w: png.w, h: png.h, dataUrl: png.dataUrl, sketchId: skId, sheetId: linkSheetId });
+      const png = await renderModelToPng(model, ps.frame, PLAN_PX, { scale: ps.scale });
+      setPlanBusy("Uploading plan");
+      const { path } = await uploadPlanImage(dataUrlToBlob(png.dataUrl));
+      const lk = { projectId: linkProjectId, sheetId: linkSheetId, frame: ps.frame, scale: ps.scale, ...keptLegacy() };
+      // Sending to a drawing it updates: the sketch is saved first with the
+      // link it has, so its edits are safe whatever happens next, and its
+      // link moves on to the new frame and scale only once the drawing is
+      // saved with them - a failed save can't leave the link naming a frame
+      // the drawing's plan isn't drawn at.
+      if (embed) {
+        // The editor puts it on the sheet, moving what is placed there with
+        // the plan when the frame changed, saves, then calls onSaved
+        // (applyFloorPlan).
+        const skId = await persistSketch(currentLink());
+        setFrame(ps.frame); setLinkScale(ps.scale); setPlanBusy(null);
+        const onSaved = () => persistSketch(lk, skId).catch((e) => console.warn(e));
+        onApplyPlan({ path, w: png.w, h: png.h, dataUrl: png.dataUrl, sketchId: skId, sheetId: linkSheetId, scale: ps.scale, frame: ps.frame, remap: ps.remap, legacyFrame, manual: ps.manual, onSaved });
         onClose && onClose();
         return;
       }
-      const fr = (mode === "update" && frame) ? frame : computeFrame(model);
-      const { dataUrl, w, h } = await renderModelToPng(model, fr, 2200);
-      setPlanBusy("Uploading plan");
-      const { path } = await uploadPlanImage(dataUrlToBlob(dataUrl));
       if (mode === "update" && linkProjectId) {
         setPlanBusy("Updating drawing");
         let proj = null;
         try { proj = await getProjectData(linkProjectId); } catch { proj = null; }
-        if (!proj) { await createDrawing(path, w, h, fr); return; }
-        const skId = await persistSketch({ projectId: linkProjectId, sheetId: linkSheetId, frame: fr });
-        const newSheets = (proj.sheets || []).map((s) => s.id === linkSheetId ? { ...s, bgImage: { path, w, h }, sketchId: skId } : s);
-        const matched = (proj.sheets || []).some((s) => s.id === linkSheetId);
-        if (!matched && newSheets.length) {
-          const aid = (proj.activeSheetId && newSheets.find((s) => s.id === proj.activeSheetId)) ? proj.activeSheetId : newSheets[0].id;
-          for (let i = 0; i < newSheets.length; i++) if (newSheets[i].id === aid) newSheets[i] = { ...newSheets[i], bgImage: { path, w, h }, sketchId: skId };
-        }
-        await updateProjectRow(linkProjectId, proj.meta?.projectName || sketchName, { ...proj, sheets: newSheets });
-        setFrame(fr); setPlanBusy(null);
+        if (!proj) { await createDrawing(path, png.w, png.h, ps); return; }
+        const skId = await persistSketch(currentLink());
+        // The linked sheet; if it has gone, the drawing's active (else first) one.
+        const sheets = proj.sheets || [];
+        const tid = sheets.some((s) => s.id === linkSheetId) ? linkSheetId
+          : !sheets.length ? null : proj.activeSheetId && sheets.some((s) => s.id === proj.activeSheetId) ? proj.activeSheetId : sheets[0].id;
+        const plan = { path, w: png.w, h: png.h, sketchId: skId, frame: ps.frame, scale: ps.scale, oldFrame: ps.remap && ps.remap.oldFrame, legacyFrame, linked: tid === linkSheetId };
+        let outside = 0;
+        const newSheets = sheets.map((s) => {
+          if (s.id !== tid) return s;
+          const r = applyPlanToSheet(s, plan);
+          outside = r.outside;
+          return r.sheet;
+        });
+        const meta = tid ? { meta: { ...(proj.meta || {}), scale: scaleLabel(ps.scale) } } : {};
+        await updateProjectRow(linkProjectId, proj.meta?.projectName || sketchName, { ...proj, ...meta, sheets: newSheets });
+        // The drawing has it now. Should this last write fail, the sketch's
+        // edits are already saved and the sheet's own planFrame says where
+        // its plan is, which the next send goes by.
+        try { await persistSketch(lk, skId); } catch (e) { console.warn(e); }
+        setFrame(ps.frame); setLinkScale(ps.scale); setPlanBusy(null);
+        if (outside) window.alert(outsideNote(outside, ps.scale, ps.manual));
         router.push("/drawing?id=" + linkProjectId);
         return;
       }
-      await createDrawing(path, w, h, fr);
+      await createDrawing(path, png.w, png.h, ps);
     } catch (e) {
       console.error(e); setPlanBusy(null);
       window.alert("Couldn't send the plan to the editor: " + (e.message || e));
@@ -749,17 +1203,17 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       if (!data) { setNameGate(false); setSaveState("idle"); setPlanBusy(null); return; }
       const { _link, ...geo } = data;
       skipDirty.current = true;
-      const loaded = { ...blankModel(), wallStyle: "light", ...geo };
+      const loaded = withOrigin({ ...blankModel(), wallStyle: "light", ...geo }, geo, _link);
       setModel(loaded); resetHistory();
       openedModelRef.current = loaded;
       // Opened from a drawing: that drawing and sheet are the ones to update.
       setLinkProjectId((embedded && linkProject) || _link?.projectId || linkProject || null);
       setLinkSheetId((embedded && linkSheet) || _link?.sheetId || linkSheet || null);
-      setFrame(_link?.frame || null);
+      setFrame(_link?.frame || null); setLinkScale(_link?.scale || null); setLegacyFrame(legacyFrameOf(_link));
       setSketchId(id);
       setSketchName(linkName || "Floor plan");
       setSel(null); setDraftPts([]); setDimP1(null); setTool("select");
-      fitFrame((geo.walls && geo.walls.length) ? computeFrame(geo, 900) : DEFAULT_FRAME);
+      fitFrame(sheetViewOf(geo));
       setSaveState("saved"); setNameGate(false);
     } catch (e) { console.error(e); setNameGate(false); setSaveState("idle"); }
     setPlanBusy(null);
@@ -770,38 +1224,87 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   }, []);
 
   const joined = useMemo(() => joinWalls(model.walls), [model.walls]);
+  // The spaces the walls enclose, for room labels with Automatic area
+  // (lib/cad/rooms); only worked out when there is such a label.
+  const anyAuto = model.rooms.some(isAuto);
+  const spaces = useMemo(() => (anyAuto ? roomSpaces(model.walls, joined.polys) : null), [model.walls, joined, anyAuto]);
+  // Where the plan will go on the A3 sheet if sent now (as runUsePlan: the
+  // frame it was last sent with when opened from, or linked to, a drawing):
+  // the drawing-area outline on the canvas and the Scale section.
+  const sheetPlan = useMemo(() => sheetPlanOf(model, embedded || !!linkProjectId, joined.polys),
+    [model, joined, frame, linkScale, embedded, linkProjectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Walls as they will print: the Wall thickness choice's weight at the plan's
+  // scale (lib/cad/printStyle), so Thin / Standard / Bold show here at once.
+  const drawStyle = useMemo(() => printStyle(model, sheetPlan.scale), [model.wallWeight, model.labelSize, sheetPlan.scale]); // eslint-disable-line react-hooks/exhaustive-deps
+  const drawJoined = useMemo(() => joinWalls(model.walls, drawStyle.tf), [model.walls, drawStyle]);
   const planEls = useMemo(() => {
-    const g = [];
+    const g = [], c = planCentre(model.walls);
     if (layers.boundary && model.boundary) g.push(<polyline key="bnd" points={ptStr(model.boundary)} className="cadv-boundary" fill="none" strokeWidth={1.4} strokeDasharray="14 10" vectorEffect="non-scaling-stroke" />);
     if (layers.stairs) (model.rooflights || []).forEach((rl) => g.push(
       <g key={rl.ref}>
         <rect x={rl.x} y={rl.y} width={rl.w} height={rl.h} fill="none" className="cadv-ink" strokeWidth={0.8} strokeDasharray="20 14" vectorEffect="non-scaling-stroke" opacity={0.6} />
         <text x={rl.x + rl.w / 2} y={rl.y + rl.h / 2} className="cadv-note" fontSize={150} textAnchor="middle" fontWeight={600}>{rl.ref}</text>
       </g>));
-    if (layers.walls) g.push(<WallsNode key="walls" joined={joined} solid={wallStyleOf(model) === "solid"} selId={sel && sel.kind === "wall" ? sel.id : null} />);
+    // Drawn at their printed weight (Wall thickness, at the plan's scale);
+    // snapping, dimensions and picking use the real walls (joined).
+    if (layers.walls) g.push(<WallsNode key="walls" joined={drawJoined} solid={wallStyleOf(model) === "solid"} selId={sel && sel.kind === "wall" ? sel.id : null} />);
     if (layers.openings) {
-      g.push(<g key="doors">{model.doors.map((d) => <DoorNode key={d.id} d={d} selected={sel && sel.kind === "door" && sel.id === d.id} />)}</g>);
-      g.push(<g key="wins">{model.windows.map((wn) => <WindowNode key={wn.id} wn={wn} selected={sel && sel.kind === "window" && sel.id === wn.id} />)}</g>);
+      // Openings cut to the walls' drawn weight, as on the sent plan.
+      g.push(<g key="doors">{model.doors.map((d) => <DoorNode key={d.id} d={{ ...d, t: drawStyle.opening(d.t) }} selected={sel && sel.kind === "door" && sel.id === d.id} />)}</g>);
+      g.push(<g key="wins">{model.windows.map((wn) => <WindowNode key={wn.id} wn={{ ...wn, t: drawStyle.opening(wn.t) }} side={openingSide(wn, c)} selected={sel && sel.kind === "window" && sel.id === wn.id} />)}</g>);
     }
     if (layers.stairs && model.stairs) g.push(<StairNode key="stairs" s={model.stairs} />);
     if (layers.dims) g.push(<g key="dims">{model.dims.map((d) => <DimNode key={d.id} d={d} />)}</g>);
     if (layers.rooms) {
-      g.push(<g key="rooms">{model.rooms.map((r, i) => (
-        <g key={"room" + i} className="cadv-room">
-          <text x={r.x} y={r.y} className="nm" fontSize={230} textAnchor="middle">{r.name.toUpperCase()}</text>
-          {r.area ? <text x={r.x} y={r.y + 300} className="ar" fontSize={165} textAnchor="middle">{r.area.toFixed(1) + " m\u00B2"}</text> : null}
-        </g>))}</g>);
+      // Automatic area: worked out from the walls, none when not enclosed.
+      // Older labels show the area typed in, as always.
+      // Names and areas laid out as they will print on the A3 sheet (Label
+      // size, wrapped / stepped down to fit the room, never under 3 mm).
+      const lab = printStyle(model, sheetPlan.scale), labSp = spacesOf(model.walls);
+      g.push(<g key="rooms">{model.rooms.map((r, i) => {
+        const a = isAuto(r) ? areaAt(spaces, r.x, r.y) : r.area ? Number(r.area) : null;
+        const L = roomLabelLayout(r.name, a != null ? a.toFixed(1) + " m\u00B2" : null, lab, spaceBoxAt(labSp, r.x, r.y));
+        return (
+          <g key={"room" + i} className={sel && sel.kind === "room" && sel.index === i ? "cadv-room sel" : "cadv-room"}>
+            {L.lines.map((l, k) => <text key={k} x={r.x} y={r.y + l.dy} className="nm" fontSize={L.nameFs} textAnchor="middle">{l.text}</text>)}
+            {L.area && L.area.lines.map((l, k) => <text key={"a" + k} x={r.x} y={r.y + l.dy} className="ar" fontSize={L.area.fs} textAnchor="middle">{l.text}</text>)}
+          </g>
+        );
+      })}</g>);
       g.push(<g key="notes">{model.notes.map((n, i) => (
         <text key={"n" + i} x={n.x} y={n.y} className="cadv-note" fontSize={165} textAnchor="middle">{n.text}</text>))}</g>);
     }
     if (layers.openings) {
+      // An angled opening's tag sits where an 'h' one's would, in its turned
+      // frame: a door's on its swing side, a window's on the side facing the
+      // middle of the plan (openingSide).
       const tags = [];
-      model.doors.forEach((d) => { if (d.ref) tags.push(<Tag key={"tg" + d.id} refTxt={d.ref} x={d.x + (d.dir === "h" ? 0 : d.fold * 430)} y={d.y + (d.dir === "h" ? d.fold * 430 : 0)} />); });
-      model.windows.forEach((w) => { if (w.ref) tags.push(<Tag key={"tg" + w.id} refTxt={w.ref} x={w.x + (w.dir === "h" ? 0 : (w.x < 1000 ? 430 : -430))} y={w.y + (w.dir === "h" ? (w.y < 1000 ? 360 : -360) : 0)} />); });
+      model.doors.forEach((d) => { if (d.ref) tags.push(angled(d)
+        ? <g key={"tg" + d.id} transform={turnedAt(d)}><Tag refTxt={d.ref} x={0} y={d.fold * 430} /></g>
+        : <Tag key={"tg" + d.id} refTxt={d.ref} x={d.x + (d.dir === "h" ? 0 : d.fold * 430)} y={d.y + (d.dir === "h" ? d.fold * 430 : 0)} />); });
+      model.windows.forEach((w) => { if (w.ref) tags.push(angled(w)
+        ? <g key={"tg" + w.id} transform={turnedAt(w)}><Tag refTxt={w.ref} x={0} y={openingSide(w, c) * 360} /></g>
+        : <Tag key={"tg" + w.id} refTxt={w.ref} x={w.x + (w.dir === "h" ? 0 : (w.x < 1000 ? 430 : -430))} y={w.y + (w.dir === "h" ? (w.y < 1000 ? 360 : -360) : 0)} />); });
       g.push(<g key="tags">{tags}</g>);
     }
     return g;
-  }, [model, sel, layers, joined]);
+  }, [model, sel, layers, joined, drawJoined, drawStyle, spaces, sheetPlan.scale]);
+
+  // Snap to walls markers (screen-constant): a diamond where a point lands on
+  // a wall's side, a ring on a guide; each guide dashed from its tracking
+  // point (a small x there) through the point. Wall ends keep their square.
+  const snapMarks = (k, p) => {
+    const s = view.s, out = [];
+    if (p.snap === "side") out.push(<polygon key={k + "sd"} points={ptStr([[p.x, p.y - 10 / s], [p.x + 10 / s, p.y], [p.x, p.y + 10 / s], [p.x - 10 / s, p.y]])} fill="none" className="cadv-active" strokeWidth={2} vectorEffect="non-scaling-stroke" />);
+    if (p.snap === "guide") out.push(<circle key={k + "gd"} cx={p.x} cy={p.y} r={8 / s} fill="none" className="cadv-active" strokeWidth={2} vectorEffect="non-scaling-stroke" />);
+    if (p.snap !== "end") (p.guides || []).forEach((g, i) => {
+      const L = hyp(p.x - g.x, p.y - g.y), m = 5 / s;
+      if (L < 1e-6) return;
+      out.push(<line key={k + "gl" + i} x1={g.x} y1={g.y} x2={p.x + (p.x - g.x) / L * 60 / s} y2={p.y + (p.y - g.y) / L * 60 / s} className="cadv-guide" strokeWidth={1} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />);
+      out.push(<path key={k + "gx" + i} d={`M${g.x - m} ${g.y - m}L${g.x + m} ${g.y + m}M${g.x - m} ${g.y + m}L${g.x + m} ${g.y - m}`} className="cadv-guide" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />);
+    });
+    return out;
+  };
 
   // overlay: draft + rubber-band + vertices + crosshair + snap dot
   const overlay = [];
@@ -809,7 +1312,8 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     for (let i = 0; i < draftPts.length - 1; i++)
       overlay.push(<line key={"dp" + i} x1={draftPts[i].x} y1={draftPts[i].y} x2={draftPts[i + 1].x} y2={draftPts[i + 1].y} className="cadv-active" strokeWidth={1.6} vectorEffect="non-scaling-stroke" />);
     const last = draftPts[draftPts.length - 1];
-    overlay.push(<line key="rb" x1={last.x} y1={last.y} x2={cur.x} y2={cur.y} className="cadv-active" strokeWidth={1.6} strokeDasharray="8 6" vectorEffect="non-scaling-stroke" />);
+    const tEnd = typedLen ? typedEnd() : null;
+    overlay.push(<line key="rb" x1={last.x} y1={last.y} x2={tEnd ? tEnd.x : cur.x} y2={tEnd ? tEnd.y : cur.y} className="cadv-active" strokeWidth={1.6} strokeDasharray="8 6" vectorEffect="non-scaling-stroke" />);
     draftPts.forEach((p, k) => overlay.push(<rect key={"v" + k} x={p.x - 90} y={p.y - 90} width={180} height={180} className="cadv-active" fill="#fff" strokeWidth={1.4} vectorEffect="non-scaling-stroke" />));
   }
   if (tool === "dim" && dimP1) {
@@ -820,35 +1324,132 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     overlay.push(<line key="chy" x1={cur.x} y1={-1e6} x2={cur.x} y2={1e6} className="cadv-cross" strokeWidth={0.9} opacity={0.6} vectorEffect="non-scaling-stroke" />);
     overlay.push(<circle key="cdot" cx={cur.x} cy={cur.y} r={70} className="cadv-active" fill="#fff" strokeWidth={1.4} vectorEffect="non-scaling-stroke" />);
     if (isWallTool && cur.ep) overlay.push(<rect key="ep" x={cur.x - 9 / view.s} y={cur.y - 9 / view.s} width={18 / view.s} height={18 / view.s} fill="none" className="cadv-active" strokeWidth={2} vectorEffect="non-scaling-stroke" />);
+    if (isWallTool && flags.wallSnap && !typedLen) overlay.push(...snapMarks("c", cur)); // a typed length isn't snapped
   }
+  // Select: drag handles at the selected wall's ends (screen-constant size);
+  // a dragged corner shows the end-snap square when it lands on another end.
+  const selWall = sel && sel.kind === "wall" ? model.walls.find((w) => w.id === sel.id) : null;
+  if (tool === "select" && layers.walls && selWall) [[selWall.x1, selWall.y1], [selWall.x2, selWall.y2]].forEach(([x, y], k) =>
+    overlay.push(<rect key={"hd" + k} x={x - 4.5 / view.s} y={y - 4.5 / view.s} width={9 / view.s} height={9 / view.s} className="cadv-handle" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />));
+  if (dragUi && dragUi.ep) overlay.push(<rect key="dep" x={dragUi.x - 9 / view.s} y={dragUi.y - 9 / view.s} width={18 / view.s} height={18 / view.s} fill="none" className="cadv-active" strokeWidth={2} vectorEffect="non-scaling-stroke" />);
+  if (dragUi && dragUi.kind === "node" && flags.wallSnap) overlay.push(...snapMarks("d", dragUi));
+  // Door / window: its footprint in the wall where it would go (teal, red
+  // when there's no room), and the shared mullion line when it snaps edge to
+  // edge to another opening.
+  const openingMarks = (k, o, w, t, blocked, edge) => {
+    const [H, F] = openingAxes(o), hw = w / 2, ht = t / 2, pts = [[hw, ht], [-hw, ht], [-hw, -ht], [hw, -ht]].map(([a, b]) => [o.x + H[0] * a + F[0] * b, o.y + H[1] * a + F[1] * b]);
+    const out = [<polygon key={k + "f"} points={ptStr(pts)} className={blocked ? "cadv-op-block" : "cadv-op-prev"} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />];
+    if (edge) { const L = ht + 14 / view.s; out.push(<line key={k + "e"} x1={edge[0] - F[0] * L} y1={edge[1] - F[1] * L} x2={edge[0] + F[0] * L} y2={edge[1] + F[1] * L} className="cadv-op-edge" strokeWidth={3} vectorEffect="non-scaling-stroke" />); }
+    return out;
+  };
+  if ((tool === "door" || tool === "window") && openPrev && cur.on && !dragUi) overlay.push(...openingMarks("op", openPrev.pos, openPrev.w, openPrev.t, openPrev.blocked, openPrev.snapped ? openPrev.edge : null));
+  if (dragUi && dragUi.kind === "opening" && (dragUi.blocked || dragUi.snapped)) {
+    const o = (dragUi.okind === "door" ? model.doors : model.windows).find((q) => q.id === dragUi.id);
+    if (o) overlay.push(...openingMarks("od", o, o.w, o.t, dragUi.blocked, dragUi.snapped ? dragUi.edge : null));
+  }
+  // The A3 drawing area at the plan's scale, where sending it will put it
+  // (sheetPlan): faint and dashed under the plan, red when a picked scale
+  // cuts the plan off; its label over the plan, haloed, so walls never hide
+  // it. Always shown, from an empty sketch (1:50) on, resizing as Auto steps
+  // the scale up. On screen only - never in the plan image.
+  const sf = sheetPlan.frame, hasWalls = model.walls.length > 0, sheetCls = sheetPlan.cut ? "cadv-sheet over" : "cadv-sheet";
+  // The label at the outline's top-left corner, kept in sight (screen px):
+  // below the canvas top when that edge is above it, and clear of the tool
+  // palette (top left) - along the edge, inside the outline.
+  const fx0 = sf.x * view.s + view.tx, fy0 = sf.y * view.s + view.ty;
+  const lyS = Math.max(fy0 - 7, Math.min(18, (sf.y + sf.h) * view.s + view.ty - 6));
+  const lxS = Math.max(fx0, Math.min(lyS < 104 ? 64 : 8, (sf.x + sf.w) * view.s + view.tx - 40));
+  const sheetOutline = (
+    <g className={sheetCls} pointerEvents="none">
+      <rect x={sf.x} y={sf.y} width={sf.w} height={sf.h} fill="none" strokeWidth={1.2} strokeDasharray="10 7" vectorEffect="non-scaling-stroke" />
+    </g>
+  );
+  const sheetLabel = (
+    <g className={sheetCls} pointerEvents="none">
+      <text x={(lxS - view.tx) / view.s} y={(lyS - view.ty) / view.s} fontSize={11 / view.s} stroke="#FFFFFF" strokeWidth={3 / view.s} strokeLinejoin="round" paintOrder="stroke">
+        {`A3 · 1:${sheetPlan.scale}${sheetPlan.cut ? " · PLAN DOESN'T FIT" : ""}`}
+      </text>
+    </g>
+  );
 
-  // length HUD (DOM, at cursor)
+  // length HUD (DOM, at cursor). With Snap to walls on it also names the
+  // snap in use: END, SIDE or GUIDE.
+  const snapTag = (k) => (flags.wallSnap && SNAP_LABEL[k] ? <span className="snap">{SNAP_LABEL[k]}</span> : null);
   let hud = null;
-  if (isWallTool && draftPts.length && cur.on) {
+  if (isWallTool && !draftPts.length && cur.on && snapTag(cur.snap)) {
+    const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
+    hud = <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>{snapTag(cur.snap)}</div>;
+  } else if (isWallTool && draftPts.length && cur.on) {
     const lp = draftPts[draftPts.length - 1];
     const L = Math.round(hyp(cur.x - lp.x, cur.y - lp.y));
     const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
-    hud = <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>Length <b>{fmtMM(L)} mm</b></div>;
+    // Chain walls: this wall would end on the run's first point, closing the shape.
+    const closing = flags.chain && run && runEnd(true, run, typedLen ? typedEnd() : cur) === run.start;
+    hud = typedLen
+      ? <div className="cadv__hud cadv__hud--typed" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>Length <b>{typedLen}<i className="cadv__caret" /> mm</b> <span>{closing ? "Enter to close" : "Enter to place"}</span></div>
+      : <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>Length <b>{fmtMM(L)} mm</b>{closing ? <span className="sub">closes the shape</span> : null}{snapTag(cur.snap)}</div>;
   } else if (tool === "dim" && dimP1 && cur.on) {
     const L2 = Math.round(hyp(cur.x - dimP1.x, cur.y - dimP1.y));
     const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
     hud = <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}><b>{fmtMM(L2)} mm</b></div>;
+  } else if (dragUi && dragUi.kind === "opening") {
+    // Gap from the opening's nearer edge to the nearer end of its wall.
+    const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
+    hud = <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>To wall end <b>{fmtMM(dragUi.gap)} mm</b>{dragUi.blocked ? <span className="snap cadv__hud-bad">NO ROOM</span> : dragUi.snapped ? <span className="snap">EDGE TO EDGE</span> : null}</div>;
+  } else if ((tool === "door" || tool === "window") && openPrev && cur.on && (openPrev.blocked || openPrev.snapped)) {
+    const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
+    hud = <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>{openPrev.blocked ? <span className="snap cadv__hud-bad">NO ROOM - overlaps</span> : <span className="snap">EDGE TO EDGE</span>}</div>;
+  } else if (dragUi && dragUi.kind === "room") {
+    // The area the label will show where it is now.
+    const r = model.rooms[dragUi.index], a = r ? (isAuto(r) ? areaAt(spaces, r.x, r.y) : r.area || null) : null;
+    const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
+    if (r && (a != null || isAuto(r))) hud = <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>{a != null ? <>Area <b>{a.toFixed(1)} m&#178;</b></> : onWall(spaces, r.x, r.y) ? "On a wall" : "Not enclosed"}</div>;
+  } else if (dragUi) {
+    const gw = model.walls.find((w) => w.id === dragUi.id);
+    const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
+    if (gw) hud = <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}>Length <b>{fmtMM(segLen(gw))} mm</b>{dragUi.kind === "wall" ? <span className="sub">moved {fmtMM(dragUi.off)} mm</span> : snapTag(dragUi.snap)}</div>;
   }
 
-  const selWall = sel && sel.kind === "wall" ? model.walls.find((w) => w.id === sel.id) : null;
   const selDoor = sel && sel.kind === "door" ? model.doors.find((d) => d.id === sel.id) : null;
   const selWin = sel && sel.kind === "window" ? model.windows.find((w) => w.id === sel.id) : null;
-  const hint = {
-    select: "Click a wall, door or window to select it. Shift-drag to pan.",
-    ext: draftPts.length ? "Click the end point - Esc to cancel" : "Click the start point of an external wall - Esc to exit",
-    int: draftPts.length ? "Click the end point - Esc to cancel" : "Click the start point of an internal wall - Esc to exit",
+  const selRoom = sel && sel.kind === "room" ? model.rooms[sel.index] || null : null;
+  const selArea = selRoom ? (isAuto(selRoom) ? areaAt(spaces, selRoom.x, selRoom.y) : selRoom.area || null) : null;
+  const selOnWall = !!selRoom && isAuto(selRoom) && selArea == null && onWall(spaces, selRoom.x, selRoom.y);
+  // Chain walls on: a run of walls, each from the last one's end, until Esc.
+  const wallHint = (kind) => !draftPts.length
+    ? (flags.chain ? `Click the start point of a run of ${kind} walls - Esc to exit` : `Click the start point of an ${kind} wall - Esc to exit`)
+    : flags.chain && run && run.walls > 0 ? "Click the next point, or type a length in mm and press Enter - Esc to finish"
+    : "Click the end point, or type a length in mm and press Enter - Esc to cancel";
+  const hint = dragUi ? "Release to place it - Esc to put it back" : {
+    select: "Click to select. Drag a wall, end, opening or label to move it. Shift-drag to pan.",
+    ext: wallHint("external"),
+    int: wallHint("internal"),
     door: "Click on a wall to place a door - Esc to exit",
     window: "Click on a wall to place a window - Esc to exit",
     dim: dimP1 ? "Click the second measure point - Esc to cancel" : "Click the first measure point - Esc to exit",
-    room: "Click inside a space to drop a room label - Esc to exit",
+    room: "Click inside a space to drop a room label (area from the walls) - Esc to exit",
     text: "Click to place a note - Esc to exit",
     pan: "Drag to pan the sheet",
   }[tool];
+  // Status bar: the keys for what is happening now, as key caps
+  // (components/Shortcuts.jsx StatusHint); on touch, what to tap or drag.
+  const typedCloses = !!typedLen && flags.chain && run && runEnd(true, run, typedEnd()) === run.start;
+  const chained = flags.chain && run && run.walls > 0;
+  const act = TOUCH ? "Tap" : "Click";
+  const moveSel = !sel ? null : sel.kind === "wall" ? "Drag the wall or a corner" : sel.kind === "room" ? "Drag the label" : "Drag it along its wall";
+  const statusParts = dragUi ? (TOUCH ? ["Lift your finger to place it"] : ["Release to place it", ["esc", "put it back"]])
+    : isWallTool && draftPts.length && typedLen ? [`Length ${typedLen} mm`, ["enter", typedCloses ? "close the shape" : "place"], ["backspace", "edit"], ["esc", "cancel"]]
+    : isWallTool && draftPts.length ? (TOUCH ? [chained ? "Tap the next point" : "Tap the end point", chained ? "Finish run in the inspector ends it" : null]
+      : [chained ? "Next point, or type a length" : "Type a length", ["enter", "to place"], ["esc", chained ? "to finish the run" : "to cancel"]])
+    : isWallTool ? [flags.chain ? `${act} the start of a run of walls` : `${act} the start point`, !TOUCH && [tool === "int" ? "e" : "i", tool === "int" ? "external" : "internal"], !TOUCH && ["esc", "exit"]]
+    : tool === "door" || tool === "window" ? [`${act} a wall to place a ${tool}`, !TOUCH && ["esc", "exit"]]
+    : tool === "dim" ? [dimP1 ? `${act} the second point` : `${act} the first point`, !TOUCH && ["esc", dimP1 ? "cancel" : "exit"]]
+    : tool === "room" ? [`${act} inside a space to drop a room label`, !TOUCH && ["esc", "exit"]]
+    : tool === "text" ? [`${act} to place a note`, !TOUCH && ["esc", "exit"]]
+    : tool === "pan" ? (TOUCH ? ["Drag to pan", "pinch to zoom"] : ["Drag to pan", ["wheel", "to zoom"], ["v", "select"]])
+    : moveSel ? (TOUCH ? [moveSel + " to move it", "Delete is in the inspector"] : [moveSel, ["del", "to delete"], ["mod+z", "undo"], ["esc", "deselect"]])
+    : TOUCH ? ["Tap to select, drag to move", "pinch to zoom", "two fingers to pan"]
+    : ["Click to select, drag to move", ["shift+drag", "to pan"], ["mod+z", "undo"]];
 
   const pickTool = (id) => {
     const t = id === "wall" ? (tool === "int" ? "int" : "ext") : id;
@@ -865,8 +1466,11 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const subscribe = () => { access.openSubscribe && access.openSubscribe(); };
   const canUndo = histRef.current.past.length > 0, canRedo = histRef.current.future.length > 0;
 
-  const svgCursor = tool === "pan" ? "grab" : (drawingTool ? "crosshair" : "default");
-  const gridSz = GRID_MM * view.s;
+  const svgCursor = tool === "pan" ? "grab" : drawingTool ? "crosshair" : (dragUi || cur.hov ? "move" : "default");
+  // Zoomed far out, the grid steps up tenfold rather than packing its lines tighter than 8px.
+  let gridMm = GRID_MM;
+  while (gridMm * view.s < 8) gridMm *= 10;
+  const gridSz = gridMm * view.s;
   // White paper with the editor's grid over it, edge to edge.
   const gridStyle = {
     backgroundColor: "#FFFFFF",
@@ -884,7 +1488,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       {/* ==================== TOP BAR (shared with the editor) ==================== */}
       <TopBarShell>
         <TbGroup first>
-          <TbButton onClick={goBack} icon={ChevronLeft} label={embedded ? "Back to drawing" : "Dashboard"} shortLabel={embedded ? "Drawing" : undefined} title={embedded ? "Back to the drawing (updates its plan if you changed anything)" : "Back to dashboard"} disabled={!!planBusy} />
+          <TbButton onClick={goBack} icon={ChevronLeft} label={embedded ? "Back to drawing" : "Dashboard"} shortLabel={embedded ? "Drawing" : undefined} title={embedded ? "Back to the drawing (updates its plan if you changed anything)" : "Back to dashboard"} disabled={!!planBusy} fit="back" />
           <TbBrand />
           <TbProjectPill label={sketchName || "Untitled sketch"} title="Rename this sketch" onClick={openRename} icon={PencilRuler} />
         </TbGroup>
@@ -917,20 +1521,20 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
               </>
             )}
           </TbMenu>
-          <TbButton onClick={doSave} icon={Save} label={saveState === "saving" ? "Saving…" : savedFlash ? "Saved ✓" : "Save"} title="Save (⌘S)" flash={savedFlash} disabled={saveState === "saving"} />
+          <TbButton onClick={doSave} icon={Save} label={saveState === "saving" ? "Saving…" : savedFlash ? "Saved ✓" : "Save"} title="Save" kbd="mod+s" flash={savedFlash} disabled={saveState === "saving"} />
           <TbButton onClick={openUsePlan} icon={Send} label="Use this plan" shortLabel="Use plan" title="Send this plan to the electrical drawing" disabled={!!planBusy} />
         </TbGroup>
 
         <TbGroup label="Draw">
           {DRAW_TOOLS.map((t) => (
-            <TbButton key={t.id} collapse icon={t.icon} label={t.label} title={`${t.label} (${t.key})`}
+            <TbButton key={t.id} collapse fit="draw" icon={t.icon} label={t.label} kbd={t.kbd} kbdTip={t.kbdTip}
               active={t.id === "wall" ? isWallTool : tool === t.id} onClick={() => pickTool(t.id)} />
           ))}
         </TbGroup>
 
         <TbGroup label="Edit">
-          <TbButton onClick={undo} icon={Undo2} title="Undo (⌘Z)" iconOnly disabled={!canUndo} />
-          <TbButton onClick={redo} icon={Redo2} title="Redo (⌘⇧Z)" iconOnly disabled={!canRedo} />
+          <TbButton onClick={undo} icon={Undo2} title="Undo" kbd="mod+z" iconOnly disabled={!canUndo} />
+          <TbButton onClick={redo} icon={Redo2} title="Redo" kbd="mod+shift+z" iconOnly disabled={!canRedo} />
         </TbGroup>
 
         <TbGroup label="View">
@@ -938,10 +1542,13 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
             <TbMenuItem icon={Grid3x3} label="Grid" checked={layers.grid} onClick={() => setLayers((l) => ({ ...l, grid: !l.grid }))} />
             <TbMenuItem icon={Magnet} label="Snap to grid" checked={flags.gridSnap} onClick={() => setFlags((f) => ({ ...f, gridSnap: !f.gridSnap }))} />
             <TbMenuItem icon={Compass} label="Lock angles (45°)" checked={flags.ortho} onClick={() => setFlags((f) => ({ ...f, ortho: !f.ortho }))} />
+            <TbMenuItem icon={Crosshair} label="Snap to walls" checked={flags.wallSnap} onClick={() => setFlags((f) => ({ ...f, wallSnap: !f.wallSnap }))} />
+            <TbMenuItem icon={Link2} label="Chain walls" checked={flags.chain} onClick={() => setFlags((f) => ({ ...f, chain: !f.chain }))} />
             <TbMenuItem icon={Maximize2} label="Zoom to fit" onClick={() => fit()} />
             <TbPanelsItem hidden={panelsHidden} onClick={() => setPanelsHidden((h) => !h)} />
             <TbThemeItem theme={theme} onClick={toggleTheme} />
           </TbMenu>
+          <TbShortcutsButton onClick={openShortcuts} open={shortcutsOpen} />
         </TbGroup>
 
         <TbTrialSlot>{access.isTry ? <TryPill used={tryUsage.used} limit={tryUsage.limit} onSubscribe={subscribe} /> : null}</TbTrialSlot>
@@ -952,11 +1559,50 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
         {!panelsHidden && (
           <SidePanel side="left" title="Floor plan" eyebrow="SKETCH">
             <div className="flex-1 overflow-y-auto px-3 py-3">
+              {/* The scale the plan goes on the A3 sheet at (lib/cad/planScale):
+                  Auto, or a picked one saved with the sketch (undoable). */}
+              <section className="mb-5">
+                <SectionLabel>Scale</SectionLabel>
+                <ChoiceGroup label="Scale" columns={3} value={scalePrefOf(model)}
+                  onChange={(v) => v !== scalePrefOf(model) && change((m) => ({ ...m, sheetScale: v }))}
+                  options={[{ value: "auto", label: "Auto" }, ...SCALES.map((s) => ({ value: s, label: "1:" + s }))]} />
+                {!hasWalls ? (
+                  <div className={`mt-2 ${PANEL_HELP}`}>
+                    {!sheetPlan.manual ? `Auto - 1:${sheetPlan.scale}. As the drawing outgrows the sheet, Auto steps up (1:100, 1:200...).` : `1:${sheetPlan.scale}.`} The dashed outline shows the A3 drawing area.
+                  </div>
+                ) : sheetPlan.cut ? (
+                  <div role="alert" className={SCALE_WARN}>The plan doesn&apos;t fit A3 at 1:{sheetPlan.scale} - {scaleCure(sheetPlan)}.</div>
+                ) : !sheetPlan.manual && sheetPlan.tooBig ? (
+                  <div role="alert" className={SCALE_WARN}>Too big for A3 even at 1:500 - Auto draws it at 1:{sheetPlan.scale} so none of it is cut off.</div>
+                ) : (
+                  <div className={`mt-2 ${PANEL_HELP}`}>
+                    {!sheetPlan.manual ? `Auto - 1:${sheetPlan.scale}. Auto starts at 1:50 and steps up only when the drawing outgrows the sheet.`
+                      : sheetPlan.fits ? `1:${sheetPlan.scale} fits the A3 drawing area.`
+                      : `1:${sheetPlan.scale} fits, but closer to the edge than the ${MARGIN_MM} mm margin Auto keeps.`} The dashed outline shows the drawing area.
+                  </div>
+                )}
+              </section>
               <section className="mb-5">
                 <SectionLabel>Wall style</SectionLabel>
                 <ChoiceGroup label="Wall style" value={wallStyleOf(model)}
                   onChange={(v) => v !== wallStyleOf(model) && change((m) => ({ ...m, wallStyle: v }))}
                   options={[{ value: "solid", label: "Solid" }, { value: "light", label: "Light" }]} />
+              </section>
+              <section className="mb-5">
+                <SectionLabel>Label size</SectionLabel>
+                <ChoiceGroup label="Label size" value={labelSizeOf(model)}
+                  onChange={(v) => v !== labelSizeOf(model) && change((m) => ({ ...m, labelSize: v }))}
+                  options={["small", "medium", "large"].map((v) => ({ value: v, label: LABEL_SIZE_NAMES[v] }))} />
+                <div className={`mt-1.5 ${PANEL_HELP}`}>Room names and areas on the printed plan. Never smaller than 3 mm.</div>
+              </section>
+              <section className="mb-5">
+                <SectionLabel>Wall thickness</SectionLabel>
+                <ChoiceGroup label="Wall thickness" value={wallWeightOf(model)}
+                  onChange={(v) => v !== wallWeightOf(model) && change((m) => ({ ...m, wallWeight: v }))}
+                  options={["thin", "standard", "bold"].map((v) => ({ value: v, label: WALL_WEIGHT_NAMES[v] }))} />
+                <div className={`mt-1.5 ${PANEL_HELP}`}>
+                  Walls print {WALL_WEIGHTS[wallWeightOf(model)].external} mm thick outside, {WALL_WEIGHTS[wallWeightOf(model)].internal} mm inside, at any scale - as drawn here.
+                </div>
               </section>
               <section className="mb-5">
                 <SectionLabel>Snap grid</SectionLabel>
@@ -969,6 +1615,10 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
                   onChange={(v) => setFlags((f) => ({ ...f, ortho: v }))} />
                 <ToggleRow label="Snap to grid" hint={`Points land on the ${settings.grid} mm grid`} checked={flags.gridSnap}
                   onChange={(v) => setFlags((f) => ({ ...f, gridSnap: v }))} />
+                <ToggleRow label="Snap to walls" hint="Wall sides and alignment guides" checked={flags.wallSnap}
+                  onChange={(v) => setFlags((f) => ({ ...f, wallSnap: v }))} />
+                <ToggleRow label="Chain walls" hint="Each wall starts where the last one ended" checked={flags.chain}
+                  onChange={(v) => setFlags((f) => ({ ...f, chain: v }))} />
               </section>
               <section>
                 <SectionLabel className="mb-1">Layers</SectionLabel>
@@ -976,7 +1626,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
                   const on = layers[id];
                   return (
                     <button key={id} type="button" role="switch" aria-checked={on} title={on ? `Hide ${label.toLowerCase()}` : `Show ${label.toLowerCase()}`}
-                      onClick={() => setLayers((l) => ({ ...l, [id]: !l[id] }))}
+                      onClick={() => { if (on && sel && SEL_LAYER[sel.kind] === id) setSel(null); setLayers((l) => ({ ...l, [id]: !l[id] })); }}
                       className="w-full flex items-center gap-2.5 px-1.5 h-9 rounded-lg text-left hover:bg-slate-200/60 dark:hover:bg-white/5 transition-colors">
                       <span className={`flex-1 text-[13px] font-medium ${on ? "text-slate-800 dark:text-slate-100" : "text-slate-500 dark:text-slate-400 line-through decoration-slate-400/60"}`}>{label}</span>
                       {on ? <Eye size={17} className="shrink-0 text-[#1C6F7C] dark:text-[#5FD0E0]" /> : <EyeOff size={17} className="shrink-0 text-slate-500 dark:text-slate-400" />}
@@ -997,11 +1647,13 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
           <div ref={wrapRef} className="absolute inset-0 overflow-hidden bg-white">
             <div ref={gridRef} style={{ position: "absolute", inset: 0, pointerEvents: "none", transformOrigin: "0 0", willChange: PROMOTE, ...gridStyle }} />
             <svg ref={svgRef} className="cadv__svg" width="100%" height="100%" style={{ cursor: svgCursor, transformOrigin: "0 0", willChange: PROMOTE }}
-              onPointerDown={handleDown} onPointerMove={handleMove} onPointerUp={handleUp} onPointerCancel={handleUp}
+              onPointerDown={handleDown} onPointerMove={handleMove} onPointerUp={handleUp} onPointerCancel={handleCancel}
               onClick={handleClick}
               onPointerLeave={() => setCur((c) => ({ ...c, on: false }))}>
               <g ref={gRef}>
+                {sheetOutline}
                 {planEls}
+                {sheetLabel}
                 {overlay}
               </g>
             </svg>
@@ -1009,17 +1661,22 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
           </div>
 
           <FloatingToolbar tool={tool} setTool={pickTool} tools={CANVAS_TOOLS} />
-          <ZoomControls zoom={view.s / 0.08} onIn={() => zoomBy(1.2)} onOut={() => zoomBy(1 / 1.2)} onFit={() => fit()} />
+          <ZoomControls zoom={view.s / 0.08} onIn={() => zoomBy(1.2)} onOut={() => zoomBy(1 / 1.2)} onFit={() => fit()} keys={false} />
           <div className="absolute left-4 bottom-11 z-20 flex items-center gap-3 px-3 h-8 bg-white dark:bg-[#16202B] rounded-xl ring-1 ring-slate-200/70 dark:ring-[#2A3947] shadow-[0_10px_30px_-10px_rgba(16,28,40,0.22)] text-[11px] text-slate-700 dark:text-slate-200"
                style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>
             <span className="font-semibold">N &#8593;</span>
             <span className="inline-flex h-1.5 ring-1 ring-slate-400"><i className="w-5 bg-slate-600 dark:bg-slate-300" /><i className="w-5 bg-white dark:bg-[#16202B]" /><i className="w-5 bg-slate-600 dark:bg-slate-300" /></span>
             <span>0 1 2 m</span>
           </div>
+          {/* First visit on this device: where the shortcuts are (after the name gate). */}
+          {tipShow && !nameGate && !renameOpen && !planModal && !planBusy && !shortcutsOpen && (
+            <ShortcutsTip className="left-4 bottom-[84px]" onDismiss={dismissTip} onOpen={openShortcuts} />
+          )}
 
-          <StatusBar right={<>X {Math.round(cur.x)} Y {Math.round(cur.y)} · GRID {settings.grid}MM · <span className={saveState === "unsaved" || saveState === "error" ? "text-amber-600" : ""}>{SAVE_LABEL[saveState]}</span></>}>
+          {/* Under 1300px the grid size (it is in the panel) gives way to the hint. */}
+          <StatusBar right={<>X {Math.round(cur.x)} Y {Math.round(cur.y)} · <span className="hidden min-[1300px]:inline">GRID {settings.grid}MM · </span><span className={saveState === "unsaved" || saveState === "error" ? "text-amber-600" : ""}>{SAVE_LABEL[saveState]}</span></>}>
             <span>TOOL <span className="text-[#22808F] ml-1">{TOOL_NAME[tool].toUpperCase()}</span></span>
-            <span className="text-[#22808F]">{hint}</span>
+            <StatusHint parts={statusParts} />
           </StatusBar>
           </div>
         </main>
@@ -1033,7 +1690,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
               {selWall ? (
                 <>
                   <div className="text-[15px] font-semibold text-slate-900 dark:text-slate-100" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>Wall</div>
-                  <div className={`mt-1 mb-4 ${PANEL_HELP}`}>Change its type, or delete it.</div>
+                  <div className={`mt-1 mb-4 ${PANEL_HELP}`}>Drag it, or its end squares, on the plan to move it. Change its type, or delete it.</div>
                   <ScheduleRows rows={[["Length", fmtMM(segLen(selWall)) + " mm"], ["Thickness", (selWall.type === "external" ? T_EXT : T_INT) + " mm"]]} />
                   <SectionLabel className="mt-5 mb-2">Wall type</SectionLabel>
                   <ChoiceGroup label="Wall type" value={selWall.type} onChange={(t) => selWall.type !== t && convertSel()}
@@ -1043,7 +1700,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
               ) : selDoor ? (
                 <>
                   <div className="text-[15px] font-semibold text-slate-900 dark:text-slate-100" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>Door</div>
-                  <div className={`mt-1 mb-4 ${PANEL_HELP}`}>Flip side swaps which room it opens into; flip hinge swaps the hinged edge.</div>
+                  <div className={`mt-1 mb-4 ${PANEL_HELP}`}>Drag it along its wall on the plan to move it. Flip side swaps which room it opens into; flip hinge swaps the hinged edge.</div>
                   <ScheduleRows rows={[["Width", selDoor.w + " mm"], ["Wall", selDoor.t === T_EXT ? "External" : "Internal"]]} />
                   <SectionLabel className="mt-5 mb-2">Swing</SectionLabel>
                   <div className="grid grid-cols-2 gap-1.5">
@@ -1055,15 +1712,31 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
               ) : selWin ? (
                 <>
                   <div className="text-[15px] font-semibold text-slate-900 dark:text-slate-100" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>Window</div>
-                  <div className={`mt-1 mb-4 ${PANEL_HELP}`}>Mark it as an escape window if it's the fire escape route.</div>
+                  <div className={`mt-1 mb-4 ${PANEL_HELP}`}>Drag it along its wall on the plan to move it. Mark it as an escape window if it's the fire escape route.</div>
                   <ScheduleRows rows={[["Width", selWin.w + " mm"], ["Wall", selWin.t === T_EXT ? "External" : "Internal"]]} />
                   <div className="mt-4"><ToggleRow label="Escape window" checked={!!selWin.escape} onChange={() => toggleEscape()} /></div>
                   <PanelAction danger onClick={deleteSel} className="w-full mt-5"><Trash2 size={14} /> Delete window</PanelAction>
+                </>
+              ) : selRoom ? (
+                <>
+                  <div className="text-[15px] font-semibold text-slate-900 dark:text-slate-100" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>Room</div>
+                  <div className={`mt-1 mb-4 ${PANEL_HELP}`}>Drag the label on the plan to move it. With Automatic area on, the area is worked out from the walls round it.</div>
+                  <SectionLabel>Name</SectionLabel>
+                  <NameField key={sel.index} label="Room name" value={selRoom.name} onCommit={(nm) => updRoom({ name: nm })} />
+                  <div className="mt-4"><ScheduleRows rows={[["Area", selArea != null ? selArea.toFixed(1) + " m\u00B2" : selOnWall ? "On a wall" : isAuto(selRoom) ? "Not enclosed" : "None"]]} /></div>
+                  {isAuto(selRoom) && selArea == null && <div className={`mt-1 ${PANEL_HELP}`}>{selOnWall ? "On a wall - move the label into a room to get an area." : "Not enclosed - close the walls to get an area."}</div>}
+                  <div className="mt-3"><ToggleRow label="Automatic area" hint="Worked out from the walls round it" checked={isAuto(selRoom)} onChange={(v) => updRoom({ auto: v })} /></div>
+                  <PanelAction danger onClick={deleteSel} className="w-full mt-5"><Trash2 size={14} /> Delete room</PanelAction>
                 </>
               ) : (
                 <>
                   <div className="text-[15px] font-semibold text-slate-900 dark:text-slate-100" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>{TOOL_NAME[tool]}</div>
                   <div className={`mt-1 ${PANEL_HELP}`}>{hint}</div>
+                  {isWallTool && flags.chain && <div className={`mt-2 ${PANEL_HELP}`}>Chain walls is on: each wall starts where the last one ended. Click the first point again to close the shape.</div>}
+                  {/* No Esc key on touch: this ends an open run (the walls stay). */}
+                  {isWallTool && flags.chain && draftPts.length > 0 && run && run.walls > 0 && (
+                    <PanelAction primary onClick={finishAction} className="w-full mt-3">Finish run</PanelAction>
+                  )}
                   {isWallTool && (
                     <>
                       <SectionLabel className="mt-5 mb-2">Wall type</SectionLabel>
@@ -1122,12 +1795,12 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
             {embedded ? (
               <>
                 <p>Add this plan to your drawing as the background, behind your electrical symbols.</p>
-                <button className="m-btn primary" onClick={() => runUsePlan("apply")}>Add to this drawing<small>Keeps your placed symbols in position</small></button>
+                <button className="m-btn primary" onClick={() => runUsePlan("apply")}>Add to this drawing<small>Keeps your placed symbols on the same spots of the plan</small></button>
               </>
             ) : linkProjectId ? (
               <>
                 <p>This sketch is already linked to an electrical drawing. Update that drawing with your latest plan and keep every symbol you have placed, or start a brand-new drawing.</p>
-                <button className="m-btn primary" onClick={() => runUsePlan("update")}>Update existing drawing<small>Keeps your placed symbols in position</small></button>
+                <button className="m-btn primary" onClick={() => runUsePlan("update")}>Update existing drawing<small>Keeps your placed symbols on the same spots of the plan</small></button>
                 <button className="m-btn" onClick={() => runUsePlan("new")}>Create a new drawing<small>A fresh drawing with no symbols yet</small></button>
               </>
             ) : (
@@ -1143,6 +1816,8 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       {planBusy && (
         <div className="cadv__busy"><div className="box"><span className="spin" />{planBusy}&#8230;</div></div>
       )}
+      <ShortcutsCard open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} subtitle="Sketch a plan"
+        groups={SHORTCUTS} touchGroups={TOUCH_GESTURES} />
     </div>
   );
 }
@@ -1160,6 +1835,8 @@ const CSS = `
 .cadv-sel{stroke:#3FB7C9}
 .cadv-sel-fill{fill:rgba(63,183,201,.18)}
 .cadv-active{stroke:#3FB7C9}
+.cadv-handle{fill:#3FB7C9; stroke:#FFFFFF}
+.cadv-guide{stroke:#2C97A8; fill:none; opacity:.85}
 .cadv-cross{stroke:#2C3E50}
 .cadv-dim{stroke:#2C3E50}
 .cadv-dim-crit{stroke:#C4564B}
@@ -1169,10 +1846,26 @@ const CSS = `
 .cadv-room{font-family:var(--font-jetbrains-mono),monospace; fill:#2C3E50}
 .cadv-room .nm{font-weight:600; letter-spacing:.08em}
 .cadv-room .ar{fill:#6E7B88}
+.cadv-room.sel, .cadv-room.sel .ar{fill:#3FB7C9}
 .cadv-tag-txt{font-family:var(--font-jetbrains-mono),monospace; fill:#16212B}
 .cadv-note{font-family:var(--font-jetbrains-mono),monospace; fill:#54616E}
+.cadv-sheet rect{stroke:#2C97A8; opacity:.6}
+.cadv-op-prev{fill:rgba(63,183,201,.28); stroke:#2C97A8}
+.cadv-op-block{fill:rgba(196,86,75,.32); stroke:#C4564B}
+.cadv-op-edge{stroke:#2C97A8; stroke-linecap:round}
+.cadv__hud .snap.cadv__hud-bad{background:#C4564B; color:#fff}
+.cadv-sheet text{fill:#22808F; font-family:var(--font-jetbrains-mono),monospace; font-weight:600; letter-spacing:.06em; opacity:.85}
+.cadv-sheet.over rect{stroke:#C4564B; opacity:.95}
+.cadv-sheet.over text{fill:#C4564B; opacity:1}
 .cadv__hud{position:absolute; z-index:8; pointer-events:none; background:#1A2733; color:#EAF1F6; font-family:var(--font-jetbrains-mono),monospace; font-size:11.5px; padding:4px 8px; border-radius:6px; white-space:nowrap; transform:translate(14px,14px)}
 .cadv__hud b{color:#3FB7C9; font-weight:600}
+.cadv__hud .sub{color:#8FA3B3; margin-left:6px}
+.cadv__hud .snap{display:inline-block; margin-left:8px; padding:0 4px; border-radius:3px; background:#2C97A8; color:#0E141B; font-size:10px; font-weight:600; letter-spacing:.06em; line-height:15px}
+.cadv__hud .snap:first-child{margin-left:0}
+.cadv__hud--typed{outline:1.5px solid #2C97A8}
+.cadv__hud--typed span{color:#8FA3B3; margin-left:6px}
+.cadv__caret{display:inline-block; width:1px; height:11px; margin-left:1px; vertical-align:-1px; background:#3FB7C9; animation:cadvCaret 1s steps(1) infinite}
+@keyframes cadvCaret{50%{opacity:0}}
 .cadv__modal-bg{position:fixed; inset:0; background:rgba(15,23,42,.5); backdrop-filter:blur(3px); display:flex; align-items:center; justify-content:center; z-index:50; padding:16px}
 .cadv__modal{width:420px; max-width:100%; background:#fff; border-radius:16px; padding:24px 24px 20px; box-shadow:0 24px 60px -20px rgba(0,0,0,.45); color:#0E141B; user-select:text}
 .cadv__modal .h{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:19px; margin-bottom:8px}

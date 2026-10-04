@@ -1,13 +1,13 @@
 ﻿"use client";
 
-import React, { useMemo, useState, useEffect, useRef } from "react";
+import React, { useMemo, useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import {
   Upload, Trash2, Save, FolderOpen, Download, Undo2, Redo2,
   MousePointer2, Cable, BrickWall, RotateCw, ZoomIn, ZoomOut, Maximize2,
   Palette as PaletteIcon, Ruler, Hand, Type, Printer, Settings, Search, Sun, Moon, Mail,
   ChevronRight, ChevronLeft, X, FileText, PanelLeftClose, PanelLeftOpen,
-  Grid3x3, ChevronDown, Check, ClipboardList, Plus, Clock, LayoutPanelTop, ImagePlus, SlidersHorizontal, Building2, PencilRuler,
+  Grid3x3, ChevronDown, Check, ClipboardList, Plus, Clock, LayoutPanelTop, ImagePlus, SlidersHorizontal, Building2, PencilRuler, Keyboard,
 } from "lucide-react";
 import {
   SYMBOLS, SYMBOL_META, CATEGORY_COLOURS, VIEWBOX,
@@ -28,6 +28,8 @@ import { BOQ_ESTIMATE_NOTICE } from "@/lib/legal";
 import { TrialSheetMark, TryPrompt, useTryPrompt, LOCKED } from "@/components/TryMode";
 import { addDaysIso, QUOTE_VALID_DAYS, shownOnQuote, lineTotal as boqLineTotal, sectionTotal, boqTotals, outputSettings, materialsDoc, quoteDoc, docToCsv, QUOTE_DETAILS, hasQty, badNumberLines, parseNum, expiredValidUntil, fmtDate } from "@/lib/boqOutputs";
 import BoqDocPages from "@/components/BoqDocPages";
+import { keyText, ariaKeys, SHOW_KBD, TOUCH, CLOSE_MENUS } from "@/components/Shortcuts";
+import { SHEET, planFootprint } from "@/lib/cad/sheet";
 
 // Per-project title block. The editor publishes the *effective* title block
 // (the project's own, falling back to the account default) through this context
@@ -39,31 +41,12 @@ export function useProjectTitleBlock() {
 }
 
 /* ============================================================================
- * The sheet model
- * Re-declared here so this file is self-contained. Must match the values
- * in ElectricalPlanTool.jsx.
+ * The sheet model (SHEET), and planFootprint: where the plan sits inside the
+ * drawing area. The editor, the print page and the PDF export all place the
+ * plan with that one function, as does the sketch's true-scale export
+ * (lib/cad/planScale), so symbols stay on the right wall line in all of them.
+ * Both live in lib/cad/sheet, the one copy of the sheet's numbers.
  * ========================================================================= */
-const SHEET = {
-  width: 1587,
-  height: 1123,
-  margin: 18,
-  legendWidth: 230,
-  notesWidth: 280,
-  titleHeight: 110,
-};
-
-/* Where the plan sits inside the drawing area: scaled to fit (contain) and
- * centred. Returns { x, y, w, h } in CSS px, relative to DRAW's top-left.
- *
- * The editor, the print page and the PDF export all place the plan with this
- * one function. Symbols are positioned in the same DRAW space, so sharing it
- * is what keeps them on the right wall line in all three. */
-function planFootprint(DRAW, w, h) {
-  const scale = Math.min(DRAW.w / w, DRAW.h / h);
-  const fw = w * scale;
-  const fh = h * scale;
-  return { x: (DRAW.w - fw) / 2, y: (DRAW.h - fh) / 2, w: fw, h: fh };
-}
 
 const TOOLS = {
   select: { icon: MousePointer2, label: "Select", hint: "V" },
@@ -90,7 +73,7 @@ export function TopBar({
   meta, onHome, theme, onToggleTheme, onShowMeta, onImport, onUndo, onRedo, onSave, savedFlash, onShowProjects,
   onExportJSON, onPrint, colourMode, onToggleColour, onNormalise, normaliseFlash,
   snapEnabled, onToggleSnap, onShowBoq, onShowTitleBlock, onShowNotes,
-  sidebarHidden, onToggleSidebar, trialPill = null, onEditFloorPlan = null,
+  sidebarHidden, onToggleSidebar, trialPill = null, onEditFloorPlan = null, onShowShortcuts = null, shortcutsOpen = false,
 }) {
   const projectLabel = meta.projectName || "Untitled Project";
   const sheetLabel = meta.sheetName || "Drawing";
@@ -98,7 +81,7 @@ export function TopBar({
     <TopBarShell>
       {/* 1. Back + project */}
       <TbGroup first>
-        {onHome && <TbButton onClick={onHome} icon={ChevronLeft} label="Dashboard" title="Back to dashboard" />}
+        {onHome && <TbButton onClick={onHome} icon={ChevronLeft} label="Dashboard" title="Back to dashboard" fit="back" />}
         <TbBrand />
         <TbProjectPill label={projectLabel} title={`${projectLabel} — ${sheetLabel}`} onClick={onShowMeta} />
       </TbGroup>
@@ -106,14 +89,14 @@ export function TopBar({
       {/* 2. File */}
       <TbGroup label="File">
         <TbButton onClick={onImport} icon={Upload} label="Import" title="Import a plan (PDF or image)" />
-        <TbButton onClick={onSave} icon={Save} label={savedFlash ? "Saved ✓" : "Save"} title="Save (⌘S)" flash={savedFlash} />
-        <TbButton onClick={onPrint} icon={Download} label="Download" title="Download a PDF or print (⌘P)" />
+        <TbButton onClick={onSave} icon={Save} label={savedFlash ? "Saved ✓" : "Save"} title="Save" kbd="mod+s" flash={savedFlash} />
+        <TbButton onClick={onPrint} icon={Download} label="Download" title="Download a PDF or print" kbd="mod+p" />
       </TbGroup>
 
       {/* 3. Edit */}
       <TbGroup label="Edit">
-        <TbButton onClick={onUndo} icon={Undo2} title="Undo (⌘Z)" iconOnly />
-        <TbButton onClick={onRedo} icon={Redo2} title="Redo (⌘⇧Z)" iconOnly />
+        <TbButton onClick={onUndo} icon={Undo2} title="Undo" kbd="mod+z" iconOnly />
+        <TbButton onClick={onRedo} icon={Redo2} title="Redo" kbd="mod+shift+z" iconOnly />
       </TbGroup>
 
       {/* 4. Drawing */}
@@ -135,6 +118,7 @@ export function TopBar({
           sidebarHidden={sidebarHidden} onToggleSidebar={onToggleSidebar}
           theme={theme} onToggleTheme={onToggleTheme}
         />
+        {onShowShortcuts && <TbShortcutsButton onClick={onShowShortcuts} open={shortcutsOpen} />}
       </TbGroup>
 
       {/* 6. Try mode: Trial pill + Subscribe, far right */}
@@ -147,13 +131,68 @@ export function TopBar({
  * (components/cad/CadSketch.jsx) so the two screens stay one app. */
 
 // The bar itself: 48px, white / navy, one row.
+// It never overflows: the bar measures itself (on resize, and when a label or
+// name changes) and takes the first of the TB_FIT layouts that fits. Each
+// layout is a set of things given up; data-fit-<name> on the bar marks each
+// one, and the parts below hide or shorten on it:
+//   sc     the Shortcuts button's label (its "?" badge stays)
+//   long   long labels take their short form from 1300px too ("Drawing",
+//          "Use plan", "Notes", "Title")
+//   combo  the Ctrl/⌘ combination badges (Save, Download)
+//   pill   the name pill's cap, 220px -> 140px
+//   draw   the Draw tool labels: icon + key ("E"), the name in the tooltip
+//   keys   the single-key badges
+//   help   the Shortcuts "?" badge (the key to all the others)
+//   back   the back button's label: icon only, at any width
+//   pill2  the name pill's cap, down to 64px, at any width
+// Order: the soft four one by one; then, if the tool names and their keys
+// still don't both fit, the names go (icon + key) and the soft four come
+// back and go again one by one; then the keys, "?", the back label, the pill.
+// So from 1300px the keys always show; the badges only exist from 1300px (and
+// never on touch), so under that only back / pill2 change anything.
+const TB_SOFT = ["sc", "long", "combo", "pill"];
+const TB_HARD = ["keys", "help", "back", "pill2"];
+const TB_FLAGS = ["draw", ...TB_SOFT, ...TB_HARD];
+const TB_FIT = [
+  ...[0, 1, 2, 3, 4].map((n) => TB_SOFT.slice(0, n)),
+  ...[0, 1, 2, 3, 4].map((n) => ["draw", ...TB_SOFT.slice(0, n)]),
+  ...[1, 2, 3, 4].map((n) => ["draw", ...TB_SOFT, ...TB_HARD.slice(0, n)]),
+];
 export function TopBarShell({ children }) {
+  const ref = useRef(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const fit = () => {
+      if (!el.isConnected) return;
+      const end = el.getBoundingClientRect().right - parseFloat(getComputedStyle(el).paddingRight || "0") + 0.5;
+      for (const drop of TB_FIT) {
+        for (const f of TB_FLAGS) el.toggleAttribute("data-fit-" + f, drop.includes(f));
+        let r = 0;
+        for (const c of el.children) r = Math.max(r, c.getBoundingClientRect().right);
+        if (r <= end) break;
+      }
+    };
+    // Straight from the observers (no animation frame): it only touches the
+    // bar, whose own size never changes with it.
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    const mo = new MutationObserver(fit);
+    mo.observe(el, { childList: true, subtree: true, characterData: true });
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(fit);
+    return () => { ro.disconnect(); mo.disconnect(); };
+  }, []);
   return (
-    <header className="relative z-30 flex items-center px-3 h-12 bg-white dark:bg-[#16202B] border-b border-slate-200 dark:border-[#263441] whitespace-nowrap">
+    <header ref={ref} className="group/tb relative z-30 flex items-center px-3 h-12 bg-white dark:bg-[#16202B] border-b border-slate-200 dark:border-[#263441] whitespace-nowrap">
       {children}
     </header>
   );
 }
+// What the TopBarShell steps hide (see above). Written out in full so
+// Tailwind sees the class names.
+const TB_FIT_LABEL = { sc: "group-data-[fit-sc]/tb:!hidden", draw: "group-data-[fit-draw]/tb:!hidden", back: "group-data-[fit-back]/tb:!hidden" };
+const TB_FIT_BADGE = { help: "group-data-[fit-help]/tb:!hidden", combo: "group-data-[fit-combo]/tb:!hidden", key: "group-data-[fit-keys]/tb:!hidden" };
 
 // Plotwire wordmark: only from 1600px, where there is room for it.
 export function TbBrand() {
@@ -165,13 +204,14 @@ export function TbBrand() {
   );
 }
 
-// The project / sketch name pill; truncates sooner under 1300px.
+// The project / sketch name pill; truncates sooner under 1300px, and sooner
+// still when the bar is tight (TopBarShell pill / pill2).
 export function TbProjectPill({ label, title, onClick, icon: Icon = FileText }) {
   return (
     <button type="button" onClick={onClick} title={title || label}
       className="group h-8 flex items-center gap-1.5 px-2 min-[1300px]:px-2.5 rounded-lg bg-[var(--action)] hover:bg-[var(--action-hover)] text-[color:var(--action-ink)] transition-colors text-[11px] font-semibold min-w-0">
       <Icon size={14} className="opacity-70 shrink-0"/>
-      <span className="truncate max-w-[100px] min-[1300px]:max-w-[220px]">{label}</span>
+      <span className="truncate max-w-[100px] min-[1300px]:max-w-[220px] min-[1300px]:group-data-[fit-pill]/tb:max-w-[140px] group-data-[fit-pill2]/tb:!max-w-[64px]">{label}</span>
       <ChevronRight size={12} className="opacity-70 shrink-0"/>
     </button>
   );
@@ -199,30 +239,56 @@ export function TbGroup({ first = false, label, children }) {
 // replaces the label under 1300px; collapse drops the label under 1300px
 // (icon only, the title is the tooltip). active marks the tool in use:
 // navy with a teal ring and icon, the teal button inverted.
-export function TbButton({ onClick, icon: Icon, label, shortLabel, title, iconOnly = false, collapse = false, active = false, flash = false, disabled = false, trailing = null, buttonProps = {} }) {
+// kbd: its shortcut (a key spec, components/Shortcuts.jsx). Always in the
+// tooltip ("Save (Ctrl+S)" / "Save (⌘S)"; kbdTip words it instead); as a small
+// badge after the label only from 1300px, never on touch, never iconOnly, and
+// only while the bar has room (TopBarShell). fit: the TopBarShell step that
+// drops this button's label when the bar is tight ("sc", "draw" or "back").
+export function TbButton({ onClick, icon: Icon, label, shortLabel, title, kbd = null, kbdTip = null, fit = null, iconOnly = false, collapse = false, active = false, flash = false, disabled = false, trailing = null, buttonProps = {} }) {
   const size = iconOnly ? "w-8" : collapse ? "w-8 min-[1300px]:w-auto min-[1300px]:px-2.5" : "px-2 min-[1300px]:px-2.5";
   const tone = flash ? "bg-emerald-500 text-white"
     : active ? "bg-[#1A2530] text-[#5FD0E0] ring-2 ring-inset ring-[#3FB7C9] dark:bg-[#0B1117]"
     : "bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)]";
+  const name = title || label;
+  // The badge: a light chip on the teal button (navy key, about 6:1), a teal
+  // one on the active navy button.
+  const badge = flash ? "bg-white/25 text-white" : active ? "bg-[#3FB7C9]/20 text-[#5FD0E0]" : "bg-white/30 text-[color:var(--action-ink)]";
+  const text = collapse ? <span className="hidden min-[1300px]:inline">{label}</span> : shortLabel ? (
+    <>
+      <span className="hidden min-[1300px]:inline group-data-[fit-long]/tb:!hidden">{label}</span>
+      <span className="min-[1300px]:hidden min-[1300px]:group-data-[fit-long]/tb:!inline">{shortLabel}</span>
+    </>
+  ) : <span>{label}</span>;
   return (
-    <button type="button" onClick={onClick} title={title || label} disabled={disabled}
-      aria-label={iconOnly || collapse ? (title || label) : undefined}
+    <button type="button" onClick={onClick} title={kbd ? `${name} (${kbdTip || keyText(kbd)})` : name} disabled={disabled}
+      aria-label={iconOnly || collapse ? name : undefined}
+      aria-keyshortcuts={kbd ? ariaKeys(kbd) : undefined}
       aria-pressed={active ? true : undefined} {...buttonProps}
       className={`h-8 shrink-0 flex items-center justify-center gap-1.5 rounded-lg text-[11px] font-semibold transition-colors disabled:opacity-50 disabled:cursor-default ${size} ${tone}`}>
       <Icon size={15} className="shrink-0" />
-      {!iconOnly && (collapse ? <span className="hidden min-[1300px]:inline">{label}</span> : shortLabel ? (
-        <>
-          <span className="hidden min-[1300px]:inline">{label}</span>
-          <span className="min-[1300px]:hidden">{shortLabel}</span>
-        </>
-      ) : <span>{label}</span>)}
+      {!iconOnly && (fit ? <span className={`contents ${TB_FIT_LABEL[fit]}`}>{text}</span> : text)}
+      {kbd && SHOW_KBD && !iconOnly && (
+        <span aria-hidden className={`hidden min-[1300px]:inline-flex items-center h-4 px-1 -mr-0.5 rounded text-[9.5px] font-semibold leading-none ${badge} ${TB_FIT_BADGE[kbd === "?" ? "help" : kbd.includes("+") ? "combo" : "key"]}`}
+          style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>{keyText(kbd)}</span>
+      )}
       {trailing}
     </button>
   );
 }
 
+// Shortcuts (View group, both screens): opens the shortcuts card, or the
+// touch gestures card on a touch device. Icon only under 1300px.
+export function TbShortcutsButton({ onClick, open = false }) {
+  return (
+    <TbButton onClick={onClick} icon={Keyboard} label="Shortcuts" collapse fit="sc"
+      title={TOUCH ? "Touch gestures" : "Keyboard shortcuts"} kbd={TOUCH ? null : "?"}
+      buttonProps={{ "aria-haspopup": "dialog", "aria-expanded": open }} />
+  );
+}
+
 // A toolbar dropdown: a TbButton with a chevron and a menu under it. Stays
-// open while you try options; closes on Escape or a click elsewhere. `open`
+// open while you try options; closes on Escape, a click elsewhere or the
+// shortcuts card opening over it ("?", components/Shortcuts.jsx). `open`
 // and `onOpenChange` are optional, for a menu that is opened from elsewhere.
 // children may be a function of close().
 export const TB_MENU_ITEM = "w-full flex items-center gap-2.5 px-3 h-9 rounded-lg text-[12px] font-medium text-slate-700 dark:text-slate-200 hover:bg-[#ECF8FA] dark:hover:bg-white/10 text-left";
@@ -235,9 +301,11 @@ export function TbMenu({ icon, label, title, open: openProp, onOpenChange, width
     if (!open) return;
     const away = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
     const esc = (e) => { if (e.key === "Escape") setOpen(false); };
+    const shut = () => setOpen(false);
     document.addEventListener("pointerdown", away);
     document.addEventListener("keydown", esc);
-    return () => { document.removeEventListener("pointerdown", away); document.removeEventListener("keydown", esc); };
+    document.addEventListener(CLOSE_MENUS, shut);
+    return () => { document.removeEventListener("pointerdown", away); document.removeEventListener("keydown", esc); document.removeEventListener(CLOSE_MENUS, shut); };
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div ref={ref} className="relative">
@@ -269,7 +337,7 @@ export function TbMenuItem({ icon: Icon, label, onClick, title, checked, right =
 // "View" dropdown: Grid, Reset sizes, colour mode, Hide panels, Light/dark.
 function ViewMenu({ snapEnabled, onToggleSnap, onNormalise, normaliseFlash, colourMode, onToggleColour,
                     sidebarHidden, onToggleSidebar, theme, onToggleTheme }) {
-  const colourLabel = colourMode === "navy" ? "Navy" : colourMode === "red" ? "PB Red" : colourMode === "colour" ? "Colour" : "Mono";
+  const colourLabel = colourMode === "navy" ? "Navy" : colourMode === "red" ? "Classic Red" : colourMode === "colour" ? "Colour" : "Mono";
   return (
     <TbMenu icon={SlidersHorizontal} label="View" title="View options">
       <TbMenuItem icon={Grid3x3} label="Grid" checked={Boolean(snapEnabled)} onClick={onToggleSnap} />
@@ -602,10 +670,11 @@ export const PANEL_TEXT = "text-[13px] leading-snug text-slate-800 dark:text-sla
 export const PANEL_HELP = "text-[12px] leading-relaxed text-slate-600 dark:text-slate-300";
 
 /* Pick-one control. Selected = the app's solid teal button (navy text);
- * unselected = white with a thin border. Obvious at a glance which is on. */
-export function ChoiceGroup({ options, value, onChange, label }) {
+ * unselected = white with a thin border. Obvious at a glance which is on.
+ * columns: how many to a row (default all in one). */
+export function ChoiceGroup({ options, value, onChange, label, columns = null }) {
   return (
-    <div role="radiogroup" aria-label={label} className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}>
+    <div role="radiogroup" aria-label={label} className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${columns || options.length}, minmax(0, 1fr))` }}>
       {options.map((o) => {
         const on = o.value === value;
         return (
@@ -656,11 +725,12 @@ export function ScheduleRows({ rows }) {
 }
 
 // Readable panel button (13px). danger = delete.
-export function PanelAction({ onClick, children, danger = false, className = "" }) {
+export function PanelAction({ onClick, children, danger = false, primary = false, className = "" }) {
   return (
     <button type="button" onClick={onClick}
       className={`h-9 px-3 rounded-lg text-[13px] font-semibold flex items-center justify-center gap-1.5 ring-1 transition-colors ${className} ${
         danger ? "bg-white text-red-700 ring-red-300 hover:bg-red-50 dark:bg-[#0E141B] dark:text-red-300 dark:ring-red-400/40 dark:hover:bg-red-500/10"
+        : primary ? "bg-[var(--action)] text-[color:var(--action-ink)] ring-transparent hover:bg-[var(--action-hover)]"
                : "bg-white text-[#1A2530] ring-slate-300 hover:bg-slate-50 dark:bg-[#0E141B] dark:text-slate-100 dark:ring-[#2A3947] dark:hover:bg-[#16202B]"
       }`}>
       {children}
@@ -1990,13 +2060,19 @@ export function FloatingToolbar({ tool, setTool, tools = ["select", "wire"] }) {
         return (
           <button key={key}
             onClick={() => setTool(key)}
-            title={`${info.label} (${info.hint})`}
+            title={info.hint ? `${info.label} (${info.hint})` : info.label}
+            aria-label={info.label} aria-keyshortcuts={info.hint || undefined}
             className={`relative p-2.5 transition-colors duration-150 ${
               active ? "text-[#22808F]" : "text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/10"
             }`}>
             {active && <div className="absolute inset-0 bg-[#ECF8FA] dark:bg-[#3FB7C9]/15"/>}
             {active && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-[#3FB7C9] rounded-r-full"/>}
             <Icon size={15} className="relative"/>
+            {/* Its key, tiny in the corner: from 1300px, not on touch. */}
+            {SHOW_KBD && info.hint && (
+              <span aria-hidden className={`hidden min-[1300px]:block absolute right-[3px] bottom-[2px] text-[8px] leading-none font-semibold ${active ? "text-[#22808F] dark:text-[#5FD0E0]" : "text-slate-500 dark:text-slate-400"}`}
+                style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>{info.hint}</span>
+            )}
           </button>
         );
       })}
@@ -2039,19 +2115,20 @@ export function StatusCount({ label, value }) {
   return <span>{label} <span className="text-[#22808F] ml-1" style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>{value}</span></span>;
 }
 
-export function ZoomControls({ zoom, onIn, onOut, onFit }) {
+// keys: the editor's + / - / 0 in the tooltips (the sketch has no zoom keys).
+export function ZoomControls({ zoom, onIn, onOut, onFit, keys = true }) {
   return (
     <div className="absolute top-4 right-4 z-20 flex bg-white dark:bg-[#16202B] rounded-2xl ring-1 ring-slate-200/70 dark:ring-[#2A3947] shadow-[0_10px_30px_-10px_rgba(16,28,40,0.22)] overflow-hidden">
-      <button onClick={onOut} className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/10 transition-colors">
+      <button onClick={onOut} title={keys ? "Zoom out (-)" : "Zoom out"} aria-label="Zoom out" aria-keyshortcuts={keys ? "-" : undefined} className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/10 transition-colors">
         <ZoomOut size={14}/>
       </button>
       <div className="px-3 self-center text-[11px] text-slate-700 dark:text-slate-200 tabular-nums border-x border-slate-200 dark:border-[#2A3947] min-w-[56px] text-center" style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>
         {Math.round(zoom*100)}%
       </div>
-      <button onClick={onIn} className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/10 transition-colors">
+      <button onClick={onIn} title={keys ? "Zoom in (+)" : "Zoom in"} aria-label="Zoom in" aria-keyshortcuts={keys ? "+" : undefined} className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/10 transition-colors">
         <ZoomIn size={14}/>
       </button>
-      <button onClick={onFit} title="Fit (0)"
+      <button onClick={onFit} title={keys ? "Fit (0)" : "Zoom to fit"} aria-label="Zoom to fit" aria-keyshortcuts={keys ? "0" : undefined}
               className="p-2.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/10 transition-colors border-l border-slate-200 dark:border-[#2A3947]">
         <Maximize2 size={14}/>
       </button>
@@ -2478,7 +2555,9 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
 
         {readOnly && (
           <div className="px-6 py-2 bg-amber-50 border-b border-amber-200 text-[11.5px] text-amber-900 shrink-0">
-            Your subscription has ended, so this quote is view-only. You can still download the materials list and client quote.
+            {access.paymentOverdue
+              ? "Your last payment didn’t go through, so this quote is view-only until it’s paid. You can still download the materials list and client quote."
+              : "Your subscription has ended, so this quote is view-only. You can still download the materials list and client quote."}
           </div>
         )}
 
@@ -3015,14 +3094,21 @@ function glyphToPrims(glyphEl) {
   return prims;
 }
 
-// Build a placement job (in PDF points) for one glyph element.
-function glyphToJob(glyphEl, DRAW, sx, sy, PAGE_H) {
+// Build a placement job (in PDF points) for one glyph element. clip: the
+// sheet's plan was sent at a true scale (bgImage.planFrame), whose re-map
+// (lib/cad/planScale remapSheet) can leave symbols outside the drawing area:
+// one wholly outside it (turned any way) is left out, as the editor and print
+// page hide it (the area clips). One partly inside prints whole, as before.
+// Older sheets print every symbol, exactly as they always have.
+function glyphToJob(glyphEl, DRAW, sx, sy, PAGE_H, clip = false) {
   const size = parseFloat(glyphEl.getAttribute("width")) || 0;
   if (!size) return null;
   const g = glyphEl.parentNode; // the <g> carrying translate()/rotate()
   const { tx, ty, rot } = parseGroupTransform(g && g.getAttribute ? g.getAttribute("transform") : "");
   const half = size / 2;
   const localX = tx + half, localY = ty + half;      // symbol centre in DRAW space
+  const r = half * Math.SQRT2;
+  if (clip && (localX + r < 0 || localY + r < 0 || localX - r > DRAW.w || localY - r > DRAW.h)) return null;
   const cx = (DRAW.x + localX) * sx;                  // → PDF points
   const cy = PAGE_H - (DRAW.y + localY) * sy;         // pdf-lib is bottom-left
   return { prims: glyphToPrims(glyphEl), cx, cy, size: size * sx, rotationDeg: rot };
@@ -3469,7 +3555,7 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
         const glyphEls = Array.from(el.querySelectorAll('[data-sym-glyph]'));
         const symbolJobs = [];
         for (const gEl of glyphEls) {
-          const job = glyphToJob(gEl, DRAW, sx, sy, PAGE_H);
+          const job = glyphToJob(gEl, DRAW, sx, sy, PAGE_H, !!(bg && bg.planFrame));
           if (job) symbolJobs.push(job);
           saved.push([gEl, "visibility", gEl.style.visibility]);
           gEl.style.visibility = "hidden";

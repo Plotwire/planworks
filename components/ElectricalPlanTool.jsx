@@ -23,8 +23,11 @@ import {
 } from "@/components/SheetParts";
 import { useApp } from "@/components/AppShell";
 import { getSketchData } from "@/lib/cad/sketchStore";
+import { SHEET, DRAW } from "@/lib/cad/sheet";
+import { applyPlanToSheet, scaleLabel, outsideNote } from "@/lib/cad/planScale";
 import { DEFAULT_TITLEBLOCK } from "@/lib/titleBlock";
 import { useTryUsage, useTryPrompt, TryPill, TryPrompt, LOCKED, drawingSymbolCount } from "@/components/TryMode";
+import { ShortcutsCard, StatusHint, TOUCH } from "@/components/Shortcuts";
 import dynamic from "next/dynamic";
 const CadSketchPanel = dynamic(() => import("@/components/cad/CadSketch"), { ssr: false });
 import { useEditor } from "@/store/editorStore";
@@ -42,15 +45,9 @@ import { useEditor } from "@/store/editorStore";
  * Print/export uses the browser's native print-to-PDF for full fidelity.
  * ========================================================================= */
 
-// Sheet dimensions — A3 landscape at 96 DPI (web standard)
-const SHEET = {
-  width: 1587,   // 420mm at 96dpi  (≈ 16.5")
-  height: 1123,  // 297mm at 96dpi
-  margin: 18,
-  legendWidth: 230,
-  notesWidth: 280,
-  titleHeight: 110,
-};
+// Sheet dimensions — A3 landscape at 96 DPI (web standard) — and the drawing
+// area (DRAW): lib/cad/sheet, shared with components/SheetParts.jsx and the
+// sketch's true-scale plan export (lib/cad/planScale).
 
 const ZOOM_MIN = 0.1;
 const ZOOM_MAX = 5;
@@ -108,7 +105,7 @@ function freshProject() {
     notes: "", // new drawings start with blank Installation Notes
     boq: null,
     titleBlock: null, // null = use the account default; set = job-specific
-    colourMode: "red",     // new drawings start on PB Red; the toolbar palette
+    colourMode: "red",     // new drawings start on Classic Red; the toolbar palette
                            // button still cycles red -> mono -> navy -> colour
     sheets: [sheet],
     activeSheetId: sheet.id,
@@ -330,6 +327,65 @@ const TOOLS = {
   note:   { icon: Type,          label: "Note",   hint: "N" },
 };
 
+// The shortcuts card (components/Shortcuts.jsx, "?" or the Shortcuts button):
+// every key the keyboard handler in ElectricalPlanTool takes, and the touch
+// gestures the drawing handles. Keep them in step with the handlers.
+const SHORTCUTS = [
+  { title: "Draw", items: [
+    ["Wire tool: link two symbols", ["w"]],
+    ["Note tool", ["n"]],
+    ["Stop: back to Select, clear the selection", ["esc"]],
+  ] },
+  { title: "Edit", items: [
+    ["Select tool", ["v"]],
+    ["Rotate the selected symbol 15°", ["r"]],
+    ["Rotate in 15° steps (drag the handle)", ["shift+drag"]],
+    ["Delete the selected item", ["del", "backspace"]],
+    ["Undo", ["mod+z"]],
+    ["Redo", ["mod+shift+z", "mod+y"]],
+    ["Save", ["mod+s"]],
+    ["Download a PDF or print", ["mod+p"]],
+  ] },
+  { title: "View", items: [
+    ["Zoom in", ["plus", "="]],
+    ["Zoom out", ["minus"]],
+    ["Fit the sheet to the window", ["0"]],
+    ["Close the print preview, quote, details or projects", ["esc"]],
+    ["Keyboard shortcuts (this card)", ["?"]],
+  ] },
+  { title: "Navigate", items: [
+    ["Pan tool", ["h"]],
+    ["Pan while held", ["space+drag"]],
+    ["Pan with any tool", ["mdrag"]],
+    ["Pan by dragging an empty part of the sheet", ["drag"]],
+    ["Zoom in or out at the pointer", ["wheel"]],
+  ] },
+];
+const TOUCH_GESTURES = [
+  { title: "Draw", items: [
+    ["Add a symbol", "Drag it from the palette onto the drawing"],
+    ["Scroll the palette", "Swipe up or down on it"],
+    ["Wire two symbols", "Wire tool, then tap one symbol and the other"],
+  ] },
+  { title: "Edit", items: [
+    ["Select", "Tap a symbol, note, wire or furniture piece"],
+    ["Move", "Drag a symbol, note or furniture piece"],
+    ["Rotate a symbol", "Drag its round handle"],
+    ["Rotate or resize furniture", "Drag its handles"],
+    ["Point a note's arrow", "Drag the dot at its tip"],
+    ["Delete a symbol, note or wire", "Tap Delete in the inspector"],
+    ["Undo or redo", "Tap the arrows in the top bar"],
+    ["Rename a drawing", "Double-tap its tab"],
+  ] },
+  { title: "View", items: [
+    ["Zoom", "Pinch with two fingers"],
+    ["Zoom in, out or to fit", "The buttons at the top right"],
+  ] },
+  { title: "Navigate", items: [
+    ["Pan", "Drag with two fingers, or drag an empty part of the sheet"],
+  ] },
+];
+
 // ============================================================================
 export default function ElectricalPlanTool({ initialTarget = null, onHome = null, theme = "light", onToggleTheme = null, onProjectId = null, onOpenFloorPlan = null }) {
   // Project state
@@ -512,9 +568,23 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const readOnly = Boolean(access.readOnly);
   const readOnlyRef = useRef(readOnly);
   readOnlyRef.current = readOnly;
+  // Went read-only while this drawing was open (the 7-day past_due grace
+  // ended, or the subscription was cancelled): changes since the last save
+  // can't be saved any more, so leaving asks first (leaveToDashboard).
+  const editableWhileOpen = useRef(!readOnly);
+  const lapsedWhileOpen = useRef(false);
+  useEffect(() => {
+    if (!readOnly) { editableWhileOpen.current = true; lapsedWhileOpen.current = false; }
+    else if (editableWhileOpen.current) lapsedWhileOpen.current = true;
+  }, [readOnly]);
+  // Read-only because a payment is owed, not because the subscription ended.
+  const readOnlyNotice = access.paymentOverdue
+    ? "Your last payment didn’t go through, so this drawing is view-only until it’s paid. You can still download and print it, and its quote."
+    : "Your subscription has ended, so this drawing is view-only. You can still download and print it, and its quote.";
   const [floorPlanOpen, setFloorPlanOpen] = useState(false);
   const [floorPlanArgs, setFloorPlanArgs] = useState(null);
   const [planGone, setPlanGone] = useState(false); // linked sketch was deleted
+  const [shortcutsOpen, setShortcutsOpen] = useState(false); // the shortcuts card ("?")
 
   // Grid size in drawing units; symbols snap to multiples of this. Smaller =
   // more squares / finer placement (better for spacing out lighting).
@@ -540,14 +610,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const livePinchRef = useRef(null);       // latest pinch {zoom,panX,panY}; committed to state on release
 
   // ---------- Drawing area geometry ----------
-  // The drawing area occupies the centre of the sheet, bounded by margins,
-  // legend column, notes column, and title block.
-  const DRAW = useMemo(() => ({
-    x: SHEET.margin + SHEET.legendWidth + 8,
-    y: SHEET.margin,
-    w: SHEET.width - SHEET.margin * 2 - SHEET.legendWidth - SHEET.notesWidth - 16,
-    h: SHEET.height - SHEET.margin * 2 - SHEET.titleHeight - 8,
-  }), []);
+  // The drawing area (DRAW, lib/cad/sheet) occupies the centre of the sheet,
+  // bounded by margins, legend column, notes column, and title block.
 
   // ---------- Undo / Redo ----------
   const snapshot = useCallback(() => {
@@ -1451,20 +1515,35 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   };
 
   // ---------- Keyboard ----------
+  // (listed for the shortcuts card in SHORTCUTS, above)
   useEffect(() => {
     const onKey = (e) => {
+      // The floor-plan sketch open over the editor owns the keyboard: no
+      // editor shortcut (Delete, R, W, Ctrl+Z...) may act on the hidden sheet.
+      if (floorPlanOpen) return;
       const isInput = e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.isContentEditable;
       if (e.code === "Space" && !isInput) {
         e.preventDefault();
         setSpacePressed(true);
       }
       if (isInput) return;
+      // "?" opens the shortcuts card, not over another window (the floor plan
+      // sketch has its own). While it is open the card takes every key first
+      // (components/Shortcuts.jsx), so none of these reach here.
+      if (e.key === "?" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (!e.repeat && !floorPlanOpen && !printPreview && !readOnly && !showMeta && !showBoq && !showTitleBlock && !showNotes && !showProjects && !planGone && !tryPrompt.prompt) {
+          e.preventDefault(); setShortcutsOpen(true);
+        }
+        return;
+      }
       if (wallDraft && e.key === "Escape") { e.preventDefault(); cancelWall(); return; }
       if (e.key === "Delete" || e.key === "Backspace") deleteSelected();
       else if (e.key === "r" || e.key === "R") rotateSelected();
       else if (e.key === "Escape") { setSelectedId(null); setSelectedFurnId(null); setSelectedWallId(null); setSelectedAnnoId(null); setSelectedWireId(null); setWireStart(null); setTool("select"); setPrintPreview(false); setShowMeta(false); setShowBoq(false); setShowProjects(false); }
-      else if ((e.metaKey || e.ctrlKey) && e.key === "z") { e.preventDefault(); undo(); }
-      else if ((e.metaKey || e.ctrlKey) && (e.key === "y" || (e.shiftKey && e.key === "Z"))) { e.preventDefault(); redo(); }
+      // Lower-cased with Shift checked: ⌘⇧Z comes through as "z" on a Mac (and
+      // Caps Lock makes Ctrl+Z a "Z"), so the key alone can't tell undo from redo.
+      else if ((e.metaKey || e.ctrlKey) && (e.key || "").toLowerCase() === "z" && !e.shiftKey) { e.preventDefault(); undo(); }
+      else if ((e.metaKey || e.ctrlKey) && ((e.key || "").toLowerCase() === "y" || (e.shiftKey && (e.key || "").toLowerCase() === "z"))) { e.preventDefault(); redo(); }
       else if ((e.metaKey || e.ctrlKey) && e.key === "s") { e.preventDefault(); saveProject(); }
       else if ((e.metaKey || e.ctrlKey) && e.key === "p") {
         e.preventDefault();
@@ -1580,16 +1659,39 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   });
 
   // Apply a plan handed back from the embedded Floor Plan sketch, in place (no navigation).
-  const applyFloorPlan = async ({ path, w, h, dataUrl, sketchId, sheetId }) => {
+  // scale / frame: the true scale and plan frame it was drawn at
+  // (lib/cad/planScale). When that moved the plan on the sheet (a new scale,
+  // or a plan that outgrew its frame), everything placed on the sheet moves
+  // with it so each item stays on the same spot of the plan, and the title
+  // block's Scale is set to match. That one is project-wide: with more than
+  // one floor it shows the last plan sent. onSaved: the sketch moves its link
+  // on to the new frame and scale once the drawing is saved with them.
+  const applyFloorPlan = async ({ path, w, h, dataUrl, sketchId, sheetId, scale = null, frame = null, remap = null, legacyFrame = null, manual = false, onSaved = null }) => {
     const sid = sheetId || activeSheetIdRef.current;
-    let updated = null;
-    setProject(prev => {
-      updated = { ...prev, sheets: prev.sheets.map(s => s.id === sid ? { ...s, bgImage: { path, w, h, src: dataUrl }, sketchId } : s) };
-      return updated;
-    });
+    const plan = { path, w, h, src: dataUrl, sketchId, frame, scale, oldFrame: remap && remap.oldFrame, legacyFrame };
+    const withPlan = (prev) => {
+      let moved = false, outside = 0;
+      const sheets = prev.sheets.map(s => {
+        if (s.id !== sid) return s;
+        const r = applyPlanToSheet(s, plan);
+        if (r.remapped) { moved = true; outside = r.outside; }
+        return r.sheet;
+      });
+      const next = { ...prev, sheets, ...(scale && sheets.some(s => s.id === sid) ? { meta: { ...prev.meta, scale: scaleLabel(scale) } } : {}) };
+      return { next, moved, outside };
+    };
+    // Worked out now from the project as shown (the editor sits behind the
+    // sketch, so nothing has changed it), as well as in the update below,
+    // which React may only run later: the save never waits on that.
+    const dry = withPlan(projectRef.current);
+    let done = null;
+    setProject(prev => { done = withPlan(prev); return done.next; });
+    const { next: updated, moved, outside } = done || dry;
+    // Undo must not put symbols back where they were on the old plan.
+    if (moved) { setHistory([]); setFuture([]); }
     setFloorPlanOpen(false);
-    if (currentProjectIdRef.current && updated) {
-      await enqueueSave(updated, async ({ p, id, stillLoaded }) => {
+    if (currentProjectIdRef.current) {
+      const ok = await enqueueSave(updated, async ({ p, id, stillLoaded }) => {
         try {
           const safe = await readyToSave(p);
           await updateProjectRow(id, p.meta?.projectName || "Untitled drawing", safe);
@@ -1600,7 +1702,10 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
           return false;
         }
       });
-    }
+      if (ok) onSaved?.();
+    } else onSaved?.(); // no row yet: the sheet carries its frame into the first Save
+    // Items the re-map left outside the drawing area: say so once the new plan is showing.
+    if (outside) setTimeout(() => window.alert(outsideNote(outside, scale, manual)), 0);
   };
 
   // Save As: store the current canvas as a new named project (new cloud row)
@@ -1828,9 +1933,14 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   // than silently creating or discarding anything.
   const leaveToDashboard = async () => {
     if (!onHome) return;
-    if (readOnlyRef.current) { onHome(); return; } // lapsed: nothing to save
     const p = projectRef.current;
     const hasWork = countPlaced(p) > 0 || (p?.sheets || []).some(s => s && s.bgImage);
+    if (readOnlyRef.current) { // lapsed: nothing can be saved
+      if (lapsedWhileOpen.current && hasWork &&
+          !confirm("Your account is now view-only, so any changes since your last save can't be saved. Download or print a copy from this screen first if you need them. Leave anyway?")) return;
+      onHome();
+      return;
+    }
     if (hasWork) {
       if (currentProjectIdRef.current) {
         const ok = await saveProject();
@@ -1846,7 +1956,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   // The sheet's plan came from a sketch when the sheet carries its sketchId (an
   // import clears it). Edit floor plan saves the drawing, then opens that
   // sketch over the editor; Back to drawing / Use this plan there updates this
-  // same sheet with the plan frame kept, so symbols stay put.
+  // same sheet at the plan's true scale (applyFloorPlan): the frame is kept
+  // when it still fits, else symbols move with the plan, so they stay put on it.
   const openFloorPlan = (sketchId) => {
     setFloorPlanArgs({
       openSketchId: sketchId || null,
@@ -1867,6 +1978,23 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     await saveProject();
     openFloorPlan(id);
   };
+
+  // Status bar: the keys for what is happening now, as key caps
+  // (components/Shortcuts.jsx StatusHint); on touch, what to tap or drag.
+  const act = TOUCH ? "Tap" : "Click";
+  const deselect = TOUCH ? [] : [["del", "to delete"], ["esc", "deselect"]];
+  const statusParts = spacePressed ? ["Drag to pan", "let go of Space to stop"]
+    : tool === "wall" ? (wallDraft ? [`${act} to set the end point`, !TOUCH && ["shift", "any angle"], !TOUCH && ["esc", "cancel"]] : [`${act} to start a wall`, !TOUCH && ["esc", "exit"]])
+    : tool === "wire" ? [wireStart ? `${act} the symbol to link it to` : `${act} a symbol to start a wire`, !TOUCH && ["esc", "stop"]]
+    : tool === "note" ? [`${act} the drawing to add a note`, !TOUCH && ["esc", "cancel"]]
+    : tool === "pan" ? (TOUCH ? ["Drag to pan", "pinch to zoom"] : ["Drag to pan", ["wheel", "to zoom"], ["v", "select"]])
+    : selectedId ? (TOUCH ? ["Drag to move it", "drag the round handle to rotate"] : ["Drag to move it", ["r", "rotate 15°"], ...deselect])
+    : selectedFurnId ? ["Drag to move it", TOUCH ? "drag its handles to rotate or resize" : null, ...deselect]
+    : selectedAnnoId ? ["Drag the note or its arrow to move it", ...deselect]
+    : selectedWireId ? (TOUCH ? ["Delete is in the inspector"] : deselect)
+    : selectedWallId ? (TOUCH ? ["Wall selected"] : deselect)
+    : TOUCH ? ["Drag symbols in from the palette", "tap to select", "pinch to zoom"]
+    : ["Drag symbols in from the palette", ["w", "wire"], ["n", "note"], ["space+drag", "to pan"]];
 
   const displayMeta = useMemo(
     () => ({ ...meta, sheetName: activeSheet.name, drawingNumber: activeSheet.drawingNumber || "" }),
@@ -1904,6 +2032,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         onEditFloorPlan={planFromSketch && !readOnly ? editFloorPlan : null}
         sidebarHidden={sidebarHidden}
         onToggleSidebar={() => setSidebarHidden(s => !s)}
+        onShowShortcuts={() => setShortcutsOpen(true)}
+        shortcutsOpen={shortcutsOpen}
       />
       <input ref={fileInputRef} type="file" accept="image/*,.pdf" className="hidden"
              onChange={(e) => handleFile(e.target.files[0])} />
@@ -2071,14 +2201,12 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
 
           {/* Status bar */}
           <StatusBar right={<>SHEET A3 · {meta.scale}</>}>
+            {/* The counts always show; the hint after them truncates. */}
             <StatusCount label="SYMBOLS" value={placed.length} />
             <StatusCount label="WIRES" value={wires.length} />
             <StatusCount label="NOTES" value={annotations.length} />
             <span>TOOL <span className="text-[#22808F] ml-1">{tool.toUpperCase()}</span></span>
-            {tool === "wire" && wireStart && <span className="text-[#22808F] animate-pulse">→ click target</span>}
-            {tool === "note" && <span className="text-[#22808F]">click drawing area to add</span>}
-            {tool === "wall" && <span className="text-[#22808F]">{wallDraft ? "click to set the end point" : "click to start a wall"}</span>}
-            {spacePressed && <span className="text-[#22808F]">PAN</span>}
+            <StatusHint parts={statusParts} />
           </StatusBar>
           </div>
         </main>
@@ -2121,7 +2249,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
           DRAW={DRAW}
           onClose={readOnly ? leaveToDashboard : () => setPrintPreview(false)}
           onPrint={printSheet}
-          notice={readOnly ? "Your subscription has ended, so this drawing is view-only. You can still download and print it, and its quote." : null}
+          notice={readOnly ? readOnlyNotice : null}
           onShowBoq={readOnly ? () => setShowBoq(true) : null}
           closeLabel={readOnly ? "Back to dashboard" : null}
         />
@@ -2200,6 +2328,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
           </div>
         </div>
       )}
+      <ShortcutsCard open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} subtitle="Electrical drawing"
+        groups={SHORTCUTS} touchGroups={TOUCH_GESTURES} />
       {/* Try mode: the Subscribe prompt (components/TryMode.jsx). */}
       <TryPrompt open={Boolean(tryPrompt.prompt)} title={tryPrompt.prompt?.title} body={tryPrompt.prompt?.body}
         onSubscribe={subscribeFromEditor} onClose={tryPrompt.hide} />

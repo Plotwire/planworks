@@ -1,7 +1,6 @@
 /* ============================================================================
  * SYMBOL LIBRARY — UK Architectural Plan Style
- * Aligned with industry-standard residential MEP legends
- * (Preston Baker / Yorkshire Homes style reference).
+ * Drawn in-house to common UK residential electrical-plan conventions.
  *
  * Two layers:
  *   1. SYMBOLS — visual definitions, grouped by category
@@ -675,7 +674,7 @@ export const SYMBOL_META = {
   fx_meter:          { description: "Electrical Meter Box (refer to site plans for plot locations)",     height: "Per site plan" },
   fx_isolator:       { description: "Isolator Switch",                                                   height: "1500mm AFL" },
   fx_domed:          { description: "Domed compact fitting (chrome collar)",                             height: "Ceiling" },
-  mk_csp:            { description: "CSP location — set out on Preston Baker site drawings",             height: "Per site plan" },
+  mk_csp:            { description: "CSP location — as set out on the site plan",                         height: "Per site plan" },
 
   // Data
   data_point:    { description: "Data Point (Cat5e / Cat6)",                 height: "450mm AFL" },

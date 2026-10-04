@@ -13,8 +13,12 @@ import { getSettings, saveSettings } from "@/lib/db";
 import { clearSignedOutDeviceData } from "@/lib/deviceData";
 import { DEFAULT_TITLEBLOCK, normaliseTitleBlock, companyProfileToTitleBlock, companyLogoFrom, mergeTitleBlocks } from "@/lib/titleBlock";
 import { useSubscription } from "@/lib/useSubscription";
+import { useCheckoutReturn } from "@/lib/useCheckoutReturn";
+import { PAYMENT_PENDING_MESSAGE } from "@/lib/checkoutReturn";
+import { ConfirmingPayment, PaymentNote } from "@/components/PaymentStatus";
 import { TRY_SYMBOL_LIMIT } from "@/lib/pricing";
-import { openBillingPortal } from "@/lib/billingClient";
+import { isPaymentOverdue } from "@/lib/access";
+import { openBillingPortal, syncSubscriptionFromStripe } from "@/lib/billingClient";
 import { LEGAL_LINKS } from "@/lib/legal";
 import TermsGate from "@/components/TermsGate";
 import RotateNotice from "@/components/RotateNotice";
@@ -27,6 +31,54 @@ function Splash({ label = "Loading Plotwire…" }) {
   return (
     <div className="w-full h-screen flex items-center justify-center bg-[#F4F6F9] dark:bg-[#0B1117]">
       <div className="text-[10px] tracking-[0.3em] text-slate-400 uppercase">{label}</div>
+    </div>
+  );
+}
+
+const ACTION_BTN = "bg-[var(--action)] hover:bg-[var(--action-hover)] text-[color:var(--action-ink)]";
+
+// Coming Soon holding page: while it's on, visitors who aren't signed in see
+// the "Coming Soon" page instead of the login (the owner's way past it is the
+// discreet "Sign in" link, or ?login / #login). It is ON unless the Vercel
+// environment variable NEXT_PUBLIC_COMING_SOON is "false", "0" or "off" (any
+// case, spaces ignored); unset or anything else keeps the holding page up.
+// NEXT_PUBLIC_* values are fixed when the app is BUILT (Next writes them into
+// the browser code), so changing it in Vercel only takes effect after a
+// redeploy. Written out in full on purpose: Next only fills in a literal
+// process.env.NEXT_PUBLIC_... reference.
+const COMING_SOON = !["false", "0", "off"].includes(
+  String(process.env.NEXT_PUBLIC_COMING_SOON ?? "true").trim().toLowerCase()
+);
+
+// Billing is on and the account's access level couldn't be checked yet (the
+// database didn't answer). In place of the app, never Try: showing a paying or
+// exempt account the Try limits because of a network blip would be wrong. It
+// keeps retrying by itself (lib/useSubscription.js); "Try again" checks now.
+function AccessCheckFailed({ onRetry, onSignOut }) {
+  const [busy, setBusy] = useState(false);
+  const retry = async () => {
+    setBusy(true);
+    try { await onRetry?.(); } finally { setBusy(false); }
+  };
+  return (
+    <div className="w-full min-h-screen flex items-center justify-center px-4 text-white"
+      style={{ background: "linear-gradient(150deg,#1A2530 0%,#233241 55%,#2C4150 100%)" }}>
+      <main role="alert" className="max-w-[420px] w-full text-center">
+        <h1 className="text-[22px] leading-tight font-semibold tracking-[-0.01em]">We couldn&rsquo;t check your subscription</h1>
+        <p className="mt-3 text-[14px] leading-relaxed text-[#aab8c6]">
+          Check your connection. We&rsquo;ll keep trying, or you can try again now. Your drawings are safe.
+        </p>
+        <div className="mt-6 flex flex-wrap justify-center gap-2">
+          <button type="button" onClick={retry} disabled={busy}
+            className={`h-11 px-5 rounded-[11px] text-[14px] font-semibold transition-colors disabled:opacity-60 ${ACTION_BTN}`}>
+            {busy ? "Checking…" : "Try again"}
+          </button>
+          <button type="button" onClick={onSignOut}
+            className={`h-11 px-5 rounded-[11px] text-[14px] font-semibold transition-colors ${ACTION_BTN}`}>
+            Sign out
+          </button>
+        </div>
+      </main>
     </div>
   );
 }
@@ -67,10 +119,8 @@ function AppGates({ children }) {
     try { return localStorage.getItem("planworks:theme") || "light"; } catch { return "light"; }
   });
   const [session, setSession] = useState(null);
-  // Coming Soon holding page. While true, visitors who are not logged in see the
-  // "Coming Soon" page instead of the login. Flip to false to launch publicly.
-  const COMING_SOON = true;
-  // Owner route past the holding page: the discreet "Sign in" link, or ?login=1.
+  // Owner route past the Coming Soon page (COMING_SOON, above): the discreet
+  // "Sign in" link, or ?login / #login.
   const [showLogin, setShowLogin] = useState(false);
   const [recovery, setRecovery] = useState(false);
   const [checking, setChecking] = useState(true);
@@ -91,7 +141,19 @@ function AppGates({ children }) {
   // NEXT_PUBLIC_BILLING_ENABLED=true in Vercel once Stripe is live and tested.
   const BILLING_ENABLED = process.env.NEXT_PUBLIC_BILLING_ENABLED === "true";
   const subscription = useSubscription(BILLING_ENABLED ? session : null);
-  const [activating, setActivating] = useState(false); // returning from Stripe Checkout
+  // Back from Stripe Checkout: "Confirming your payment…" until the webhook
+  // has unlocked the account (lib/checkoutReturn.js). The return URL itself
+  // grants nothing. If the webhook is late or lost, the server is asked to
+  // check with Stripe itself (POST /api/billing/sync).
+  const checkoutReturn = useCheckoutReturn({
+    enabled: BILLING_ENABLED,
+    userId: session?.user?.id || null,
+    ready: !subscription.loading,
+    full: subscription.level === "full",
+    refresh: subscription.refresh,
+    sync: syncSubscriptionFromStripe,
+  });
+  const beginCheckoutReturn = checkoutReturn.begin;
 
   // ---- First-login company details ----------------------------------------
   // "unknown" until we know whether this account has a company_profile row;
@@ -202,6 +264,7 @@ function AppGates({ children }) {
   // Resolves to "" when signed out, or a message when it didn't go through
   // (e.g. offline: Supabase keeps the session until it can reach the server).
   // Callers that don't show messages can ignore it.
+  const forgetCheckoutReturn = checkoutReturn.forget;
   const signOut = useCallback(async () => {
     const failed = "Couldn't log out. Check your connection and try again.";
     try {
@@ -211,11 +274,14 @@ function AppGates({ children }) {
       // device (lib/deviceData.js). Only on success -- a failed sign-out keeps
       // the session, so it keeps the crash-recovery draft too.
       clearSignedOutDeviceData();
+      // Nor a remembered return from Stripe: signing out on purpose isn't the
+      // "session expired on the way back" case that sends them to sign-in.
+      forgetCheckoutReturn();
       return "";
     } catch {
       return failed;
     }
-  }, []);
+  }, [forgetCheckoutReturn]);
 
   // Open the Stripe Customer Portal (change plan / card / cancel).
   const manageBilling = useCallback(async () => {
@@ -224,8 +290,9 @@ function AppGates({ children }) {
   }, []);
 
   // Read the ?checkout= flag Stripe appends to our return URL, then strip it so
-  // a reload doesn't re-trigger. success → poll until the webhook lands the row;
-  // cancelled → just show a gentle note on the paywall.
+  // a reload doesn't re-trigger. success → wait for the webhook (remembered for
+  // this tab, so a reload keeps waiting); cancelled → a gentle note on the
+  // paywall.
   useEffect(() => {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
@@ -234,26 +301,12 @@ function AppGates({ children }) {
     params.delete("checkout");
     const qs = params.toString();
     window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash);
-    if (flag === "success") setActivating(true);
+    if (flag === "success") beginCheckoutReturn();
     else if (flag === "cancelled" || flag === "canceled") {
       setBillingNotice("Checkout cancelled — subscribe whenever you're ready.");
       setShowSubscribe(true);
     }
-  }, []);
-
-  // While activating, poll for the subscription row the webhook writes. Stops as
-  // soon as access unlocks, or gives up after ~24s and falls back to the paywall.
-  useEffect(() => {
-    if (!activating) return;
-    if (subscription.isActive) { setActivating(false); return; }
-    let tries = 0;
-    const t = setInterval(() => {
-      tries += 1;
-      subscription.refresh();
-      if (tries >= 16) { clearInterval(t); setActivating(false); }
-    }, 1500);
-    return () => clearInterval(t);
-  }, [activating, subscription.isActive, subscription.refresh]);
+  }, [beginCheckoutReturn]);
 
   // Load the account's saved settings (title block + BOQ preset) once signed in.
   useEffect(() => {
@@ -333,7 +386,9 @@ function AppGates({ children }) {
   if (checking) return <Splash />;
   if (recovery) return <LoginScreen recovery onRecovered={() => setRecovery(false)} />;
   if (!session) {
-    const wantLogin = showLogin ||
+    // Back from Stripe but signed out (session expired, or another address):
+    // straight to sign-in, never the holding page, then on to confirming.
+    const wantLogin = showLogin || checkoutReturn.awaitingSignIn ||
       (typeof window !== "undefined" && /[?&#]login(=1)?\b/.test(window.location.search + window.location.hash));
     if (COMING_SOON && !wantLogin) return <ComingSoon onSignIn={() => setShowLogin(true)} />;
     return <LoginScreen />;
@@ -347,13 +402,31 @@ function AppGates({ children }) {
 
   // Then billing, only when it's switched on. Every signed-in account gets into
   // the app: "full" as normal, "try" with the symbol cap, watermark and locked
-  // exports, "lapsed" read-only (lib/access.js). With billing off, everyone is
-  // full, exactly as before.
+  // exports, "lapsed" read-only. The level is the one the database decides and
+  // enforces (my_access(), lib/useSubscription.js; the rule is written out in
+  // lib/access.js). With billing off, everyone is full, exactly as before.
   const level = BILLING_ENABLED ? subscription.level : "full";
   if (BILLING_ENABLED) {
-    if (subscription.loading) return <Splash />;
-    if (activating && !subscription.isActive) return <Splash label="Activating your subscription…" />;
+    // Not known yet: the splash, retrying -- never Try because a check failed.
+    if (subscription.loading) {
+      return subscription.failed
+        ? <AccessCheckFailed onRetry={subscription.refresh} onSignOut={signOut} />
+        : <Splash />;
+    }
+    // Just back from Stripe and not unlocked yet. In place of the app: this
+    // only follows a fresh page load (the return from Stripe), so there is no
+    // open drawing to lose.
+    if (checkoutReturn.confirming) {
+      return <ConfirmingPayment canContinue={checkoutReturn.canContinue} onContinue={checkoutReturn.continueNow} />;
+    }
   }
+  // Still waiting on Stripe after the confirming screen: say so instead of
+  // pitching Try or "your subscription has ended" as if they hadn't paid.
+  const paymentPending = BILLING_ENABLED && checkoutReturn.pending && level !== "full";
+  // Lapsed because a payment is owed (past_due beyond the grace, or unpaid),
+  // not because the subscription ended: told to pay in Billing, not to
+  // re-subscribe (lib/access.js isPaymentOverdue).
+  const paymentOverdue = BILLING_ENABLED && isPaymentOverdue(level, subscription.status);
   // Drawn OVER the app, not instead of it: swapping the app out would unmount
   // an open drawing and lose unsaved work.
   const subscribeScreen = BILLING_ENABLED && showSubscribe && level !== "full" ? (
@@ -363,9 +436,24 @@ function AppGates({ children }) {
       onManageBilling={manageBilling}
       onBack={() => setShowSubscribe(false)}
       hasLapsed={level === "lapsed"}
-      notice={billingNotice}
+      paymentOverdue={paymentOverdue}
+      notice={billingNotice || (paymentPending ? PAYMENT_PENDING_MESSAGE : "")}
     />
   ) : null;
+  const paymentNote = !BILLING_ENABLED || subscribeScreen ? null
+    : paymentPending && checkoutReturn.showPendingBanner ? (
+      <PaymentNote
+        message={PAYMENT_PENDING_MESSAGE}
+        onCheck={checkoutReturn.checkAgain}
+        checking={checkoutReturn.checking}
+        onDismiss={checkoutReturn.dismissPending}
+      />
+    ) : checkoutReturn.showConfirmedNote && level === "full" ? (
+      <PaymentNote
+        message="Payment confirmed. Thanks for subscribing to Plotwire."
+        onDismiss={checkoutReturn.dismissConfirmed}
+      />
+    ) : null;
 
   // Waiting on the profile check -- brief, and only on a fresh sign-in.
   if (profileStep === "unknown") return <Splash />;
@@ -387,8 +475,12 @@ function AppGates({ children }) {
         level,
         isTry: level === "try",
         readOnly: level === "lapsed",
+        // readOnly because a payment is owed, not because it ended.
+        paymentOverdue,
         symbolLimit: TRY_SYMBOL_LIMIT,
         openSubscribe,
+        // Back from Stripe, payment not confirmed yet (see paymentPending).
+        paymentPending,
       },
     }}>
       {profileStep === "needed" ? (
@@ -400,6 +492,7 @@ function AppGates({ children }) {
         />
       ) : children}
       {subscribeScreen}
+      {paymentNote}
     </AppCtx.Provider>
   );
 }

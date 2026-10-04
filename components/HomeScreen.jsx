@@ -8,6 +8,7 @@ import { useApp } from "@/components/AppShell";
 import { LEGAL_LINKS } from "@/lib/legal";
 import { TryPill } from "@/components/TryMode";
 import Turnstile, { TURNSTILE_SITE_KEY, captchaPending } from "@/components/Turnstile";
+import Toast from "@/components/Toast";
 
 /* Sheet geometry — must match ElectricalPlanTool */
 const SHEET = { width: 1587, height: 1123, margin: 18, legendWidth: 230, notesWidth: 280, titleHeight: 110 };
@@ -64,6 +65,7 @@ function PlanThumb({ project }) {
   // the legacy flat shape for projects saved before sheets existed.
   const src = (project.sheets && project.sheets[0]) ? project.sheets[0] : project;
   const { bgImage, placed = [] } = src;
+  const clip = !!(bgImage && bgImage.planFrame);
   let img = null;
   if (bgImage && bgImage.w && bgImage.h) {
     const s = Math.min(DRAW.w / bgImage.w, DRAW.h / bgImage.h);
@@ -78,8 +80,11 @@ function PlanThumb({ project }) {
       {!img && (
         <rect x={DRAW.x} y={DRAW.y} width={DRAW.w} height={DRAW.h} fill="none" stroke="#e0e6ec" strokeWidth="2"/>
       )}
+      {/* A plan sent at a true scale (bgImage.planFrame) can leave symbols
+          wholly outside the drawing area, hidden in the editor, so here too.
+          Older drawings show every dot, as before. */}
       <g fill="#cc1418">
-        {placed.map((p, i) => (
+        {placed.map((p, i) => (!clip || (p.x > -14 && p.y > -14 && p.x < DRAW.w + 14 && p.y < DRAW.h + 14)) && (
           <circle key={i} cx={DRAW.x + p.x} cy={DRAW.y + p.y} r="14" />
         ))}
       </g>
@@ -94,6 +99,15 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
   const isTry = Boolean(access.isTry);
   const readOnly = Boolean(access.readOnly);
   const symbolLimit = access.symbolLimit || 0;
+  // Back from Stripe, payment not confirmed yet: AppShell shows a "still
+  // confirming" note, so don't also pitch Try or "your subscription has ended".
+  const paymentPending = Boolean(access.paymentPending);
+  // Read-only because a payment is owed (past_due beyond the grace, or
+  // unpaid), not because the subscription ended: pay in Billing, not
+  // re-subscribe. The header's Billing button is the way there when shown.
+  const paymentOverdue = readOnly && Boolean(access.paymentOverdue);
+  const billingButtonShown = Boolean(manageBilling && subscription?.sub);
+  const payInvoice = manageBilling || access.openSubscribe;
   // Lapsed accounts can't start new work; the start buttons open Subscribe.
   const startNew = (fn) => (...args) => (readOnly ? access.openSubscribe?.() : fn?.(...args));
   onNewProject = startNew(onNewProject);
@@ -248,8 +262,10 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
               {isTry && cards !== null && (
                 <TryPill used={symbolsUsed} limit={symbolLimit} onSubscribe={access.openSubscribe} />
               )}
-              {readOnly && (
-                <button className="billing-btn" onClick={access.openSubscribe}>Re-subscribe</button>
+              {readOnly && !(paymentOverdue && billingButtonShown) && (
+                <button className="billing-btn" onClick={paymentOverdue ? payInvoice : access.openSubscribe}>
+                  {paymentOverdue ? "Open billing" : "Re-subscribe"}
+                </button>
               )}
               {subscription?.cancelAtPeriodEnd && subscription?.cancelAt && (
                 <span className="cancel-chip" title="Your subscription is set to cancel. Undo it in Billing.">
@@ -269,7 +285,16 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
           </header>
 
           <div className="scroll">
-            {readOnly && (
+            {readOnly && !paymentPending && paymentOverdue && (
+              <div className="access-banner is-lapsed" role="status">
+                <div>
+                  <strong>Your last payment didn&rsquo;t go through.</strong>
+                  <span> Your drawings are view-only until it&rsquo;s paid. You can still open, print and download them. Pay the invoice or update your card in Billing to carry on.</span>
+                </div>
+                <button className="mg-primary" onClick={payInvoice}>Open billing</button>
+              </div>
+            )}
+            {readOnly && !paymentPending && !paymentOverdue && (
               <div className="access-banner is-lapsed" role="status">
                 <div>
                   <strong>Your subscription has ended.</strong>
@@ -278,7 +303,20 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
                 <button className="mg-primary" onClick={access.openSubscribe}>Re-subscribe</button>
               </div>
             )}
-            {isTry && (
+            {/* A renewal failed and Stripe is retrying: full access lasts
+                PAST_DUE_GRACE_DAYS from the failure (lib/access.js), then the
+                account is read-only until it's paid. Say so, with the date. */}
+            {subscription?.status === "past_due" && access.level === "full" && !subscription?.exempt &&
+              subscription?.graceUntil && subscription.graceUntil > Date.now() && (
+              <div className="access-banner is-lapsed" role="status">
+                <div>
+                  <strong>Your last payment didn&rsquo;t go through.</strong>
+                  <span> Stripe will try your card again. Pay the invoice or update your card in Billing by {new Date(subscription.graceUntil).toLocaleDateString("en-GB", { day: "numeric", month: "short" })} to keep editing. After that your drawings are view-only until it&rsquo;s paid.</span>
+                </div>
+                {manageBilling && <button className="mg-primary" onClick={manageBilling}>Open billing</button>}
+              </div>
+            )}
+            {isTry && !paymentPending && (
               <div className="access-banner" role="status">
                 <div>
                   <strong>You&rsquo;re trying Plotwire.</strong>
@@ -400,7 +438,7 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
           onDeleted={onDeleted}
         />
       )}
-      {toast && <div className="pw-toast" role="status">{toast}</div>}
+      {toast && <Toast message={toast} onDismiss={() => setToast("")} />}
     </div>
   );
 }
@@ -647,7 +685,6 @@ html.dark .pw-home .access-banner.is-lapsed{background:#2a2114; border-color:#6b
 .pw-modal-actions button:disabled{opacity:.5; cursor:not-allowed}
 
 /* Post-delete confirmation */
-.pw-toast{position:fixed; left:50%; bottom:26px; transform:translateX(-50%); z-index:70; background:var(--navy); color:#eaf6f8; font-size:13px; font-weight:500; padding:10px 18px; border-radius:10px; box-shadow:0 10px 30px -8px rgba(11,17,23,.5)}
 .pw-home .badge-floors{left:auto; right:11px; background:rgba(63,183,201,.92); color:#08313a; font-weight:600}
 .pw-home .card-body{padding:14px 16px 15px; transition:background .2s cubic-bezier(.2,.7,.3,1)}
 .pw-home .card-title{font-size:14.5px; font-weight:600; letter-spacing:-.01em; margin-bottom:3px; transition:color .2s cubic-bezier(.2,.7,.3,1); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
