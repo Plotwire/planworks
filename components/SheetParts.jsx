@@ -26,7 +26,7 @@ import { isTouchDevice, supersampleFactor } from "@/lib/touch";
 import { dataUrlToBlob, signPlanImage, signPlanImages } from "@/lib/planImages";
 import { BOQ_ESTIMATE_NOTICE } from "@/lib/legal";
 import { TrialSheetMark, TryPrompt, useTryPrompt, LOCKED } from "@/components/TryMode";
-import { addDaysIso, QUOTE_VALID_DAYS, shownOnQuote, lineTotal as boqLineTotal, sectionTotal, boqTotals, outputSettings, materialsDoc, quoteDoc, docToCsv, QUOTE_DETAILS, hasQty, badNumberLines, parseNum, expiredValidUntil, fmtDate } from "@/lib/boqOutputs";
+import { addDaysIso, QUOTE_VALID_DAYS, shownOnQuote, lineTotal as boqLineTotal, sectionTotal, boqTotals, outputSettings, materialsDoc, quoteDoc, docToCsv, QUOTE_DETAILS, QUOTE_SHOW, PRESET_SHOW, presetFor, hasQty, badNumberLines, parseNum, expiredValidUntil, fmtDate } from "@/lib/boqOutputs";
 import BoqDocPages from "@/components/BoqDocPages";
 import { keyText, ariaKeys, SHOW_KBD, TOUCH, CLOSE_MENUS } from "@/components/Shortcuts";
 import { SHEET, planFootprint } from "@/lib/cad/sheet";
@@ -2356,7 +2356,8 @@ export function BoqTemplateEditor({ saved, savedPrefs, onSave, onClose }) {
 // readOnly: a lapsed subscription's view -- nothing can be edited, but the
 // materials list and client quote can still be chosen and downloaded.
 export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false }) {
-  const { boqTemplate, boqPrefs, saveBoqTemplate, companyBrand, access = {} } = useApp();
+  const { boqTemplate, boqPrefs, saveBoqTemplate, saveBoqPrefs, companyBrand, access = {} } = useApp();
+  const [customOpen, setCustomOpen] = useState(false);
   // Try mode: everything on screen works -- prices, totals, labour, VAT,
   // client fields, On-quote ticks, both outputs. Only the downloads (PDF and
   // CSV) are locked; they open the Subscribe prompt (components/TryMode.jsx).
@@ -2398,7 +2399,14 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
     || window.confirm(`This quote expired on ${fmtDate(expiredOn)}, and that date will be printed on it. Download anyway?\n\nTo fix it, update Date issued or Valid until.`);
   const badCell = (v) => parseNum(v).bad ? " ring-1 ring-amber-400 bg-amber-50" : "";
   const badTitle = (v) => parseNum(v).bad ? "Not a number, so this counts as 0" : undefined;
-  const setDetail = (detail) => setBoq(b => ({ ...b, quote: { ...(b.quote || {}), detail } }));
+  // What the client sees (lib/boqOutputs QUOTE_SHOW): saved with this quote, and
+  // remembered for the user's next new quote. A preset just sets the ticks.
+  const applyShow = (show) => {
+    const detail = presetFor(show) || "custom";
+    setBoq(b => ({ ...b, quote: { ...(b.quote || {}), detail, show } }));
+    saveBoqPrefs?.({ quote: { detail, show } });
+  };
+  const setDetail = (detail) => applyShow({ ...PRESET_SHOW[detail] });
   const hiddenCount = boq.sections.reduce((n, sec) => n + sec.items.filter(it => !shownOnQuote(it) && hasQty(it)).length, 0);
   // Header branding from Business information: the company logo (data-URI,
   // same cached copy the title block uses) and the contact lines under the
@@ -2740,10 +2748,26 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
                   </label>
                 ))}
               </div>
+              <button type="button" onClick={() => setCustomOpen(o => !o)} aria-expanded={customOpen}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-semibold ring-1 ${customOpen || outSet.detail === "custom" ? "bg-[var(--action)] text-[color:var(--action-ink)] ring-[var(--action)]" : "bg-white text-slate-700 ring-slate-300 hover:bg-slate-100"}`}>
+                Customise{outSet.detail === "custom" ? " (custom)" : ""}
+              </button>
+              {customOpen && (
+                <div className="basis-full flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-lg bg-white ring-1 ring-slate-200 px-3 py-2" role="group" aria-label="Show on the client quote">
+                  <span className="text-[9px] uppercase tracking-wider text-slate-500 font-semibold">Client sees</span>
+                  {QUOTE_SHOW.map(o => (
+                    <label key={o.key} className="flex items-center gap-1.5 cursor-pointer select-none">
+                      <input type="checkbox" checked={outSet.show[o.key]} onChange={(e) => applyShow({ ...outSet.show, [o.key]: e.target.checked })} className="accent-[var(--action)]"/>
+                      {o.label}
+                    </label>
+                  ))}
+                  <span className="text-slate-400">The grand total is always shown.</span>
+                </div>
+              )}
               {expiredOn && (
                 <span className="font-medium text-amber-800">Valid until {fmtDate(expiredOn)} has passed: update the dates.</span>
               )}
-              {hiddenCount > 0 && outSet.detail !== "sectionTotals" && (
+              {hiddenCount > 0 && outSet.show.total && (
                 <span className="text-slate-400">{hiddenCount} line{hiddenCount === 1 ? "" : "s"} hidden, included as &ldquo;Other materials &amp; sundries&rdquo;</span>
               )}
             </>
