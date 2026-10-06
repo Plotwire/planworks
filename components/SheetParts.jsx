@@ -30,6 +30,7 @@ import { addDaysIso, QUOTE_VALID_DAYS, shownOnQuote, lineTotal as boqLineTotal, 
 import BoqDocPages from "@/components/BoqDocPages";
 import { keyText, ariaKeys, SHOW_KBD, TOUCH, CLOSE_MENUS } from "@/components/Shortcuts";
 import { SHEET, planFootprint } from "@/lib/cad/sheet";
+import { onStairs } from "@/lib/cad/planScale";
 
 // Per-project title block. The editor publishes the *effective* title block
 // (the project's own, falling back to the account default) through this context
@@ -1654,9 +1655,20 @@ function DrawingArea({
           const hs = Math.min(Math.max(1 / (zoom || 1), 0.6), 6); // keep the rotate handle a steady on-screen size at any zoom
           const handleOffset = half + 20 * hs;
           const hDotR = 9 * hs, hHitR = 26 * hs, hLineW = Math.max(1, 1.6 * hs), hDash = `${3*hs} ${2*hs}`;
+          // Dropped (or moved) onto the plan's stairs: allowed, with a small
+          // amber "On stairs" under it while it is selected. Editor only -
+          // never printed.
+          const stairWarn = isSel && onStairs(bgImage, item.x, item.y);
           return (
-            <g key={item.id}
-               transform={`translate(${item.x - half} ${item.y - half}) rotate(${item.rotation} ${half} ${half})`}>
+            <g key={item.id}>
+            {stairWarn && (
+              <g pointerEvents="none" transform={`translate(${item.x} ${item.y + half + 10 + (item.label ? 12 : 0)})`}>
+                <rect x={-28} y={-8} width={56} height={15} rx={7.5} fill="#FEF3C7" stroke="#D97706" strokeWidth={1}/>
+                <text x={0} y={3} fontSize={9} textAnchor="middle" fill="#92400E"
+                      fontFamily="ui-sans-serif, system-ui, sans-serif" fontWeight="700">On stairs</text>
+              </g>
+            )}
+            <g transform={`translate(${item.x - half} ${item.y - half}) rotate(${item.rotation} ${half} ${half})`}>
               {(isSel || isWireStart) && (
                 <>
                   <rect x={-6} y={-6} width={itemSize+12} height={itemSize+12} rx={8}
@@ -1700,6 +1712,7 @@ function DrawingArea({
                           fill="#fbbf24" stroke="#fff" strokeWidth={hLineW}/>
                 </g>
               )}
+            </g>
             </g>
           );
         })}
