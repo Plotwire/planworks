@@ -24,8 +24,12 @@ import { listSketches, getSketchData, insertSketch, updateSketch, deleteSketch }
 import { insertProject, getProjectData, updateProjectRow } from "@/lib/db";
 import { uploadPlanImage, dataUrlToBlob } from "@/lib/planImages";
 import { renderModelToPng } from "@/lib/cad/sketchToImage";
-import { SCALES, MARGIN_MM, PLAN_PX, scalePrefOf, scaleLabel, planSheetFrame, applyPlanToSheet, outsideNote, legacyFrameOf, sheetOriginFor, validOrigin } from "@/lib/cad/planScale";
+import { SCALES, MARGIN_MM, PLAN_PX, scalePrefOf, scaleLabel, planSheetFrame, applyPlanToSheet, outsideNote, legacyFrameOf, sheetOriginFor, validOrigin, stairsField, planStairs } from "@/lib/cad/planScale";
 import { printStyle, labelSizeOf, LABEL_SIZE_NAMES, roomLabelLayout, wallWeightOf, WALL_WEIGHTS, WALL_WEIGHT_NAMES } from "@/lib/cad/printStyle";
+import {
+  flightsOf, stairDrawing, stairAt, stairSnap, stairFromDrag, stairWidth, stairLength,
+  setStairWidth, setStairLength, setRisers, rotateStair, STAIR_W, STAIR_RISERS, RISERS_MIN, RISERS_MAX,
+} from "@/lib/cad/stairs";
 import { isTouchDevice } from "@/lib/touch";
 import {
   ChevronLeft, FolderOpen, FilePlus, Save, Send, Undo2, Redo2, SlidersHorizontal, Grid3x3, Magnet, Compass,
@@ -172,6 +176,52 @@ function StairNode({ s }) {
   return <g>{els}</g>;
 }
 
+// A flight of stairs or a stair void (lib/cad/stairs): the same drawing as
+// the plan image, at the plan's scale (its label too). Lines in screen px,
+// as the sample's stairs (StairNode), so they stay visible zoomed out.
+// preview: the one being dragged out.
+const FLIGHT_PX = { box: 1, tread: 0.7, arrow: 1 };
+function FlightNode({ f, scale, selected = false, preview = false }) {
+  const d = stairDrawing(f, scale), ink = selected || preview ? "cadv-sel" : "cadv-ink";
+  return (
+    <g opacity={preview ? 0.85 : 1}>
+      {(selected || preview) && <rect x={f.x} y={f.y} width={f.w} height={f.h} className="cadv-sel-fill" stroke="none" />}
+      {d.lines.map((l, i) => (
+        <line key={i} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} className={ink} strokeWidth={FLIGHT_PX[l.wt]} vectorEffect="non-scaling-stroke" opacity={l.op} />
+      ))}
+      {d.head && <path d={`M${d.head[0][0]} ${d.head[0][1]} L${d.head[1][0]} ${d.head[1][1]} L${d.head[2][0]} ${d.head[2][1]}`} fill="none" className={ink} strokeWidth={FLIGHT_PX.arrow} vectorEffect="non-scaling-stroke" />}
+      {d.label && (
+        <text x={d.label.x} y={d.label.y} className="cadv-note" fontSize={d.label.fs} textAnchor="middle"
+          transform={`rotate(${d.label.angle} ${d.label.x} ${d.label.y})`}>{d.label.text}</text>
+      )}
+    </g>
+  );
+}
+
+// Inspector size field (mm): commits a whole number on Enter or on leaving
+// it, Esc puts it back; outside min..max it is held to them.
+function MmField({ value, onCommit, label, min, max, unit = "mm" }) {
+  const cur = String(Math.round(value));
+  const [v, setV] = useState(cur);
+  const escRef = useRef(false);
+  useEffect(() => { setV(cur); }, [cur]);
+  const done = () => {
+    const n = parseInt(v, 10);
+    if (!escRef.current && Number.isFinite(n) && String(n) !== cur) onCommit(Math.max(min, Math.min(max, n))); else setV(cur);
+    escRef.current = false;
+  };
+  return (
+    <label className="flex items-center gap-2">
+      <span className="flex-1 text-[13px] font-medium text-slate-700 dark:text-slate-200">{label}</span>
+      <input type="text" inputMode="numeric" aria-label={label} value={v} onChange={(e) => setV(e.target.value.replace(/[^0-9]/g, ""))}
+        onFocus={(e) => e.currentTarget.select()} onBlur={done}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === "Escape") { escRef.current = e.key === "Escape"; e.currentTarget.blur(); } }}
+        className="w-20 h-9 px-2 text-right text-[13px] font-medium tabular-nums bg-white dark:bg-[#0E141B] rounded-lg ring-1 ring-slate-300 dark:ring-[#2A3947] focus:ring-[#3FB7C9] focus:outline-none text-slate-900 dark:text-slate-100 select-text" />
+      {unit ? <span className="w-6 text-[12px] text-slate-500 dark:text-slate-400">{unit}</span> : <span className="w-6" />}
+    </label>
+  );
+}
+
 function Tag({ refTxt, x, y }) {
   return (
     <g>
@@ -212,6 +262,8 @@ const glyph = (body) => function PlanGlyph({ size = 15, className = "" }) {
 };
 const WindowIcon = glyph(<g><rect x="3" y="7" width="18" height="10" /><path d="M3 12h18" /></g>);
 const DimIcon = glyph(<g><path d="M4 12h16M4 8v8M20 8v8" /><path d="M7 10l-3 2 3 2M17 10l3 2-3 2" /></g>);
+// A flight as drawn on the plan: box, treads, the arrow up the middle.
+const StairsIcon = glyph(<g><rect x="6" y="3" width="12" height="18" /><path d="M6 8h12M6 12h12M6 16h12" strokeWidth={1.3} /><path d="M12 18V6M9.5 8.5L12 6l2.5 2.5" /></g>);
 
 // Draw tools in the top bar (Select and Pan float on the canvas, as in the
 // editor). Walls are one button; External / Internal is chosen beside the
@@ -225,12 +277,13 @@ const DRAW_TOOLS = [
   { id: "dim", icon: DimIcon, label: "Dimension", kbd: "m" },
   { id: "room", icon: TagIcon, label: "Room label", kbd: "r" },
   { id: "text", icon: Type, label: "Note", kbd: "t" },
+  { id: "stairs", icon: StairsIcon, label: "Stairs", kbd: "s", kbdTip: "S stairs or stair void" },
 ];
 const CANVAS_TOOLS = [
   ["select", { icon: MousePointer2, label: "Select", hint: "V" }],
   ["pan", { icon: Hand, label: "Pan", hint: "H" }],
 ];
-const TOOL_NAME = { select: "Select", pan: "Pan", ext: "External wall", int: "Internal wall", door: "Door", window: "Window", dim: "Dimension", room: "Room label", text: "Note" };
+const TOOL_NAME = { select: "Select", pan: "Pan", ext: "External wall", int: "Internal wall", door: "Door", window: "Window", dim: "Dimension", room: "Room label", text: "Note", stairs: "Stairs" };
 
 const LAYER_LIST = [
   ["walls", "Walls"],
@@ -243,7 +296,7 @@ const LAYER_LIST = [
 ];
 // The layer each selectable kind is on: hiding it drops that selection, so
 // nothing hidden can be edited or deleted.
-const SEL_LAYER = { wall: "walls", door: "openings", window: "openings", room: "rooms" };
+const SEL_LAYER = { wall: "walls", door: "openings", window: "openings", room: "rooms", stair: "stairs" };
 
 // The Scale section's warning (the plan would be cut off, or is too big for A3).
 const SCALE_WARN = "mt-2 rounded-lg px-2.5 py-2 text-[12px] leading-snug font-medium bg-red-50 text-red-800 ring-1 ring-red-200 dark:bg-red-500/10 dark:text-red-200 dark:ring-red-400/30";
@@ -267,6 +320,7 @@ const SHORTCUTS = [
     ["Dimension", ["m"]],
     ["Room label", ["r"]],
     ["Note", ["t"]],
+    ["Stairs or stair void (drag to place)", ["s"]],
     ["Type a wall length (mm) while drawing a wall", ["digits"]],
     ["Place the wall at the typed length", ["enter"]],
     ["Correct the typed length", ["backspace"]],
@@ -274,7 +328,7 @@ const SHORTCUTS = [
   ] },
   { title: "Edit", items: [
     ["Select tool", ["v"]],
-    ["Delete the selected wall, door, window or room label", ["del", "backspace"]],
+    ["Delete the selected wall, door, window, room label or stairs", ["del", "backspace"]],
     ["Put back what you are dragging", ["esc"]],
     ["Clear the selection, back to Select", ["esc"]],
     ["Undo", ["mod+z"]],
@@ -298,11 +352,12 @@ const TOUCH_GESTURES = [
     ["Door or window", "Tap on a wall"],
     ["Dimension", "Tap the two points"],
     ["Room label or note", "Tap where it goes"],
+    ["Stairs or stair void", "Drag along the flight, or over the void"],
     ["End a run of chained walls", "Tap Finish run in the inspector"],
   ] },
   { title: "Edit", items: [
-    ["Select", "With Select, tap a wall, door, window or label"],
-    ["Move a wall, corner, door, window or label", "With Select, drag it with one finger"],
+    ["Select", "With Select, tap a wall, door, window, label or stairs"],
+    ["Move a wall, corner, door, window, label or stairs", "With Select, drag it with one finger"],
     ["Delete", "Tap Delete in the inspector"],
     ["Undo or redo", "Tap the arrows in the top bar"],
     ["Rename the sketch", "Tap its name in the top bar, or double-tap its tab"],
@@ -353,7 +408,11 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const [cur, setCur] = useState({ x: 0, y: 0, sx: -99, sy: -99, on: false });
   const [sel, setSel] = useState(null);
   const [dimP1, setDimP1] = useState(null);
-  const [settings, setSettings] = useState({ grid: 100, doorW: DOOR_W, winW: WIN_W });
+  const [settings, setSettings] = useState({ grid: 100, doorW: DOOR_W, winW: WIN_W, stairKind: "flight" });
+  // Stairs tool: the press it is being dragged from ({ a, pid }) and the
+  // stair the drag would place now (shown until release).
+  const stairDragRef = useRef(null);
+  const [stairPrev, setStairPrev] = useState(null);
   const [flags, setFlags] = useState({ ortho: true, gridSnap: true, chain: false, wallSnap: true });
   const [layers, setLayers] = useState({ walls: true, openings: true, dims: true, rooms: true, stairs: true, boundary: true, grid: true });
   const [size, setSize] = useState({ w: 900, h: 600 });
@@ -476,7 +535,9 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
         return;
       }
       if (e.altKey) return;
-      const map = { v: "select", e: "ext", i: "int", d: "door", w: "window", m: "dim", r: "room", t: "text", h: "pan" };
+      const map = { v: "select", e: "ext", i: "int", d: "door", w: "window", m: "dim", r: "room", t: "text", s: "stairs", h: "pan" };
+      // Stairs being dragged out: Esc drops it, nothing else applies until release.
+      if (stairDragRef.current) { if (e.key === "Escape") { e.preventDefault(); cancelStair(); } return; }
       // Typed wall length: digits build the number, Backspace edits it, Enter
       // places the wall that long towards the mouse.
       if (isWallTool && draftPts.length) {
@@ -686,7 +747,10 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       const nw = nearestWall(m.walls, raw.x, raw.y);
       if (nw && nw.dist <= (nw.seg.type === "external" ? T_EXT : T_INT) / 2 + 4 / viewRef.current.s) ri = -1;
     }
-    return { end: null, op, ri };
+    // Stairs and voids come after openings and labels (which can sit on them)
+    // and before the wall they stand against.
+    const st = !op && ri < 0 && layers.stairs ? stairAt(m, raw.x, raw.y) : null;
+    return { end: null, op, ri, si: st ? st.id : null };
   };
   // The ends at a picked corner, their walls, and the wall a press there takes
   // (the selected one if it's there, else the nearest): a click selects it, a
@@ -698,7 +762,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const armDrag = (e, raw) => {
     const base = modelRef.current, ws = base.walls;
     const selId = sel && sel.kind === "wall" ? sel.id : null;
-    const { end: hit, op, ri } = pickAt(base, raw, selId);
+    const { end: hit, op, ri, si } = pickAt(base, raw, selId);
     let d = null;
     if (hit) {
       // Every end at that corner moves. Angle lock works from the far end of
@@ -720,6 +784,8 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       if (host) d = { kind: "opening", okind: op.kind, id: op.id, src: o, host };
     } else if (ri >= 0) {
       d = { kind: "room", index: ri, src: base.rooms[ri] };
+    } else if (si) {
+      d = { kind: "stair", id: si, src: flightsOf(base).find((f) => f.id === si) };
     } else if (layers.walls) {
       const h = hitTest(ws, raw.x, raw.y), w = h && ws.find((o) => o.id === h.id);
       if (w) { const L = segLen(w) || 1; d = { kind: "wall", id: w.id, src: w, n: [-(w.y2 - w.y1) / L, (w.x2 - w.x1) / L] }; }
@@ -737,7 +803,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       // rather than drag a stale copy over that edit.
       if (modelRef.current !== d.base) { dragRef.current = null; return; }
       d.moved = true; d.save = saveState;
-      setSel(d.kind === "room" ? { kind: "room", index: d.index } : { kind: d.okind || "wall", id: d.id });
+      setSel(d.kind === "room" ? { kind: "room", index: d.index } : d.kind === "stair" ? { kind: "stair", id: d.id } : { kind: d.okind || "wall", id: d.id });
       setDragUi({ kind: d.kind, id: d.id, index: d.index, off: 0, gap: 0 });
     }
     const raw = toWorld(e.clientX, e.clientY);
@@ -777,6 +843,14 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       const dx = Math.round(raw.x - d.w0.x), dy = Math.round(raw.y - d.w0.y);
       next = !dx && !dy ? d.base : { ...d.base, rooms: d.base.rooms.map((r, i) => (i === d.index ? { ...r, x: d.src.x + dx, y: d.src.y + dy } : r)) };
       ui = { kind: "room", index: d.index };
+      at = raw;
+    } else if (d.kind === "stair") {
+      // Moved whole, on the grid's steps with Snap to grid (as a wall is).
+      let dx = raw.x - d.w0.x, dy = raw.y - d.w0.y;
+      if (flags.gridSnap) { dx = snap(dx, settings.grid); dy = snap(dy, settings.grid); }
+      dx = Math.round(dx); dy = Math.round(dy);
+      next = !dx && !dy ? d.base : { ...d.base, flights: flightsOf(d.base).map((f) => (f.id === d.id ? { ...f, x: d.src.x + dx, y: d.src.y + dy } : f)) };
+      ui = { kind: "stair", id: d.id };
       at = raw;
     } else {
       // Lock angles: only square to the wall, so its neighbours keep their run.
@@ -823,7 +897,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   };
 
   const handleMove = (e) => {
-    if (pinchActiveRef.current) { if (dragRef.current) cancelDrag(); return; }
+    if (pinchActiveRef.current) { if (dragRef.current) cancelDrag(); if (stairDragRef.current) cancelStair(); return; }
     if (panRef.current) {
       setView({ s: viewRef.current.s, tx: panRef.current.tx + (e.clientX - panRef.current.mx), ty: panRef.current.ty + (e.clientY - panRef.current.my) });
       return;
@@ -836,7 +910,14 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     const raw = toWorld(e.clientX, e.clientY);
     const from = draftPts.length ? draftPts[draftPts.length - 1] : null;
     const p = isWallTool ? wallPoint(raw, from) : (flags.gridSnap ? { x: snap(raw.x, settings.grid), y: snap(raw.y, settings.grid) } : raw);
-    const pk = tool === "select" ? pickAt(model, raw) : null, hov = !!pk && (!!pk.end || pk.ri >= 0); // a wall end or a room label
+    const pk = tool === "select" ? pickAt(model, raw) : null, hov = !!pk && (!!pk.end || pk.ri >= 0 || !!pk.si); // a wall end, a room label or stairs
+    if (tool === "stairs") {
+      // Points land on a square wall's face (Snap to walls), else the grid.
+      const sp = stairPoint(raw), sd = stairDragRef.current;
+      if (sd && e.pointerId === sd.pid) setStairPrev(stairOf(sd.a, sp));
+      setCur({ x: sp.x, y: sp.y, rx: raw.x, ry: raw.y, sx: e.clientX, sy: e.clientY, on: true, ep: false, snap: sp.snapped ? "side" : null, guides: null, hov: false });
+      return;
+    }
     if (tool === "door" || tool === "window") {
       const nw = model.walls.length ? nearestWall(model.walls, raw.x, raw.y) : null;
       const ow = tool === "door" ? settings.doorW : settings.winW;
@@ -845,11 +926,19 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     setCur({ x: p.x, y: p.y, rx: raw.x, ry: raw.y, sx: e.clientX, sy: e.clientY, on: true, ep: !!p.ep, snap: p.ep ? "end" : p.kind || null, guides: p.guides || null, hov });
   };
   const handleDown = (e) => {
-    if (pinchActiveRef.current) { cancelDrag(); return; }
+    if (pinchActiveRef.current) { cancelDrag(); if (stairDragRef.current) cancelStair(); return; }
     suppressClickRef.current = false;
     if (tool === "pan" || e.button === 1 || e.shiftKey) {
       panRef.current = { mx: e.clientX, my: e.clientY, tx: view.tx, ty: view.ty };
       e.preventDefault();
+      return;
+    }
+    if (tool === "stairs" && e.button === 0 && !stairDragRef.current) {
+      // Press, drag along the flight (or over the void), release to place.
+      const a = stairPoint(toWorld(e.clientX, e.clientY));
+      try { svgRef.current.setPointerCapture(e.pointerId); } catch {}
+      stairDragRef.current = { a, pid: e.pointerId };
+      setStairPrev(stairOf(a, a));
       return;
     }
     if (tool === "select" && e.button === 0 && !dragRef.current) {
@@ -865,8 +954,26 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const handleUp = (e) => {
     panRef.current = null;
     if (dragRef.current && e.pointerId === dragRef.current.pid && endDrag()) suppressClickRef.current = true;
+    const sd = stairDragRef.current;
+    if (sd && e.pointerId === sd.pid) {
+      stairDragRef.current = null; setStairPrev(null); suppressClickRef.current = true;
+      const f = stairOf(sd.a, stairPoint(toWorld(e.clientX, e.clientY)));
+      const id = "S" + Date.now() + Math.round(Math.random() * 1e3);
+      change((m) => ({ ...m, flights: flightsOf(m).concat([{ id, ...f }]) }));
+      // The tool stays on (Esc or Select to leave); the new one is shown in the inspector.
+      setSel({ kind: "stair", id });
+    }
   };
-  const handleCancel = (e) => { panRef.current = null; if (dragRef.current && e.pointerId === dragRef.current.pid) cancelDrag(); };
+  const cancelStair = () => { stairDragRef.current = null; setStairPrev(null); suppressClickRef.current = true; };
+  const handleCancel = (e) => {
+    panRef.current = null;
+    if (dragRef.current && e.pointerId === dragRef.current.pid) cancelDrag();
+    if (stairDragRef.current && e.pointerId === stairDragRef.current.pid) cancelStair();
+  };
+  // Stairs tool: a snapped point (stairSnap: a square wall's face within
+  // 10px with Snap to walls, else the grid) and the stair a drag places.
+  const stairPoint = (raw) => stairSnap(flags.wallSnap ? model.walls : [], raw, 10 / viewRef.current.s, flags.gridSnap ? settings.grid : 0);
+  const stairOf = (a, b) => stairFromDrag(settings.stairKind, a, b);
 
   const commitWallSeg = (a, b) => {
     if (a.x === b.x && a.y === b.y) return;
@@ -965,9 +1072,9 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       // end or removed, and undo / redo clear the selection). Same order as a
       // press (pickAt); a wall end selects the wall a drag there would move.
       const selId = sel && sel.kind === "wall" ? sel.id : null;
-      const { end, op, ri } = pickAt(model, raw, selId);
+      const { end, op, ri, si } = pickAt(model, raw, selId);
       setSel(end ? { kind: "wall", id: nodeAt(model.walls, end, raw, selId).g.id }
-        : op || (ri >= 0 ? { kind: "room", index: ri } : hitTest(model.walls, raw.x, raw.y)));
+        : op || (ri >= 0 ? { kind: "room", index: ri } : si ? { kind: "stair", id: si } : hitTest(model.walls, raw.x, raw.y)));
     }
   };
 
@@ -988,6 +1095,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       if (sel.kind === "door") return { ...m, doors: m.doors.filter((d) => d.id !== sel.id) };
       if (sel.kind === "window") return { ...m, windows: m.windows.filter((w) => w.id !== sel.id) };
       if (sel.kind === "room") return sel.index < m.rooms.length ? { ...m, rooms: m.rooms.filter((_, i) => i !== sel.index) } : m;
+      if (sel.kind === "stair") return { ...m, flights: flightsOf(m).filter((f) => f.id !== sel.id) };
       return { ...m, walls: m.walls.filter((w) => w.id !== sel.id) };
     });
     setSel(null);
@@ -1007,6 +1115,11 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   };
   const flipSwing = () => updDoor((d) => ({ fold: -d.fold }));
   const flipHinge = () => updDoor((d) => ({ hinge: -d.hinge }));
+  // Stairs edits (lib/cad/stairs), each one undo step.
+  const updStair = (fn) => {
+    if (!sel || sel.kind !== "stair") return;
+    change((m) => ({ ...m, flights: flightsOf(m).map((f) => (f.id === sel.id ? fn(f) : f)) }));
+  };
   const toggleEscape = () => {
     if (!sel || sel.kind !== "window") return;
     change((m) => ({ ...m, windows: m.windows.map((w) => w.id === sel.id ? { ...w, escape: !w.escape } : w) }));
@@ -1089,7 +1202,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       meta: { projectName: name, drawingNumber: "", date: today, revision: "A", revNote: "First Issue", company: "", clientName: "", clientEmail: "", scale: scaleLabel(ps.scale) },
       boq: null, titleBlock: null, colourMode: "red",
       notes: "", // blank Installation Notes, like any new drawing
-      sheets: [{ id: sheetId, name, drawingNumber: "", bgImage: { path, w, h, planFrame: ps.frame, planScale: ps.scale }, placed: [], furniture: [], walls: [], wires: [], annotations: [], notes: "", symbolScale: 1 }],
+      sheets: [{ id: sheetId, name, drawingNumber: "", bgImage: { path, w, h, planFrame: ps.frame, planScale: ps.scale, ...stairsField(ps.frame, planStairs(model)) }, placed: [], furniture: [], walls: [], wires: [], annotations: [], notes: "", symbolScale: 1 }],
       activeSheetId: sheetId,
     };
     const newId = await insertProject(name, data);
@@ -1130,7 +1243,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
         const skId = await persistSketch(currentLink());
         setFrame(ps.frame); setLinkScale(ps.scale); setPlanBusy(null);
         const onSaved = () => persistSketch(lk, skId).catch((e) => console.warn(e));
-        onApplyPlan({ path, w: png.w, h: png.h, dataUrl: png.dataUrl, sketchId: skId, sheetId: linkSheetId, scale: ps.scale, frame: ps.frame, remap: ps.remap, legacyFrame, manual: ps.manual, onSaved });
+        onApplyPlan({ path, w: png.w, h: png.h, dataUrl: png.dataUrl, sketchId: skId, sheetId: linkSheetId, scale: ps.scale, frame: ps.frame, remap: ps.remap, legacyFrame, manual: ps.manual, stairs: planStairs(model), onSaved });
         onClose && onClose();
         return;
       }
@@ -1144,7 +1257,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
         const sheets = proj.sheets || [];
         const tid = sheets.some((s) => s.id === linkSheetId) ? linkSheetId
           : !sheets.length ? null : proj.activeSheetId && sheets.some((s) => s.id === proj.activeSheetId) ? proj.activeSheetId : sheets[0].id;
-        const plan = { path, w: png.w, h: png.h, sketchId: skId, frame: ps.frame, scale: ps.scale, oldFrame: ps.remap && ps.remap.oldFrame, legacyFrame, linked: tid === linkSheetId };
+        const plan = { path, w: png.w, h: png.h, sketchId: skId, frame: ps.frame, scale: ps.scale, oldFrame: ps.remap && ps.remap.oldFrame, legacyFrame, linked: tid === linkSheetId, stairs: planStairs(model) };
         let outside = 0;
         const newSheets = sheets.map((s) => {
           if (s.id !== tid) return s;
@@ -1254,6 +1367,8 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       g.push(<g key="wins">{model.windows.map((wn) => <WindowNode key={wn.id} wn={{ ...wn, t: drawStyle.opening(wn.t) }} side={openingSide(wn, c)} selected={sel && sel.kind === "window" && sel.id === wn.id} />)}</g>);
     }
     if (layers.stairs && model.stairs) g.push(<StairNode key="stairs" s={model.stairs} />);
+    // Stairs and voids at the plan's scale, as they will print.
+    if (layers.stairs) flightsOf(model).forEach((f) => g.push(<FlightNode key={"st" + f.id} f={f} scale={sheetPlan.scale} selected={!!sel && sel.kind === "stair" && sel.id === f.id} />));
     if (layers.dims) g.push(<g key="dims">{model.dims.map((d) => <DimNode key={d.id} d={d} />)}</g>);
     if (layers.rooms) {
       // Automatic area: worked out from the walls, none when not enclosed.
@@ -1342,6 +1457,8 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     if (edge) { const L = ht + 14 / view.s; out.push(<line key={k + "e"} x1={edge[0] - F[0] * L} y1={edge[1] - F[1] * L} x2={edge[0] + F[0] * L} y2={edge[1] + F[1] * L} className="cadv-op-edge" strokeWidth={3} vectorEffect="non-scaling-stroke" />); }
     return out;
   };
+  if (tool === "stairs" && stairPrev) overlay.push(<FlightNode key="stprev" f={stairPrev} scale={sheetPlan.scale} preview />);
+  if (tool === "stairs" && cur.on && flags.wallSnap && cur.snap) overlay.push(...snapMarks("c", cur));
   if ((tool === "door" || tool === "window") && openPrev && cur.on && !dragUi) overlay.push(...openingMarks("op", openPrev.pos, openPrev.w, openPrev.t, openPrev.blocked, openPrev.snapped ? openPrev.edge : null));
   if (dragUi && dragUi.kind === "opening" && (dragUi.blocked || dragUi.snapped)) {
     const o = (dragUi.okind === "door" ? model.doors : model.windows).find((q) => q.id === dragUi.id);
@@ -1392,6 +1509,10 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     const L2 = Math.round(hyp(cur.x - dimP1.x, cur.y - dimP1.y));
     const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
     hud = <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}><b>{fmtMM(L2)} mm</b></div>;
+  } else if (tool === "stairs" && stairPrev && cur.on) {
+    // The size the drag would place: across x along (a void: its two sides).
+    const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
+    hud = <div className="cadv__hud" style={{ left: cur.sx - wr.left, top: cur.sy - wr.top }}><b>{fmtMM(stairWidth(stairPrev))} &#215; {fmtMM(stairLength(stairPrev))} mm</b>{snapTag(cur.snap)}</div>;
   } else if (dragUi && dragUi.kind === "opening") {
     // Gap from the opening's nearer edge to the nearer end of its wall.
     const wr = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
@@ -1413,6 +1534,20 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const selDoor = sel && sel.kind === "door" ? model.doors.find((d) => d.id === sel.id) : null;
   const selWin = sel && sel.kind === "window" ? model.windows.find((w) => w.id === sel.id) : null;
   const selRoom = sel && sel.kind === "room" ? model.rooms[sel.index] || null : null;
+  const selStair = sel && sel.kind === "stair" ? flightsOf(model).find((f) => f.id === sel.id) || null : null;
+  // While the Stairs tool is on: what a drag draws (a flight, or a void).
+  const stairKindChooser = tool === "stairs" && (
+    <>
+      <SectionLabel className="mt-5 mb-2">Draw</SectionLabel>
+      <ChoiceGroup label="Stairs type" value={settings.stairKind} onChange={(v) => setSettings((s) => ({ ...s, stairKind: v }))}
+        options={[{ value: "flight", label: "Stairs" }, { value: "void", label: "Stair void" }]} />
+      <div className={`mt-1.5 ${PANEL_HELP}`}>
+        {settings.stairKind === "void"
+          ? "For first floors: a box with an X through it, over the stairs below."
+          : `${STAIR_W} mm wide and ${STAIR_RISERS} risers to start - change them, the direction or the turn once placed.`}
+      </div>
+    </>
+  );
   const selArea = selRoom ? (isAuto(selRoom) ? areaAt(spaces, selRoom.x, selRoom.y) : selRoom.area || null) : null;
   const selOnWall = !!selRoom && isAuto(selRoom) && selArea == null && onWall(spaces, selRoom.x, selRoom.y);
   // Chain walls on: a run of walls, each from the last one's end, until Esc.
@@ -1429,6 +1564,9 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     dim: dimP1 ? "Click the second measure point - Esc to cancel" : "Click the first measure point - Esc to exit",
     room: "Click inside a space to drop a room label (area from the walls) - Esc to exit",
     text: "Click to place a note - Esc to exit",
+    stairs: settings.stairKind === "void"
+      ? "Drag over the opening to draw a stair void (a box with an X) - Esc to exit"
+      : "Drag along the flight, the way it goes up, to place stairs - Esc to exit",
     pan: "Drag to pan the sheet",
   }[tool];
   // Status bar: the keys for what is happening now, as key caps
@@ -1436,7 +1574,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const typedCloses = !!typedLen && flags.chain && run && runEnd(true, run, typedEnd()) === run.start;
   const chained = flags.chain && run && run.walls > 0;
   const act = TOUCH ? "Tap" : "Click";
-  const moveSel = !sel ? null : sel.kind === "wall" ? "Drag the wall or a corner" : sel.kind === "room" ? "Drag the label" : "Drag it along its wall";
+  const moveSel = !sel ? null : sel.kind === "wall" ? "Drag the wall or a corner" : sel.kind === "room" ? "Drag the label" : sel.kind === "stair" ? "Drag the stairs" : "Drag it along its wall";
   const statusParts = dragUi ? (TOUCH ? ["Lift your finger to place it"] : ["Release to place it", ["esc", "put it back"]])
     : isWallTool && draftPts.length && typedLen ? [`Length ${typedLen} mm`, ["enter", typedCloses ? "close the shape" : "place"], ["backspace", "edit"], ["esc", "cancel"]]
     : isWallTool && draftPts.length ? (TOUCH ? [chained ? "Tap the next point" : "Tap the end point", chained ? "Finish run in the inspector ends it" : null]
@@ -1446,6 +1584,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     : tool === "dim" ? [dimP1 ? `${act} the second point` : `${act} the first point`, !TOUCH && ["esc", dimP1 ? "cancel" : "exit"]]
     : tool === "room" ? [`${act} inside a space to drop a room label`, !TOUCH && ["esc", "exit"]]
     : tool === "text" ? [`${act} to place a note`, !TOUCH && ["esc", "exit"]]
+    : tool === "stairs" ? [stairPrev ? (TOUCH ? "Lift your finger to place it" : "Release to place it") : settings.stairKind === "void" ? "Drag over the opening" : "Drag along the flight, the way it goes up", !TOUCH && ["esc", stairPrev ? "cancel" : "exit"]]
     : tool === "pan" ? (TOUCH ? ["Drag to pan", "pinch to zoom"] : ["Drag to pan", ["wheel", "to zoom"], ["v", "select"]])
     : moveSel ? (TOUCH ? [moveSel + " to move it", "Delete is in the inspector"] : [moveSel, ["del", "to delete"], ["mod+z", "undo"], ["esc", "deselect"]])
     : TOUCH ? ["Tap to select, drag to move", "pinch to zoom", "two fingers to pan"]
@@ -1717,6 +1856,35 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
                   <div className="mt-4"><ToggleRow label="Escape window" checked={!!selWin.escape} onChange={() => toggleEscape()} /></div>
                   <PanelAction danger onClick={deleteSel} className="w-full mt-5"><Trash2 size={14} /> Delete window</PanelAction>
                 </>
+              ) : selStair && selStair.kind === "void" ? (
+                <>
+                  <div className="text-[15px] font-semibold text-slate-900 dark:text-slate-100" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>Stair void</div>
+                  <div className={`mt-1 mb-4 ${PANEL_HELP}`}>The opening over the stairs on an upper floor. Drag it on the plan to move it. Drawing only - it never counts in the materials list or quote.</div>
+                  <div className="space-y-2">
+                    <MmField label="Width" value={selStair.w} min={300} max={20000} onCommit={(v) => updStair((f) => setStairWidth(f, v))} />
+                    <MmField label="Length" value={selStair.h} min={300} max={20000} onCommit={(v) => updStair((f) => setStairLength(f, v))} />
+                  </div>
+                  <PanelAction onClick={() => updStair(rotateStair)} className="w-full mt-4">Rotate 90&#176;</PanelAction>
+                  <PanelAction danger onClick={deleteSel} className="w-full mt-5"><Trash2 size={14} /> Delete stair void</PanelAction>
+                  {stairKindChooser}
+                </>
+              ) : selStair ? (
+                <>
+                  <div className="text-[15px] font-semibold text-slate-900 dark:text-slate-100" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>Stairs</div>
+                  <div className={`mt-1 mb-4 ${PANEL_HELP}`}>A straight flight. Drag it on the plan to move it. Drawing only - it never counts in the materials list or quote.</div>
+                  <div className="space-y-2">
+                    <MmField label="Width" value={stairWidth(selStair)} min={300} max={20000} onCommit={(v) => updStair((f) => setStairWidth(f, v))} />
+                    <MmField label="Length" value={stairLength(selStair)} min={300} max={20000} onCommit={(v) => updStair((f) => setStairLength(f, v))} />
+                    <MmField label="Risers" unit="" value={selStair.risers || STAIR_RISERS} min={RISERS_MIN} max={RISERS_MAX} onCommit={(v) => updStair((f) => setRisers(f, v))} />
+                  </div>
+                  <SectionLabel className="mt-5 mb-2">Direction</SectionLabel>
+                  <ChoiceGroup label="Direction" value={selStair.dir === "down" ? "down" : "up"}
+                    onChange={(v) => v !== (selStair.dir === "down" ? "down" : "up") && updStair((f) => ({ ...f, dir: v }))}
+                    options={[{ value: "up", label: "Up" }, { value: "down", label: "Down" }]} />
+                  <PanelAction onClick={() => updStair(rotateStair)} className="w-full mt-4">Rotate 90&#176;</PanelAction>
+                  <PanelAction danger onClick={deleteSel} className="w-full mt-5"><Trash2 size={14} /> Delete stairs</PanelAction>
+                  {stairKindChooser}
+                </>
               ) : selRoom ? (
                 <>
                   <div className="text-[15px] font-semibold text-slate-900 dark:text-slate-100" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>Room</div>
@@ -1758,8 +1926,9 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
                         options={[600, 900, 1200].map((v) => ({ value: v, label: String(v) }))} />
                     </>
                   )}
+                  {stairKindChooser}
                   <SectionLabel className="mt-6 mb-1">Plan</SectionLabel>
-                  <ScheduleRows rows={[["Walls", model.walls.length], ["Doors", model.doors.length], ["Windows", model.windows.length], ["Rooms", model.rooms.length], ["Dimensions", model.dims.length]]} />
+                  <ScheduleRows rows={[["Walls", model.walls.length], ["Doors", model.doors.length], ["Windows", model.windows.length], ["Rooms", model.rooms.length], ["Dimensions", model.dims.length], ["Stairs", flightsOf(model).length + (model.stairs ? 1 : 0)]]} />
                 </>
               )}
             </div>

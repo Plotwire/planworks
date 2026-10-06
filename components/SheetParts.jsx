@@ -30,6 +30,7 @@ import { addDaysIso, QUOTE_VALID_DAYS, shownOnQuote, lineTotal as boqLineTotal, 
 import BoqDocPages from "@/components/BoqDocPages";
 import { keyText, ariaKeys, SHOW_KBD, TOUCH, CLOSE_MENUS } from "@/components/Shortcuts";
 import { SHEET, planFootprint } from "@/lib/cad/sheet";
+import { onStairs } from "@/lib/cad/planScale";
 
 // Per-project title block. The editor publishes the *effective* title block
 // (the project's own, falling back to the account default) through this context
@@ -1402,6 +1403,23 @@ function PlanBackground({ bgImage, imageDisplay, viewportRef }) {
   );
 }
 
+// Switch-to-light link lines ("wires"). Quiet by default so the symbols stay
+// the main thing on a busy sheet: a lighter tint of the line colour, a thinner
+// line and short dashes. Sizes are sheet units, and the sheet prints at A3
+// (1 unit = 0.265 mm): a 0.21 mm line, 1.1 mm dashes, 0.8 mm gaps. The editor
+// and the print sheet both draw with this, and the PDF overlay is captured
+// from the print sheet, so screen, print and PDF match. Hovered or selected
+// in the editor, a line shows at full strength. Saved wires are unchanged.
+const WIRE = {
+  width: 0.8,
+  dash: "4 3",
+  // 55% of the full colour, mixed with white (a tint, not opacity, so crossing
+  // lines don't darken where they overlap and every printer shows the same)
+  colour: (mode) => (mode === "mono" ? "#787878" : "#EC8888"),
+  fullWidth: 1.2,
+  fullColour: (mode) => (mode === "mono" ? "#0a0a0a" : "#dc2626"),
+};
+
 function DrawingArea({
   drawingAreaRef, DRAW, bgImage, placed, wires, annotations,
   furniture,
@@ -1423,6 +1441,7 @@ function DrawingArea({
   const selectedWallId = selection?.kind === "wall" ? selection.id : null;
   const selectedAnnoId = selection?.kind === "annotation" ? selection.id : null;
   const selectedWireId = selection?.kind === "wire" ? selection.id : null;
+  const [hoverWireId, setHoverWireId] = useState(null);
   // Fit the bgImage into the drawing area
   const imageDisplay = useMemo(
     () => (bgImage ? planFootprint(DRAW, bgImage.w, bgImage.h) : null),
@@ -1494,8 +1513,8 @@ function DrawingArea({
           const b = placed.find(p => p.id === w.toId);
           if (!a || !b) return null;
           const isSel = w.id === selectedWireId;
-          const baseStroke = colourMode === "mono" ? "#0a0a0a" : "#dc2626";
           const selectable = tool === "select";
+          const full = selectable && w.id === hoverWireId; // hovered: full strength
           return (
             <g key={w.id}>
               {/* Wide invisible hit area so the thin line is easy to click/tap */}
@@ -1504,6 +1523,8 @@ function DrawingArea({
                 stroke="transparent" strokeWidth={14} strokeLinecap="round"
                 style={{ cursor: selectable ? "pointer" : "default", pointerEvents: selectable ? "stroke" : "none" }}
                 onPointerDown={(e) => { if (selectable) { e.stopPropagation(); onWireSelect?.(w.id); } }}
+                onPointerEnter={() => setHoverWireId(w.id)}
+                onPointerLeave={() => setHoverWireId((h) => (h === w.id ? null : h))}
               />
               {isSel && (
                 <line
@@ -1514,10 +1535,10 @@ function DrawingArea({
               )}
               <line
                 x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-                stroke={isSel ? "#22808F" : baseStroke}
-                strokeWidth={isSel ? 1.8 : 1.2}
-                strokeDasharray="6 4"
-                strokeLinecap="round"
+                stroke={isSel ? "#22808F" : full ? WIRE.fullColour(colourMode) : WIRE.colour(colourMode)}
+                strokeWidth={isSel ? 1.8 : full ? WIRE.fullWidth : WIRE.width}
+                strokeDasharray={WIRE.dash}
+                strokeLinecap="butt"
                 style={{ pointerEvents: "none" }}
               />
             </g>
@@ -1654,9 +1675,20 @@ function DrawingArea({
           const hs = Math.min(Math.max(1 / (zoom || 1), 0.6), 6); // keep the rotate handle a steady on-screen size at any zoom
           const handleOffset = half + 20 * hs;
           const hDotR = 9 * hs, hHitR = 26 * hs, hLineW = Math.max(1, 1.6 * hs), hDash = `${3*hs} ${2*hs}`;
+          // Dropped (or moved) onto the plan's stairs: allowed, with a small
+          // amber "On stairs" under it while it is selected. Editor only -
+          // never printed.
+          const stairWarn = isSel && onStairs(bgImage, item.x, item.y);
           return (
-            <g key={item.id}
-               transform={`translate(${item.x - half} ${item.y - half}) rotate(${item.rotation} ${half} ${half})`}>
+            <g key={item.id}>
+            {stairWarn && (
+              <g pointerEvents="none" transform={`translate(${item.x} ${item.y + half + 10 + (item.label ? 12 : 0)})`}>
+                <rect x={-28} y={-8} width={56} height={15} rx={7.5} fill="#FEF3C7" stroke="#D97706" strokeWidth={1}/>
+                <text x={0} y={3} fontSize={9} textAnchor="middle" fill="#92400E"
+                      fontFamily="ui-sans-serif, system-ui, sans-serif" fontWeight="700">On stairs</text>
+              </g>
+            )}
+            <g transform={`translate(${item.x - half} ${item.y - half}) rotate(${item.rotation} ${half} ${half})`}>
               {(isSel || isWireStart) && (
                 <>
                   <rect x={-6} y={-6} width={itemSize+12} height={itemSize+12} rx={8}
@@ -1700,6 +1732,7 @@ function DrawingArea({
                           fill="#fbbf24" stroke="#fff" strokeWidth={hLineW}/>
                 </g>
               )}
+            </g>
             </g>
           );
         })}
@@ -3922,8 +3955,8 @@ function DrawingAreaStatic({ DRAW, bgImage, placed, wires, annotations, colourMo
           return (
             <line key={w.id}
               x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-              stroke={colourMode === "mono" ? "#0a0a0a" : "#dc2626"}
-              strokeWidth={1.2} strokeDasharray="6 4" strokeLinecap="round"/>
+              stroke={WIRE.colour(colourMode)}
+              strokeWidth={WIRE.width} strokeDasharray={WIRE.dash} strokeLinecap="butt"/>
           );
         })}
         {annotations.map(a => {
