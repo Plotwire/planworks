@@ -1666,9 +1666,9 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   // block's Scale is set to match. That one is project-wide: with more than
   // one floor it shows the last plan sent. onSaved: the sketch moves its link
   // on to the new frame and scale once the drawing is saved with them.
-  const applyFloorPlan = async ({ path, w, h, dataUrl, sketchId, sheetId, scale = null, frame = null, remap = null, legacyFrame = null, manual = false, onSaved = null }) => {
+  const applyFloorPlan = async ({ path, w, h, dataUrl, sketchId, sheetId, scale = null, frame = null, remap = null, legacyFrame = null, manual = false, stairs = null, onSaved = null }) => {
     const sid = sheetId || activeSheetIdRef.current;
-    const plan = { path, w, h, src: dataUrl, sketchId, frame, scale, oldFrame: remap && remap.oldFrame, legacyFrame };
+    const plan = { path, w, h, src: dataUrl, sketchId, frame, scale, oldFrame: remap && remap.oldFrame, legacyFrame, stairs };
     const withPlan = (prev) => {
       let moved = false, outside = 0;
       const sheets = prev.sheets.map(s => {
