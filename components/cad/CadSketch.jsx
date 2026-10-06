@@ -27,7 +27,7 @@ import { renderModelToPng } from "@/lib/cad/sketchToImage";
 import { SCALES, MARGIN_MM, PLAN_PX, scalePrefOf, scaleLabel, planSheetFrame, applyPlanToSheet, outsideNote, legacyFrameOf, sheetOriginFor, validOrigin, stairsField, planStairs } from "@/lib/cad/planScale";
 import { printStyle, labelSizeOf, LABEL_SIZE_NAMES, roomLabelLayout, wallWeightOf, WALL_WEIGHTS, WALL_WEIGHT_NAMES } from "@/lib/cad/printStyle";
 import {
-  flightsOf, stairDrawing, stairWeights, stairAt, stairSnap, stairFromDrag, stairWidth, stairLength,
+  flightsOf, stairDrawing, stairAt, stairSnap, stairFromDrag, stairWidth, stairLength,
   setStairWidth, setStairLength, setRisers, rotateStair, STAIR_W, STAIR_RISERS, RISERS_MIN, RISERS_MAX,
 } from "@/lib/cad/stairs";
 import { isTouchDevice } from "@/lib/touch";
@@ -177,16 +177,19 @@ function StairNode({ s }) {
 }
 
 // A flight of stairs or a stair void (lib/cad/stairs): the same drawing as
-// the plan image, at the plan's scale. preview: the one being dragged out.
+// the plan image, at the plan's scale (its label too). Lines in screen px,
+// as the sample's stairs (StairNode), so they stay visible zoomed out.
+// preview: the one being dragged out.
+const FLIGHT_PX = { box: 1, tread: 0.7, arrow: 1 };
 function FlightNode({ f, scale, selected = false, preview = false }) {
-  const d = stairDrawing(f, scale), wt = stairWeights(scale), ink = selected || preview ? "cadv-sel" : "cadv-ink";
+  const d = stairDrawing(f, scale), ink = selected || preview ? "cadv-sel" : "cadv-ink";
   return (
     <g opacity={preview ? 0.85 : 1}>
       {(selected || preview) && <rect x={f.x} y={f.y} width={f.w} height={f.h} className="cadv-sel-fill" stroke="none" />}
       {d.lines.map((l, i) => (
-        <line key={i} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} className={ink} strokeWidth={wt[l.wt]} strokeLinecap="square" opacity={l.op} />
+        <line key={i} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} className={ink} strokeWidth={FLIGHT_PX[l.wt]} vectorEffect="non-scaling-stroke" opacity={l.op} />
       ))}
-      {d.head && <path d={`M${d.head[0][0]} ${d.head[0][1]} L${d.head[1][0]} ${d.head[1][1]} L${d.head[2][0]} ${d.head[2][1]}`} fill="none" className={ink} strokeWidth={wt.arrow} />}
+      {d.head && <path d={`M${d.head[0][0]} ${d.head[0][1]} L${d.head[1][0]} ${d.head[1][1]} L${d.head[2][0]} ${d.head[2][1]}`} fill="none" className={ink} strokeWidth={FLIGHT_PX.arrow} vectorEffect="non-scaling-stroke" />}
       {d.label && (
         <text x={d.label.x} y={d.label.y} className="cadv-note" fontSize={d.label.fs} textAnchor="middle"
           transform={`rotate(${d.label.angle} ${d.label.x} ${d.label.y})`}>{d.label.text}</text>
