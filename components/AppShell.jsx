@@ -9,7 +9,8 @@ import BusinessInfo from "@/components/BusinessInfo";
 import { hasCompanyProfile, getCompanyProfile } from "@/lib/companyProfile";
 import { listCompanyLogos } from "@/lib/companyLogos";
 import { supabase, isConfigured } from "@/lib/supabase";
-import { getSettings, saveSettings } from "@/lib/db";
+import { getSettings, saveSettings, patchSettings } from "@/lib/db";
+import { settingsFromPicks } from "@/lib/symbolPicks";
 import { clearSignedOutDeviceData } from "@/lib/deviceData";
 import { DEFAULT_TITLEBLOCK, normaliseTitleBlock, companyProfileToTitleBlock, companyLogoFrom, mergeTitleBlocks } from "@/lib/titleBlock";
 import { useSubscription } from "@/lib/useSubscription";
@@ -132,6 +133,7 @@ function AppGates({ children }) {
   const [companyLogo, setCompanyLogo] = useState(null); // company logo data-URI (BOQ documents)
   const [boqTemplate, setBoqTemplate] = useState(null); // null = use built-in default
   const [boqPrefs, setBoqPrefs] = useState(null);       // { vatOn } for new BOQs; null = defaults
+  const [symbolLibrary, setSymbolLibrary] = useState(null); // saved Symbol Library ticks ({ picks }); null = not loaded or never saved
   const settingsRef = useRef({}); // latest full settings blob, so saves merge
 
   // --- Billing gate state ---
@@ -310,7 +312,7 @@ function AppGates({ children }) {
 
   // Load the account's saved settings (title block + BOQ preset) once signed in.
   useEffect(() => {
-    if (!session) { setTitleBlock(null); setBoqTemplate(null); setBoqPrefs(null); return; }
+    if (!session) { setTitleBlock(null); setBoqTemplate(null); setBoqPrefs(null); setSymbolLibrary(null); return; }
     let active = true;
     getSettings().then(s => {
       if (!active) return;
@@ -318,6 +320,7 @@ function AppGates({ children }) {
       setTitleBlock(s?.titleBlock ? normaliseTitleBlock(s.titleBlock) : DEFAULT_TITLEBLOCK);
       setBoqTemplate(s?.boqTemplate || null);
       setBoqPrefs(s?.boqPrefs || null);
+      setSymbolLibrary(s?.symbolLibrary || null);
     });
     return () => { active = false; };
   }, [session]);
@@ -383,6 +386,17 @@ function AppGates({ children }) {
     settingsRef.current = { ...settingsRef.current, boqPrefs: next };
     setBoqPrefs(next);
     try { await saveSettings(settingsRef.current); } catch (e) { console.warn("BOQ preference save failed:", e?.message); }
+  }, []);
+
+  // The account's Symbol Library ticks: which symbols the editor's picker
+  // offers. Shown at once; saved with patchSettings, which reads the stored
+  // settings first, so it can never overwrite ones this tab didn't load.
+  // Rejects if the save fails: the library page says so and offers a retry.
+  const saveSymbolPicks = useCallback(async (picks) => {
+    const stored = settingsFromPicks(picks);
+    setSymbolLibrary(stored);
+    await patchSettings({ symbolLibrary: stored });
+    settingsRef.current = { ...settingsRef.current, symbolLibrary: stored };
   }, []);
 
   if (isPublic) {
@@ -475,6 +489,9 @@ function AppGates({ children }) {
       // or scheme logo it does not cover is carried through.
       titleBlock: mergeTitleBlocks(companyBlock, titleBlock) || DEFAULT_TITLEBLOCK, saveTitleBlock, refreshCompany,
       boqTemplate, boqPrefs, saveBoqTemplate, saveBoqPrefs,
+      // Symbol Library: the saved ticks, as stored. picksFromSettings()
+      // (lib/symbolLibrary.js) turns them into the ids the picker offers.
+      symbolLibrary, saveSymbolPicks,
       // Business information, for document headers: the company logo alone and
       // the profile's detail lines (name first).
       companyBrand: { logo: companyLogo, details: companyBlock?.details || [] },

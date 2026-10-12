@@ -2,14 +2,20 @@
  * SYMBOL LIBRARY — UK Architectural Plan Style
  * Drawn in-house to common UK residential electrical-plan conventions.
  *
- * Two layers:
- *   1. SYMBOLS — visual definitions, grouped by category
+ * Layers:
+ *   1. SYMBOLS — the original visual definitions, grouped by colour category
  *   2. SYMBOL_META — legend descriptions + mounting heights (AFL)
+ *   3. CATALOGUE — the master list: every symbol (these, plus the newer ones
+ *      in lib/symbolDrafts/) with its legend code, library category and
+ *      materials group. findSymbol() looks up the WHOLE catalogue, so a
+ *      symbol on a drawing always shows, prints and counts, whatever the
+ *      account has ticked for its picker (lib/symbolLibrary.js).
  * ========================================================================= */
 
 "use client";
 
 import React from "react";
+import { DRAFT_SYMBOLS, APPROVED } from "./symbolDrafts";
 
 const STROKE = 1.5;
 const FEEDER = 1.0;
@@ -23,6 +29,8 @@ export const CATEGORY_COLOURS = {
   fixtures:  { primary: "#6d28d9", soft: "#c4b5fd", label: "Violet" },
   data:      { primary: "#0e7490", soft: "#67e8f9", label: "Cyan"   },
   heating:   { primary: "#0f172a", soft: "#94a3b8", label: "Slate"  },
+  // Newer symbols only (care / nurse call); no original symbol uses it.
+  care:      { primary: "#be185d", soft: "#f9a8d4", label: "Rose"   },
 };
 
 // Small "H" mark used to differentiate high-level variants visually
@@ -698,6 +706,142 @@ export const SYMBOL_META = {
 };
 
 /* ============================================================================
+ * CATALOGUE — the master list behind the Symbol Library.
+ * ========================================================================= */
+
+// The library's categories, in the order the library page shows them.
+// colour: the CATEGORY_COLOURS entry a newer symbol in it draws in (the
+// original symbols keep the colour they have always had).
+export const LIBRARY_CATEGORIES = [
+  { key: "power",        label: "Sockets & power",       colour: "sockets"   },
+  { key: "lighting",     label: "Lighting",              colour: "lighting"  },
+  { key: "switching",    label: "Switching & controls",  colour: "switches"  },
+  { key: "emergency",    label: "Emergency lighting",    colour: "lighting"  },
+  { key: "external",     label: "External lighting",     colour: "lighting"  },
+  { key: "fire",         label: "Fire alarm",            colour: "detectors" },
+  { key: "data",         label: "Data & comms",          colour: "data"      },
+  { key: "security",     label: "Security & access",     colour: "security"  },
+  { key: "hvac",         label: "Heating & ventilation", colour: "heating"   },
+  { key: "ev",           label: "EV & renewables",       colour: "fixtures"  },
+  { key: "distribution", label: "Distribution",          colour: "fixtures"  },
+  { key: "care",         label: "Care/nurse call",       colour: "care"      },
+];
+
+// How a symbol's items are bought: the groups a materials list or order would
+// use. Stored on every symbol; the BOQ's Second Fix lines still come from
+// SECONDFIX_SYMBOLS (lib/boqTemplate.js), unchanged.
+export const MATERIALS_GROUPS = [
+  "Wiring accessories",
+  "Commercial & industrial power",
+  "Luminaires",
+  "Emergency luminaires & signs",
+  "External luminaires",
+  "Lighting controls",
+  "Fire detection & alarm",
+  "Data & AV",
+  "Security & access",
+  "Heating & controls",
+  "Ventilation & air conditioning",
+  "EV & renewables",
+  "Distribution & metering",
+  "Earthing & protection",
+  "Nurse call & care",
+  "Services (non-electrical)",
+];
+
+// The original symbols' place in the library: [legend code, category, materials group].
+// Their ids, drawings, colours and descriptions are unchanged.
+const ORIGINAL_INFO = {
+  sock_sso_ll:        ["SSO-LL",     "power",        "Wiring accessories"],
+  sock_dso_ll:        ["DSO-LL",     "power",        "Wiring accessories"],
+  sock_dso_usb_ll:    ["DSO-USB-LL", "power",        "Wiring accessories"],
+  sock_sso_hl:        ["SSO-HL",     "power",        "Wiring accessories"],
+  sock_dso_hl:        ["DSO-HL",     "power",        "Wiring accessories"],
+  sock_dso_usb_hl:    ["DSO-USB-HL", "power",        "Wiring accessories"],
+  sock_2a:            ["SO-2A",      "power",        "Wiring accessories"],
+  sock_cooker:        ["CKR",        "power",        "Wiring accessories"],
+  sock_shaver:        ["SHV",        "power",        "Wiring accessories"],
+  sock_tv:            ["TV",         "data",         "Data & AV"],
+  sock_fcu:           ["FCU-S",      "power",        "Wiring accessories"],
+  spur_unsw:          ["FCU-U",      "power",        "Wiring accessories"],
+  sw_light:           ["SW-1G",      "switching",    "Wiring accessories"],
+  sw_2g:              ["SW-2G",      "switching",    "Wiring accessories"],
+  sw_3g:              ["SW-3G",      "switching",    "Wiring accessories"],
+  sw_4g:              ["SW-4G",      "switching",    "Wiring accessories"],
+  sw_grid:            ["GRID",       "switching",    "Wiring accessories"],
+  sw_2way:            ["SW-2W",      "switching",    "Wiring accessories"],
+  sw_intermediate:    ["SW-INT",     "switching",    "Wiring accessories"],
+  sw_dimmer:          ["DIM",        "switching",    "Wiring accessories"],
+  sw_pull:            ["PCS",        "switching",    "Wiring accessories"],
+  sw_pir_light:       ["PIR-L",      "switching",    "Lighting controls"],
+  sw_keycard:         ["KCS",        "switching",    "Lighting controls"],
+  lt_pendant:         ["PL",         "lighting",     "Luminaires"],
+  lt_downlight:       ["DL",         "lighting",     "Luminaires"],
+  lt_downlight_ip:    ["DL-IP",      "lighting",     "Luminaires"],
+  lt_2d:              ["L2D",        "lighting",     "Luminaires"],
+  lt_batten:          ["BTH",        "lighting",     "Luminaires"],
+  lt_wall:            ["WL",         "lighting",     "Luminaires"],
+  lt_strip:           ["LED",        "lighting",     "Luminaires"],
+  lt_emergency:       ["EM",         "emergency",    "Emergency luminaires & signs"],
+  lt_external:        ["EXT",        "external",     "External luminaires"],
+  lt_external_updown: ["EXT-UD",     "external",     "External luminaires"],
+  det_smoke:          ["SD",         "fire",         "Fire detection & alarm"],
+  det_heat:           ["HD",         "fire",         "Fire detection & alarm"],
+  det_co:             ["COD",        "fire",         "Fire detection & alarm"],
+  det_combined:       ["SHC",        "fire",         "Fire detection & alarm"],
+  det_thermostat:     ["TS",         "hvac",         "Heating & controls"],
+  sec_pir:            ["PIR",        "security",     "Security & access"],
+  sec_keypad:         ["KP",         "security",     "Security & access"],
+  sec_hub:            ["AH",         "security",     "Security & access"],
+  sec_bell:           ["SB",         "security",     "Security & access"],
+  sec_door:           ["DC",         "security",     "Security & access"],
+  sec_cctv:           ["CCTV",       "security",     "Security & access"],
+  fx_extractor:       ["EF",         "hvac",         "Ventilation & air conditioning"],
+  fx_extractor_wall:  ["EF-W",       "hvac",         "Ventilation & air conditioning"],
+  fx_ext_tap:         ["TAP",        "hvac",         "Services (non-electrical)"],
+  fx_doorbell:        ["BP",         "security",     "Security & access"],
+  fx_motor:           ["MTR",        "power",        "Wiring accessories"],
+  fx_consumer:        ["CU",         "distribution", "Distribution & metering"],
+  fx_meter:           ["MB",         "distribution", "Distribution & metering"],
+  fx_isolator:        ["ISO",        "power",        "Wiring accessories"],
+  iso_dp:             ["DP",         "power",        "Wiring accessories"],
+  iso_rotary:         ["RI",         "power",        "Wiring accessories"],
+  iso_cooker:         ["CCU",        "power",        "Wiring accessories"],
+  ev_charger:         ["EV",         "ev",           "EV & renewables"],
+  fx_domed:           ["DCF",        "lighting",     "Luminaires"],
+  mk_csp:             ["CSP",        "distribution", "Distribution & metering"],
+  data_point:         ["D",          "data",         "Data & AV"],
+  data_internet:      ["ICP",        "data",         "Data & AV"],
+  data_ont:           ["ONT",        "data",         "Data & AV"],
+  ht_towel:           ["TR",         "hvac",         "Heating & controls"],
+  ht_radiator:        ["RAD",        "hvac",         "Heating & controls"],
+  ht_uf:              ["UFH",        "hvac",         "Heating & controls"],
+  ht_wiring_centre:   ["HWC",        "hvac",         "Heating & controls"],
+};
+
+const CATEGORY_COLOUR = Object.fromEntries(LIBRARY_CATEGORIES.map((c) => [c.key, c.colour]));
+
+// Every symbol: { id, name, code, category, materials, colour, svg, forceColor?, draft }.
+// colour is the CATEGORY_COLOURS key it draws in. draft: drawn but not yet
+// approved -- hidden from the library page and the picker (lib/symbolLibrary.js),
+// but still found by findSymbol so nothing that names one can break.
+export const CATALOGUE = [
+  ...Object.entries(SYMBOLS).flatMap(([colour, group]) => group.items.map((s) => {
+    // (The symbol check script flags any original missing from ORIGINAL_INFO.)
+    const [code, category, materials] = ORIGINAL_INFO[s.id] || [s.id.toUpperCase(), "power", "Wiring accessories"];
+    return { ...s, code, category, materials, colour, draft: false };
+  })),
+  ...DRAFT_SYMBOLS.map((s) => ({ ...s, colour: CATEGORY_COLOUR[s.category], draft: !APPROVED.has(s.id) })),
+];
+
+// The newer symbols' legend text, alongside the originals' (which are untouched).
+for (const s of DRAFT_SYMBOLS) {
+  if (!SYMBOL_META[s.id]) SYMBOL_META[s.id] = { description: s.description || s.name, height: s.height || "Per location" };
+}
+
+const BY_ID = new Map(CATALOGUE.map((s) => [s.id, s]));
+
+/* ============================================================================
  * Helpers
  * ========================================================================= */
 
@@ -720,21 +864,16 @@ function resolveId(id) {
   return ID_ALIASES[id] || id;
 }
 
+// Any symbol in the catalogue -- ticked or not, draft or not.
 export function findSymbol(id) {
-  id = resolveId(id);
-  for (const cat of Object.values(SYMBOLS)) {
-    const s = cat.items.find(i => i.id === id);
-    if (s) return s;
-  }
-  return null;
+  return BY_ID.get(resolveId(id)) || null;
 }
 
+// The colour category a symbol draws in (a CATEGORY_COLOURS key). For the
+// original symbols this is the SYMBOLS group they have always been in.
 export function findCategory(id) {
-  id = resolveId(id);
-  for (const [key, cat] of Object.entries(SYMBOLS)) {
-    if (cat.items.find(i => i.id === id)) return key;
-  }
-  return null;
+  const s = findSymbol(id);
+  return s ? s.colour : null;
 }
 
 export function resolveColours(symbolId, mode) {

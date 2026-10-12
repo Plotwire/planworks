@@ -12,8 +12,9 @@ import {
 import {
   SYMBOLS, SYMBOL_META, CATEGORY_COLOURS, VIEWBOX,
   findSymbol, findCategory, resolveColours,
-  getPaletteSymbols, getPaletteGroups,
 } from "@/lib/symbols.jsx";
+import { pickerGroups, librarySymbols, picksFromSettings } from "@/lib/symbolLibrary";
+import SymbolLibrary from "@/components/SymbolLibrary";
 import { findFurniture, FURNITURE, FURNITURE_VIEWBOX, FURNITURE_COLOUR } from "@/lib/furniture.jsx";
 import { drawSymbol } from "@/lib/symbolPdf";
 import { buildInitialBoq, addMissingLabour, reconcileBoq, hasTypedDrawingQtys, isDrawingLinked, newBoqItem, templateForEditing, templateForSaving, newTemplateItem } from "@/lib/boqTemplate";
@@ -471,13 +472,30 @@ export function SheetTabs({ sheets, activeId, onSwitch, onAdd, onRename, onDelet
 export function Palette({ onPalettePointerDown, onFurniturePointerDown, symbolScale, setSymbolScale, colourMode }) {
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState("electrical"); // "electrical" | "floor"
-  const groups = useMemo(() => getPaletteGroups(), []);
-  const all = useMemo(() => getPaletteSymbols(), []);
+  // The symbols this account ticked in its Symbol Library (by default the
+  // Domestic starter: the picker exactly as it always was). Ticks only change
+  // what is offered here; placed symbols always draw (findSymbol).
+  const { symbolLibrary } = useApp();
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const groups = useMemo(() => pickerGroups(picksFromSettings(symbolLibrary)), [symbolLibrary]);
+  const all = useMemo(() => groups.flatMap((g) => g.items), [groups]);
   const q = query.trim().toLowerCase();
   const matches = ({ sym, meta }) =>
     (meta?.description || sym.name).toLowerCase().includes(q) ||
     sym.name.toLowerCase().includes(q);
   const searchResults = q ? all.filter(matches) : null;
+  // Matching symbols in the library that aren't ticked for this picker.
+  const elsewhere = useMemo(() => {
+    if (!q) return 0;
+    const here = new Set(all.map((i) => i.sym.id));
+    return librarySymbols().filter((sym) => !here.has(sym.id) && matches({ sym, meta: SYMBOL_META[sym.id] })).length;
+  }, [q, all]); // eslint-disable-line react-hooks/exhaustive-deps
+  const moreLink = (
+    <button type="button" onClick={() => setLibraryOpen(true)}
+      className="w-full mt-1 mb-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-[12px] font-semibold text-[#22808F] dark:text-[#5fd0e0] border border-dashed border-[#2C97A8]/60 hover:bg-[#2C97A8]/10 transition-colors">
+      <Plus size={13}/> More symbols…
+    </button>
+  );
 
   const Tile = ({ sym, meta }) => {
     const cols = resolveColours(sym.id, colourMode || "colour");
@@ -567,22 +585,34 @@ export function Palette({ onPalettePointerDown, onFurniturePointerDown, symbolSc
             })}
           </>
         ) : searchResults ? (
-          searchResults.length ? (
-            <div className="grid grid-cols-2 gap-2.5">
-              {searchResults.map(({ sym, meta }) => <Tile key={sym.id} sym={sym} meta={meta} />)}
-            </div>
-          ) : (
-            <div className="text-center text-[12px] text-slate-500 py-8">No symbols match “{query}”.</div>
-          )
-        ) : (
-          groups.map((g) => (
-            <section key={g.label} className="mb-4 last:mb-1">
-              <div className={`px-0.5 mb-2 ${SECTION_LABEL}`}>{g.label}</div>
+          <>
+            {searchResults.length ? (
               <div className="grid grid-cols-2 gap-2.5">
-                {g.items.map(({ sym, meta }) => <Tile key={sym.id} sym={sym} meta={meta} />)}
+                {searchResults.map(({ sym, meta }) => <Tile key={sym.id} sym={sym} meta={meta} />)}
               </div>
-            </section>
-          ))
+            ) : (
+              <div className="text-center text-[12px] text-slate-500 py-8">No symbols match “{query}”.</div>
+            )}
+            {elsewhere > 0 && (
+              <div className="mt-3">
+                <div className="text-center text-[11px] text-slate-500 mb-1">{elsewhere} more in your symbol library</div>
+                {moreLink}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            {groups.map((g) => (
+              <section key={g.label} className="mb-4">
+                <div className={`px-0.5 mb-2 ${SECTION_LABEL}`}>{g.label}</div>
+                <div className="grid grid-cols-2 gap-2.5">
+                  {g.items.map(({ sym, meta }) => <Tile key={sym.id} sym={sym} meta={meta} />)}
+                </div>
+              </section>
+            ))}
+            {!groups.length && <div className="text-center text-[12px] text-slate-500 py-6">No symbols ticked for this picker.</div>}
+            {moreLink}
+          </>
         )}
       </div>
 
@@ -600,6 +630,10 @@ export function Palette({ onPalettePointerDown, onFurniturePointerDown, symbolSc
       <div className="border-t border-slate-200 dark:border-[#263441] px-4 py-3 bg-[#E3EAF3] dark:bg-[#141C24] text-[9px] text-slate-500 leading-relaxed">
         Select a piece on the plan to move, rotate or delete it.
       </div>
+      )}
+      {libraryOpen && typeof document !== "undefined" && createPortal(
+        <SymbolLibrary modal onClose={() => setLibraryOpen(false)}/>,
+        document.body,
       )}
     </SidePanel>
   );
