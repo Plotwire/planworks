@@ -51,6 +51,15 @@ function covers(j, w, d) {
   return j.w === w && j.d === d;
 }
 
+// Which day of a multi-day job board cell (w, d) is: { i, n, date } for
+// "Day i of n", or null for a one-day job.
+function segAt(j, w, d) {
+  if (!j.date || !(j.end && j.end > j.date)) return null;
+  const cells = jobCells(j);
+  const at = cells.findIndex((p) => p.w === w && p.d === d);
+  return at < 0 ? null : { i: at + 1, n: cells.length, date: cells[at].date };
+}
+
 // Double-booked in one person's day: without job lengths, two jobs clash when
 // they start at the same time (or neither has a time), or when one of them
 // takes the whole day (a holiday, or a job running over several days). A
@@ -723,16 +732,13 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
     let k = 0;
     list.forEach((j) => {
       if (j.id !== dragId) { if (isOver && v2 && over.index === k) out.push(line); k++; }
-      const cells = j.end && j.end > j.date ? jobCells(j) : null;
-      const at = cells ? cells.findIndex((p) => p.w === w && p.d === di) : 0;
-      const seg = cells ? { i: at + 1, n: cells.length } : null;
-      const segDate = cells ? cells[at].date : j.date;
-      const lastDay = !cells || at === cells.length - 1;
+      const seg = segAt(j, w, di);
+      const lastDay = !seg || seg.i === seg.n;
       out.push(
         <div key={j.id} data-card={j.id}>
           <JobCard j={j} cdef={CDEF} P={P} dark={dark} interactive={!sharedView} seg={seg} clash={clashes.has(j.id)}
             state={j.id === dragId ? "source" : drag.lifted === j.id ? "lifted" : null}
-            handlers={cardHandlers(j, cells ? segDate : null)}
+            handlers={cardHandlers(j, seg ? seg.date : null)}
             stretch={canEdit && v2 && lastDay && !dayView ? (e) => resize.onHandleDown(e, j) : null} />
         </div>
       );
@@ -1044,9 +1050,10 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
                   <span style={{ fontFamily: SEMI, fontWeight: 700, fontSize: 15, color: P.ink }}>{c.name}</span>
                   {!readOnly && <button onClick={() => openNew(c.id, cellDate(week, mDay))} style={{ marginLeft: "auto", fontFamily: COND, fontWeight: 600, fontSize: 12, padding: "4px 9px", borderRadius: 6, cursor: "pointer", background: P.surfaceAlt, color: P.accent2, border: "1px solid " + P.line }}>+ add</button>}
                 </div>
-                {list.length ? list.map((j) => (
-                  <JobCard key={j.id} j={j} cdef={CDEF} P={P} dark={dark} interactive={!sharedView} state={drag.lifted === j.id ? "lifted" : null} handlers={cardHandlers(j)} />
-                )) : (
+                {list.length ? list.map((j) => {
+                  const seg = segAt(j, week, mDay);
+                  return <JobCard key={j.id} j={j} cdef={CDEF} P={P} dark={dark} interactive={!sharedView} seg={seg} state={drag.lifted === j.id ? "lifted" : null} handlers={cardHandlers(j, seg ? seg.date : null)} />;
+                }) : (
                   <div style={{ fontSize: 12.5, color: P.muted, fontStyle: "italic", padding: "6px 2px" }}>Nothing booked</div>
                 )}
               </div>

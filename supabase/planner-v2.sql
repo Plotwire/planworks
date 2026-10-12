@@ -61,7 +61,8 @@ select
 -- extra days only if planner_shared() hands back whole rows. This shows whether
 -- it does: share_returns_whole_rows true means multi-day jobs show on the link
 -- too; false means the link shows each multi-day job on its first day only
--- (nothing breaks either way, and the function can be updated later).
+-- (nothing breaks either way). If false, run supabase/planner-share-v2.sql,
+-- which adds planner_shared_v2() so the link shows every day.
 -- ----------------------------------------------------------------------------
 select position('end_date' in pg_get_functiondef(p.oid)) > 0
        or pg_get_functiondef(p.oid) ~* '(to_json|json_agg|jsonb_agg)\s*\(\s*j\s*\)'
