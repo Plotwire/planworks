@@ -75,10 +75,11 @@ export function JobCard({ j, cdef, P, dark, state = null, clash = false, seg = n
           <span style={{ width: 4, height: 16, borderLeft: "1.5px solid currentColor", borderRight: "1.5px solid currentColor" }} />
         </span>
       )}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 6 }}>
+      {/* Wraps in a narrow column (the weekend): the flags drop below the time. */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: "3px 6px" }}>
         <span style={{ fontFamily: COND, fontWeight: 700, fontSize: 14, color: imp ? RED : P.accent2 }}>{j.t || "—"}</span>
         <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap", justifyContent: "flex-end" }}>
-          {warn && <span title="This person has another job at the same time that day" style={{ whiteSpace: "nowrap", font: "700 9px/1 " + FONTS, letterSpacing: ".06em", textTransform: "uppercase", padding: "3px 5px", borderRadius: 999, background: P.amber, color: "#1A2530" }}>{"⚠ Double-booked"}</span>}
+          {warn && <span title="This person has another job at the same time that day" style={{ font: "700 9px/1.15 " + FONTS, letterSpacing: ".06em", textTransform: "uppercase", padding: "3px 5px", borderRadius: 999, background: P.amber, color: "#1A2530" }}>{"⚠ Double-booked"}</span>}
           {imp && <span style={{ font: "700 9px/1 " + FONTS, letterSpacing: ".08em", textTransform: "uppercase", padding: "3px 5px", borderRadius: 3, background: RED, color: "#fff" }}>{"Important"}</span>}
           <Pill k={j.st} dark={dark} />
         </div>

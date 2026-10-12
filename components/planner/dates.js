@@ -27,6 +27,17 @@ export function dayLabel(iso) {
   return DAY3[d.getDay()] + " " + d.getDate() + " " + MON[d.getMonth()];
 }
 
+// Weekday of a date: 0 = Monday ... 6 = Sunday.
+export const weekday = (iso) => (parseISO(iso).getDay() + 6) % 7;
+
+// Which days the planner shows (the account's "days" setting), as weekday
+// numbers. A day that isn't picked still shows in any week where a job starts
+// or ends on it, so nothing is ever hidden.
+export const DAY_SETS = { "mon-fri": [0, 1, 2, 3, 4], "mon-sat": [0, 1, 2, 3, 4, 5], "mon-sun": [0, 1, 2, 3, 4, 5, 6] };
+export const DEFAULT_DAYS = "mon-sun";
+export const shownDays = (setting) => new Set(DAY_SETS[setting] || DAY_SETS[DEFAULT_DAYS]);
+const ALL_DAYS = new Set(DAY_SETS["mon-sun"]);
+
 // The date of a board column: week w (0 = this week), day d (0 = Monday).
 export function cellDate(w, d) {
   const m = currentMonday();
@@ -34,27 +45,39 @@ export function cellDate(w, d) {
   return toISODate(m);
 }
 
-// Every day the board shows: four weeks of Monday to Saturday.
-export function windowDays() {
+// The days of the four weeks the board covers (days: which weekdays; all seven by default).
+export function windowDays(days = ALL_DAYS) {
   const out = [];
-  for (let w = 0; w < 4; w++) for (let d = 0; d < 6; d++) out.push({ w, d, date: cellDate(w, d) });
+  for (let w = 0; w < 4; w++) for (let d = 0; d < 7; d++) if (days.has(d)) out.push({ w, d, date: cellDate(w, d) });
   return out;
 }
 
-// The board cells a job covers: [{ w, d }], one per day it runs (a Sunday
-// shows on the Saturday, so it isn't listed twice). A one-day job has one.
-export function jobCells(job) {
+// The days a job is on the board: [{ w, d, date }]. Its first and last day,
+// and the shown days in between, so a Friday-to-Monday job is four days with
+// weekends shown and two (Friday, Monday) on a Monday-to-Friday planner.
+export function jobCells(job, days = ALL_DAYS) {
   if (!job.date) return [];
   const last = job.end && job.end > job.date ? job.end : job.date;
   const out = [];
-  const seen = new Set();
-  for (let iso = job.date, guard = 0; iso <= last && guard < 120; iso = addDays(iso, 1), guard++) {
-    const p = boardPos(iso);
-    const k = p.w + ":" + p.d;
-    if (!seen.has(k)) { seen.add(k); out.push({ ...p, date: iso }); }
+  for (let iso = job.date, guard = 0; iso <= last && guard < 400; iso = addDays(iso, 1), guard++) {
+    if (iso === job.date || iso === last || days.has(weekday(iso))) out.push({ ...boardPos(iso), date: iso });
   }
   return out;
 }
+
+// n shown days on from iso (back, if n is negative), skipping days not shown.
+export function addWorkDays(iso, n, days = ALL_DAYS) {
+  const step = n < 0 ? -1 : 1;
+  let left = Math.abs(n), d = iso;
+  for (let guard = 0; left > 0 && guard < 400; guard++) { d = addDays(d, step); if (days.has(weekday(d))) left--; }
+  return d;
+}
+
+// How many days a job is on the board (1 for a one-day or unscheduled job).
+export const jobLength = (job, days) => (job.date ? jobCells(job, days).length : 1);
+
+// The last day of a job that starts on `start` and runs `len` shown days (null for one day).
+export const endFor = (start, len, days) => (len > 1 ? addWorkDays(start, len - 1, days) : null);
 
 // Start time "08:30" -> minutes, for ordering a day; no time sorts last.
 export function timeKey(t) {

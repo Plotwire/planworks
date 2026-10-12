@@ -123,13 +123,14 @@ export function JobMenu({ x, y, job, P, roster, title, items, onPick, onClose })
 }
 
 // ---- Move to date -------------------------------------------------------------
-export function MoveDialog({ P, dark, job, who, onPick, onClose }) {
-  const days = windowDays();
+// days: the weekdays the planner shows (0 = Monday).
+export function MoveDialog({ P, dark, job, who, days: shownList = [0, 1, 2, 3, 4, 5, 6], onPick, onClose }) {
+  const days = windowDays(new Set(shownList));
   const today = todayISO();
-  const names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].filter((_, i) => shownList.includes(i));
   return (
     <Modal P={P} title="Move to date" sub={(job.site || "This job") + (who ? " · " + who : "") + " · " + (job.date ? "now " + dayLabel(job.date) : "unscheduled")} width={470} onClose={onClose}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 6 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(" + names.length + ", 1fr)", gap: 6 }}>
         {names.map((n) => <div key={n} style={{ textAlign: "center", fontFamily: COND, fontWeight: 700, fontSize: 12.5, letterSpacing: ".05em", textTransform: "uppercase", color: P.muted }}>{n}</div>)}
         {days.map(({ date }) => {
           const d = parseISO(date);

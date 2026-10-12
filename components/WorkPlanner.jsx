@@ -11,12 +11,12 @@ import {
 import { useApp } from "@/components/AppShell";
 import { useTryPrompt, TryPrompt, LOCKED } from "@/components/TryMode";
 import { FONTS, COND, SEMI, palette, Pill, JobCard, lbl } from "@/components/planner/ui";
-import { addDays, diffDays, dayLabel, parseISO, cellDate, windowDays, jobCells, sortDay, timeKey, todayISO } from "@/components/planner/dates";
+import { addDays, dayLabel, cellDate, windowDays, jobCells, sortDay, timeKey, todayISO, weekday, DAY_SETS, DEFAULT_DAYS, shownDays, addWorkDays, jobLength, endFor } from "@/components/planner/dates";
 import { useJobDrag } from "@/components/planner/useJobDrag";
 import { useJobResize } from "@/components/planner/useJobResize";
 import { JobMenu, MoveDialog, ConfirmDialog, NoticeBar, ViewOnlyPrompt, btn } from "@/components/planner/PlannerOverlays";
 
-const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const TYPES = ["Rewire", "EICR", "Fault", "Consumer Unit", "EV Charger", "Lighting", "Heating", "Solar / Battery", "Inspection", "Snagging", "Callout", "Holiday", "Other"];
 const OP_COLORS = ["#2C97A8", "#2f6fed", "#c9721a", "#7c4dd6", "#d23f6a", "#2ca05a", "#b8455f", "#4a6da7", "#c98f1a", "#0e8a8a", "#8a5cd6", "#c0392b"];
@@ -44,18 +44,19 @@ function weekDates() {
 // Board position (w, d) from the job's date; the date is the truth.
 const withPos = (j) => ({ ...j, ...boardPos(j.date) });
 
-// Does a job show in board cell (w, d)? Multi-day jobs show on every day they run.
-function covers(j, w, d) {
+// Does a job show in board cell (w, d)? Multi-day jobs show on every day they
+// run (days: the weekdays the planner shows; see jobCells).
+function covers(j, w, d, days) {
   if (!j.date) return false;
-  if (j.end && j.end > j.date) return jobCells(j).some((p) => p.w === w && p.d === d);
+  if (j.end && j.end > j.date) return jobCells(j, days).some((p) => p.w === w && p.d === d);
   return j.w === w && j.d === d;
 }
 
 // Which day of a multi-day job board cell (w, d) is: { i, n, date } for
 // "Day i of n", or null for a one-day job.
-function segAt(j, w, d) {
+function segAt(j, w, d, days) {
   if (!j.date || !(j.end && j.end > j.date)) return null;
-  const cells = jobCells(j);
+  const cells = jobCells(j, days);
   const at = cells.findIndex((p) => p.w === w && p.d === d);
   return at < 0 ? null : { i: at + 1, n: cells.length, date: cells[at].date };
 }
@@ -77,9 +78,6 @@ function clashIds(list) {
   }
   return ids;
 }
-
-// Calendar days from start to end, both counted.
-const spanDays = (start, end) => (end && end > start ? diffDays(start, end) + 1 : 1);
 
 // Remembered on this device only (view, tray open), never required.
 const remember = (k, v) => { try { localStorage.setItem("planworks:planner:" + k, v); } catch {} };
@@ -158,7 +156,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
   const [duplicating, setDuplicating] = useState(null);
   const [sharePanel, setSharePanel] = useState(null);
   const [notFound, setNotFound] = useState(false);
-  const [mDay, setMDay] = useState(() => { const d = (new Date().getDay() + 6) % 7; return d > 5 ? 0 : d; });
+  const [mDay, setMDay] = useState(() => (new Date().getDay() + 6) % 7);
   const [mWho, setMWho] = useState("all");
   const [menu, setMenu] = useState(null);           // { job, x, y }
   const [moving, setMoving] = useState(null);       // job for the move-to-date calendar
@@ -166,7 +164,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
   const [notice, setNotice] = useState(null);       // { kind, text, n }
   const [viewOnly, setViewOnly] = useState(false);  // the lapsed prompt
   const [view, setView] = useState(() => (recall("view", "week") === "day" ? "day" : "week"));
-  const [day, setDay] = useState(() => { const d = (new Date().getDay() + 6) % 7; return d > 5 ? 5 : d; });
+  const [day, setDay] = useState(() => (new Date().getDay() + 6) % 7);
   const [trayOpen, setTrayOpen] = useState(() => recall("tray", "") === "open");
   const [quickAdd, setQuickAdd] = useState(null);   // { c, date }: the quick-add box in that day
   const lastTap = useRef({ key: "", t: 0, kind: "mouse" }); // for double-tap on iPad
@@ -194,14 +192,14 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
             const s = res.settings || {};
             setJobs(res.jobs || []);
             setV2((res.jobs || []).some((j) => j.order != null));
-            setSettings({ company: s.company || "Work Planner", title: s.title || "Work Planner", contractors: (s.contractors && s.contractors.length) ? s.contractors : DEFAULT_CONTRACTORS });
+            setSettings({ company: s.company || "Work Planner", title: s.title || "Work Planner", days: s.days, contractors: (s.contractors && s.contractors.length) ? s.contractors : DEFAULT_CONTRACTORS });
           }
         } else {
           const [rows, s, hasV2] = await Promise.all([loadPlannerJobs(), loadPlannerSettings(), plannerSchemaV2()]);
           if (!alive) return;
           setJobs(rows || []);
           setV2(Boolean(hasV2));
-          if (s) setSettings({ company: s.company || "Your company", title: s.title || "Work Planner", contractors: (s.contractors && s.contractors.length) ? s.contractors : DEFAULT_CONTRACTORS });
+          if (s) setSettings({ company: s.company || "Your company", title: s.title || "Work Planner", days: s.days, contractors: (s.contractors && s.contractors.length) ? s.contractors : DEFAULT_CONTRACTORS });
         }
       } catch (e) { console.error(e); if (alive) { setJobs([]); if (sharedView) setNotFound(true); } }
       finally { if (alive) setLoading(false); }
@@ -290,13 +288,35 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
   const { today, monday0 } = weekDates();
   const weekStart = new Date(monday0); weekStart.setDate(monday0.getDate() + week * 7);
   const weekTitle = "W/C Mon " + weekStart.getDate() + " " + MON[weekStart.getMonth()] + " " + weekStart.getFullYear();
+  // All seven days of the week, by weekday (0 = Monday).
   const days = DAY_NAMES.map((nm, i) => {
     const dt = new Date(weekStart); dt.setDate(weekStart.getDate() + i);
-    return { name: nm, date: fmt(dt), iso: cellDate(week, i), narrow: i === 5, isToday: dt.getTime() === today.getTime() };
+    return { i, name: nm, date: fmt(dt), iso: cellDate(week, i), narrow: i >= 5, isToday: dt.getTime() === today.getTime() };
   });
 
+  // The weekdays the planner shows (settings: Mon-Fri, Mon-Sat or Mon-Sun).
+  const shown = shownDays(settings.days);
+  // The days that show in week w: those, plus any other day a job starts or
+  // ends on that week, so a job is never out of sight.
+  const colsFor = (w) => {
+    const set = new Set(shown);
+    jobs.forEach((j) => {
+      if (!j.date) return;
+      [j.date, j.end && j.end > j.date ? j.end : null].forEach((iso) => { if (!iso) return; const p = boardPos(iso); if (p.w === w) set.add(p.d); });
+    });
+    return [...set].sort((a, b) => a - b);
+  };
+  const cols = colsFor(week);
+  const colDays = cols.map((i) => days[i]);
+  // A day that isn't showing (after a settings change, say) moves to the next one that is.
+  const snapDay = (d) => (cols.includes(d) ? d : cols.find((x) => x > d) ?? cols[cols.length - 1]);
+  const curDay = snapDay(day);
+  const mCur = snapDay(mDay);
+  useEffect(() => { if (curDay !== day) setDay(curDay); }, [curDay, day]);
+  useEffect(() => { if (mCur !== mDay) setMDay(mCur); }, [mCur, mDay]);
+
   // A person's jobs in board cell (w, d), in the order they show.
-  const cellJobs = (c, w, d, list = jobs) => sortDay(list.filter((j) => j.c === c && covers(j, w, d)));
+  const cellJobs = (c, w, d, list = jobs) => sortDay(list.filter((j) => j.c === c && covers(j, w, d, shown)));
   const loose = jobs.filter((j) => !j.date);   // the Unscheduled tray (planner-v2.sql)
   const showTray = v2 && !sharedView;
 
@@ -312,19 +332,21 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
   const goToday = () => {
     const d = (new Date().getDay() + 6) % 7;
     setWeek(0);
-    setDay(d > 5 ? 5 : d);
+    setDay(d);
+    setMDay(d);
     setTimeout(() => {
       const el = document.querySelector("[data-today-col]");
       if (el && gridRef.current) gridRef.current.scrollLeft = Math.max(0, el.offsetLeft - 200);
     }, 30);
   };
-  // Day view: step a day at a time across the four weeks (Saturday -> Monday).
+  // Day view: step through the days that show, across the four weeks.
   const stepDay = (dir) => {
-    let w = week, d = day + dir;
-    if (d > 5) { d = 0; w += 1; }
-    if (d < 0) { d = 5; w -= 1; }
+    const at = cols.indexOf(curDay) + dir;
+    if (at >= 0 && at < cols.length) { setDay(cols[at]); return; }
+    const w = week + dir;
     if (w < 0 || w > 3) return;
-    setWeek(w); setDay(d);
+    const next = colsFor(w);
+    setWeek(w); setDay(dir > 0 ? next[0] : next[next.length - 1]);
   };
 
   // date null: a new unscheduled job. pre: values already typed (quick add's "More").
@@ -343,12 +365,12 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
   // A new start day keeps a multi-day job the same length; no date clears it.
   const setEditDate = (date) => setEditing((e) => ({
     ...e, date,
-    end: date && e.date && e.end && e.end > e.date ? addDays(e.end, diffDays(e.date, date)) : null,
+    end: date && e.date ? endFor(date, jobLength(e, shown), shown) : null,
   }));
-  // Last-day choices: the next three weeks (Sundays left out, they show on the Saturday).
+  // Last-day choices: the days that show, over the next three weeks.
   const endChoices = (e) => {
     const out = [];
-    for (let i = 1; i <= 21; i++) { const iso = addDays(e.date, i); if (parseISO(iso).getDay() !== 0) out.push(iso); }
+    for (let i = 1; i <= 21; i++) { const iso = addDays(e.date, i); if (shown.has(weekday(iso))) out.push(iso); }
     if (e.end && e.end > e.date && !out.includes(e.end)) out.push(e.end);
     return out;
   };
@@ -372,8 +394,9 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
   // Move a job to person c on date (index: its place in that day, from a drag).
   const moveJob = (job, { c, date, index = null }, label = null) => {
     const cur = jobs.find((j) => j.id === job.id) || job;
-    const shift = cur.date ? diffDays(cur.date, date) : 0;
-    const after = { ...cur, c, date, end: cur.end && cur.date ? addDays(cur.end, shift) : null };
+    // A multi-day job keeps its length in days on the board (on a Monday-to-
+    // Friday planner, that skips the weekend).
+    const after = { ...cur, c, date, end: cur.date ? endFor(date, jobLength(cur, shown), shown) : null };
     const samePlace = cur.c === c && cur.date === date;
     const changes = [];
     const pos = boardPos(date);
@@ -410,7 +433,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
     const cur = jobs.find((j) => j.id === job.id) || job;
     const after = { ...cleanJob(cur), end: end > cur.date ? end : null };
     if ((cur.end || null) === after.end) return;
-    const n = spanDays(cur.date, after.end);
+    const n = jobLength(after, shown);
     commit(n > 1 ? dayLabel(cur.date) + " – " + dayLabel(after.end) + " · " + n + " days" : "Back to one day · " + dayLabel(cur.date), [{ before: cur, after }]);
   };
 
@@ -462,7 +485,8 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
   // Friday, a three-day job then runs Wednesday to Friday.
   const dropStart = (job, date, extra) => {
     if (!job.date || !extra || !extra.seg) return date;
-    return addDays(date, -diffDays(job.date, extra.seg));
+    const k = jobCells(job, shown).findIndex((p) => p.date === extra.seg);
+    return k > 0 ? addWorkDays(date, -k, shown) : date;
   };
   // What's under the pointer: a week tab, or a person's day (with the place
   // in that day where the job would go).
@@ -529,13 +553,13 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
     if (!dragging) return "";
     if (!over) return showTray ? "Drop on a day, or on Unscheduled" : "Drop on a day";
     if (over.kind === "tab") return over.w === week ? "Week " + (over.w + 1) : "Hold to open week " + (over.w + 1);
-    if (over.kind === "daytab") return over.d === day ? DAY_NAMES[over.d] : "Hold to open " + DAY_NAMES[over.d];
+    if (over.kind === "daytab") return over.d === curDay ? DAY_NAMES[over.d] : "Hold to open " + DAY_NAMES[over.d];
     if (over.kind === "tray") return dragging.job.date ? "Move to Unscheduled" : "Unscheduled";
     const j = dragging.job;
     const start = dropStart(j, over.date, dragging.extra);
     if (over.c === j.c && start === j.date) return v2 ? "Move within the day" : "Same day";
-    const n = j.date ? spanDays(j.date, j.end) : 1;
-    const when = n > 1 ? dayLabel(start) + " – " + dayLabel(addDays(start, n - 1)) : dayLabel(start);
+    const n = jobLength(j, shown);
+    const when = n > 1 ? dayLabel(start) + " – " + dayLabel(endFor(start, n, shown)) : dayLabel(start);
     return (j.date ? "Move to " : "Book for ") + (over.c !== j.c || !j.date ? nameOf(over.c) + " · " : "") + when;
   })();
 
@@ -585,12 +609,12 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
   const dupCopies = (d) => {
     if (!d) return [];
     const b = d.base;
-    const span = b.end && b.date ? diffDays(b.date, b.end) : 0;
+    const len = jobLength(b, shown);
     const out = [];
     d.contractors.forEach((c) => d.weeks.forEach((wk) => d.days.forEach((day) => {
       const date = cellDate(wk, day);
       if (c === b.c && date === b.date) return; // not on top of the original
-      out.push({ ...cleanJob(b), id: uid(), c, date, end: span ? addDays(date, span) : null, order: null });
+      out.push({ ...cleanJob(b), id: uid(), c, date, end: endFor(date, len, shown), order: null });
     })));
     return out;
   };
@@ -611,7 +635,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
   const opAdd = () => setSettingsDraft((s) => ({ ...s, contractors: [...s.contractors, { id: cid(), name: "New operative", color: OP_COLORS[s.contractors.length % OP_COLORS.length] }] }));
   const opRemove = (idx) => setSettingsDraft((s) => ({ ...s, contractors: s.contractors.filter((_, i) => i !== idx) }));
   const saveSettings = async () => {
-    const clean = { company: settingsDraft.company || "", title: settingsDraft.title || "Work Planner", contractors: settingsDraft.contractors.filter((c) => c.name && c.name.trim()).map((c) => ({ id: c.id, name: c.name.trim(), color: c.color || "#9aa5a5" })) };
+    const clean = { company: settingsDraft.company || "", title: settingsDraft.title || "Work Planner", days: DAY_SETS[settingsDraft.days] ? settingsDraft.days : DEFAULT_DAYS, contractors: settingsDraft.contractors.filter((c) => c.name && c.name.trim()).map((c) => ({ id: c.id, name: c.name.trim(), color: c.color || "#9aa5a5" })) };
     // Deliberately NOT falling back to DEFAULT_CONTRACTORS here: what gets
     // saved is what this account actually chose. Writing the defaults in would
     // put the app's placeholder team into someone's own settings row. The board
@@ -699,7 +723,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
   };
 
   const navBtn = (disabled) => ({ fontFamily: COND, fontWeight: 600, fontSize: 14, padding: "6px 12px", borderRadius: 6, cursor: "pointer", background: "rgba(255,255,255,.14)", color: P.headerText, border: "1px solid rgba(255,255,255,.35)", opacity: disabled ? 0.35 : 1, pointerEvents: disabled ? "none" : "auto" });
-  const dayFlex = (narrow) => ({ flex: narrow ? ".62 1 0" : "1 1 0" });
+  const dayFlex = (narrow) => ({ flex: narrow ? ".72 1 0" : "1 1 0" });
   const fieldStyle = { width: "100%", fontFamily: FONTS, fontSize: 14, padding: "8px 10px", border: "1px solid " + P.line, borderRadius: 7, background: P.surface, color: P.ink, boxSizing: "border-box" };
 
   if (loading) {
@@ -732,7 +756,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
     let k = 0;
     list.forEach((j) => {
       if (j.id !== dragId) { if (isOver && v2 && over.index === k) out.push(line); k++; }
-      const seg = segAt(j, w, di);
+      const seg = segAt(j, w, di, shown);
       const lastDay = !seg || seg.i === seg.n;
       out.push(
         <div key={j.id} data-card={j.id}>
@@ -807,13 +831,14 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
     : ["duplicate", "move", "assign", "complete", "edit", ...(showTray ? ["unschedule"] : []), "-", "delete"]);
   const dupCount = dupCopies(duplicating).length;
   const windowList = windowDays();
+  const rowMin = 186 + cols.reduce((s, d) => s + (d >= 5 ? 92 : 128), 0); // the week grid's narrowest
 
   return (
     <div className={"wp-page" + (dragging ? " wp-dragging" : "")} style={{ minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", gap: 14, fontFamily: FONTS, background: P.page }}>
       <style>{`
         .wp-page{padding:32px 30px 44px}
         .wp-cname{width:186px;flex:none}
-        .wp-row{min-width:940px}
+        .wp-row{min-width:${rowMin}px}
         .wp-wt{min-width:280px}
         .wp-swipe{display:none}
         .wp-mobile{display:none;width:100%;max-width:640px}
@@ -902,9 +927,9 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
           </div>
           {view === "day" ? (
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-              <button onClick={() => stepDay(-1)} style={navBtn(week === 0 && day === 0)}>{"‹ Prev"}</button>
-              <div className="wp-wt" style={{ fontFamily: SEMI, fontWeight: 700, fontSize: 21, textAlign: "center" }}>{DAY_NAMES[day] + " " + days[day].date + " " + weekStart.getFullYear()}</div>
-              <button onClick={() => stepDay(1)} style={navBtn(week === 3 && day === 5)}>{"Next ›"}</button>
+              <button onClick={() => stepDay(-1)} style={navBtn(week === 0 && cols.indexOf(curDay) === 0)}>{"‹ Prev"}</button>
+              <div className="wp-wt" style={{ fontFamily: SEMI, fontWeight: 700, fontSize: 21, textAlign: "center" }}>{DAY_NAMES[curDay] + " " + days[curDay].date + " " + weekStart.getFullYear()}</div>
+              <button onClick={() => stepDay(1)} style={navBtn(week === 3 && cols.indexOf(curDay) === cols.length - 1)}>{"Next ›"}</button>
             </div>
           ) : (
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
@@ -932,8 +957,9 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
 
         {view === "day" && (
           <div style={{ display: "flex", gap: 7, padding: "10px 24px", background: P.surface, borderBottom: "1px solid " + P.line2, overflowX: "auto" }}>
-            {days.map((d, i) => {
-              const on = i === day;
+            {colDays.map((d) => {
+              const i = d.i;
+              const on = i === curDay;
               const hot = over && over.kind === "daytab" && over.d === i;
               return (
                 <button key={i} data-day-tab={i} onClick={() => setDay(i)} aria-pressed={on} style={{ flex: "none", fontFamily: COND, fontWeight: 700, fontSize: 13.5, padding: "6px 14px", borderRadius: 8, cursor: "pointer", lineHeight: 1.2, textAlign: "center", background: on ? P.activeTabBg : hot ? P.drop : P.surface, color: on ? P.activeTabInk : P.ink2, border: (hot ? "2px dashed " : "1px solid ") + (on || hot ? P.activeTabBg : P.line) }}>
@@ -951,20 +977,20 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
                 <div key={c.id} style={{ flex: "1 1 0", minWidth: 210, padding: "11px 14px", color: P.headerText, borderRight: "1px solid rgba(255,255,255,.18)", display: "flex", alignItems: "center", gap: 9 }}>
                   <span style={{ width: 11, height: 11, borderRadius: 3, background: c.color, flex: "none" }} />
                   <span style={{ fontFamily: SEMI, fontWeight: 700, fontSize: 15.5 }}>{c.name}</span>
-                  <span style={{ marginLeft: "auto", fontSize: 12, color: P.headerSub }}>{cellJobs(c.id, week, day).length || ""}</span>
+                  <span style={{ marginLeft: "auto", fontSize: 12, color: P.headerSub }}>{cellJobs(c.id, week, curDay).length || ""}</span>
                 </div>
               ))}
             </div>
             <div style={{ display: "flex", minWidth: roster.length * 214, alignItems: "stretch" }}>
-              {roster.map((c) => renderCell(c, days[day], week, day, true))}
+              {roster.map((c) => renderCell(c, days[curDay], week, curDay, true))}
             </div>
           </div>
         ) : (
         <div ref={gridRef} style={{ maxHeight: "62vh", overflow: "auto", position: "relative" }}>
         <div className="wp-row" style={{ display: "flex", alignItems: "stretch", background: P.colHead, position: "sticky", top: 0, zIndex: 3 }}>
           <div className="wp-cname" style={{ padding: "12px 16px", color: P.headerSub, position: "sticky", left: 0, zIndex: 4, backgroundColor: P.colHead, boxShadow: "3px 0 6px -3px rgba(10,25,35,.35)", fontFamily: COND, fontWeight: 600, fontSize: 13, letterSpacing: ".09em", textTransform: "uppercase", borderRight: "2px solid rgba(255,255,255,.22)" }}>Contractor</div>
-          {days.map((d, i) => (
-            <div key={i} style={{ ...dayFlex(d.narrow), padding: "9px 13px", color: P.headerText, borderRight: "1px solid rgba(255,255,255,.18)", background: d.isToday ? "rgba(63,183,201,.28)" : d.narrow ? "rgba(255,255,255,.08)" : "transparent" }}>
+          {colDays.map((d) => (
+            <div key={d.i} style={{ ...dayFlex(d.narrow), padding: "9px 13px", color: P.headerText, borderRight: "1px solid rgba(255,255,255,.18)", background: d.isToday ? "rgba(63,183,201,.28)" : d.narrow ? "rgba(255,255,255,.08)" : "transparent" }}>
               <div style={{ fontFamily: COND, fontWeight: 700, fontSize: 17, letterSpacing: ".03em" }}>{d.name}</div>
               <div style={{ fontSize: 12, color: P.headerSub }}>{d.date}</div>
               {d.isToday && <div style={{ fontFamily: FONTS, fontWeight: 700, fontSize: 10, letterSpacing: ".1em", textTransform: "uppercase", background: P.accent, color: P.accentInk, borderRadius: 3, padding: "1px 6px", marginTop: 3, display: "inline-block" }}>Today</div>}
@@ -978,7 +1004,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
               <span style={{ width: 11, height: 11, borderRadius: 3, background: c.color, flex: "none" }} />
               <span style={{ fontFamily: SEMI, fontWeight: 700, fontSize: 15, lineHeight: 1.1, color: P.ink }}>{c.name}</span>
             </div>
-            {days.map((d, di) => renderCell(c, d, week, di))}
+            {colDays.map((d) => renderCell(c, d, week, d.i))}
           </div>
         ))}
 
@@ -1003,7 +1029,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
 
       {resizing && (
         <div aria-hidden="true" style={{ position: "fixed", left: resizing.x + 14, top: resizing.y + 14, zIndex: 100, pointerEvents: "none", padding: "5px 10px", borderRadius: 7, background: "#1C2630", color: "#fff", font: "700 12px " + FONTS, whiteSpace: "nowrap", boxShadow: "0 8px 18px -8px rgba(0,0,0,.5)" }}>
-          {spanDays(resizing.job.date, resizing.end) > 1 ? dayLabel(resizing.job.date) + " – " + dayLabel(resizing.end) + " · " + spanDays(resizing.job.date, resizing.end) + " days" : "One day · " + dayLabel(resizing.job.date)}
+          {jobLength({ date: resizing.job.date, end: resizing.end }, shown) > 1 ? dayLabel(resizing.job.date) + " – " + dayLabel(resizing.end) + " · " + jobLength({ date: resizing.job.date, end: resizing.end }, shown) + " days" : "One day · " + dayLabel(resizing.job.date)}
         </div>
       )}
 
@@ -1022,8 +1048,9 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
         </div>
 
         <div style={{ background: P.surfaceAlt, borderLeft: "1px solid " + P.line, borderRight: "1px solid " + P.line, padding: "10px 12px", display: "flex", gap: 7, overflowX: "auto" }}>
-          {days.map((d, i) => {
-            const on = i === mDay;
+          {colDays.map((d) => {
+            const i = d.i;
+            const on = i === mCur;
             return (
               <button key={i} onClick={() => setMDay(i)} style={{ flex: "none", fontFamily: COND, fontWeight: 700, fontSize: 13, padding: "7px 12px", borderRadius: 8, cursor: "pointer", lineHeight: 1.25, textAlign: "center", background: on ? P.activeTabBg : P.surface, color: on ? P.activeTabInk : P.ink2, border: "1px solid " + (on ? P.activeTabBg : P.line) }}>
                 <div>{d.name.slice(0, 3)}</div>
@@ -1041,17 +1068,17 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
           </select>
 
           {roster.filter((c) => mWho === "all" || c.id === mWho).map((c) => {
-            const list = cellJobs(c.id, week, mDay);
+            const list = cellJobs(c.id, week, mCur);
             if (mWho === "all" && !list.length) return null;
             return (
               <div key={c.id} style={{ marginBottom: 14 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                   <span style={{ width: 10, height: 10, borderRadius: 3, background: c.color, flex: "none" }} />
                   <span style={{ fontFamily: SEMI, fontWeight: 700, fontSize: 15, color: P.ink }}>{c.name}</span>
-                  {!readOnly && <button onClick={() => openNew(c.id, cellDate(week, mDay))} style={{ marginLeft: "auto", fontFamily: COND, fontWeight: 600, fontSize: 12, padding: "4px 9px", borderRadius: 6, cursor: "pointer", background: P.surfaceAlt, color: P.accent2, border: "1px solid " + P.line }}>+ add</button>}
+                  {!readOnly && <button onClick={() => openNew(c.id, cellDate(week, mCur))} style={{ marginLeft: "auto", fontFamily: COND, fontWeight: 600, fontSize: 12, padding: "4px 9px", borderRadius: 6, cursor: "pointer", background: P.surfaceAlt, color: P.accent2, border: "1px solid " + P.line }}>+ add</button>}
                 </div>
                 {list.length ? list.map((j) => {
-                  const seg = segAt(j, week, mDay);
+                  const seg = segAt(j, week, mCur, shown);
                   return <JobCard key={j.id} j={j} cdef={CDEF} P={P} dark={dark} interactive={!sharedView} seg={seg} state={drag.lifted === j.id ? "lifted" : null} handlers={cardHandlers(j, seg ? seg.date : null)} />;
                 }) : (
                   <div style={{ fontSize: 12.5, color: P.muted, fontStyle: "italic", padding: "6px 2px" }}>Nothing booked</div>
@@ -1060,7 +1087,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
             );
           })}
 
-          {mWho === "all" && !roster.some((c) => cellJobs(c.id, week, mDay).length) && (
+          {mWho === "all" && !roster.some((c) => cellJobs(c.id, week, mCur).length) && (
             <div style={{ textAlign: "center", color: P.muted, fontSize: 13, padding: "18px 0" }}>Nothing booked this day.</div>
           )}
         </div>
@@ -1081,7 +1108,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
       )}
 
       {moving && (
-        <MoveDialog P={P} dark={dark} job={moving} who={nameOf(moving.c)} onClose={() => setMoving(null)}
+        <MoveDialog P={P} dark={dark} job={moving} who={nameOf(moving.c)} days={[...shown].sort((a, b) => a - b)} onClose={() => setMoving(null)}
           onPick={(date) => { const j = moving; setMoving(null); moveJob(j, { c: j.c, date }); }} />
       )}
 
@@ -1125,7 +1152,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
                 <label style={{ display: "flex", flexDirection: "column", gap: 5 }}><span style={lbl(P)}>Last day</span>
                   <select className="wp-field" style={fieldStyle} value={editing.end && editing.end > editing.date ? editing.end : ""} onChange={(e) => setField("end", e.target.value || null)}>
                     <option value="">{"Same day (one-day job)"}</option>
-                    {endChoices(editing).map((iso) => <option key={iso} value={iso}>{dayLabel(iso) + " · " + spanDays(editing.date, iso) + " days"}</option>)}
+                    {endChoices(editing).map((iso) => <option key={iso} value={iso}>{dayLabel(iso) + " · " + jobLength({ date: editing.date, end: iso }, shown) + " days"}</option>)}
                   </select>
                 </label>
               )}
@@ -1178,13 +1205,13 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
               <div>
                 <div style={{ ...lbl(P), marginBottom: 8 }}>Days</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
-                  {DAY_NAMES.map((n, i) => { const on = duplicating.days.includes(i); return (
+                  {DAY_NAMES.map((n, i) => { const on = duplicating.days.includes(i); if (!on && !shown.has(i)) return null; return (
                     <button key={i} onClick={() => dupToggle("days", i)} aria-pressed={on} style={{ fontFamily: FONTS, fontWeight: 600, fontSize: 13, padding: "6px 11px", borderRadius: 999, cursor: "pointer", background: on ? P.accent2 : P.surface, color: on ? "#fff" : P.ink2, border: "1px solid " + (on ? P.accent2 : P.line) }}>{n.slice(0, 3)}</button>
                   ); })}
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
-                  <button onClick={() => dupDaysQuick([0, 1, 2, 3, 4])} style={{ fontFamily: COND, fontWeight: 600, fontSize: 12, padding: "5px 10px", borderRadius: 6, cursor: "pointer", background: P.surfaceAlt, color: P.ink2, border: "1px solid " + P.line }}>{"Mon–Fri"}</button>
-                  <button onClick={() => dupDaysQuick([0, 1, 2, 3, 4, 5])} style={{ fontFamily: COND, fontWeight: 600, fontSize: 12, padding: "5px 10px", borderRadius: 6, cursor: "pointer", background: P.surfaceAlt, color: P.ink2, border: "1px solid " + P.line }}>Whole week</button>
+                  {shown.size > 5 && <button onClick={() => dupDaysQuick([0, 1, 2, 3, 4])} style={{ fontFamily: COND, fontWeight: 600, fontSize: 12, padding: "5px 10px", borderRadius: 6, cursor: "pointer", background: P.surfaceAlt, color: P.ink2, border: "1px solid " + P.line }}>{"Mon–Fri"}</button>}
+                  <button onClick={() => dupDaysQuick([...shown].sort((a, b) => a - b))} style={{ fontFamily: COND, fontWeight: 600, fontSize: 12, padding: "5px 10px", borderRadius: 6, cursor: "pointer", background: P.surfaceAlt, color: P.ink2, border: "1px solid " + P.line }}>Whole week</button>
                 </div>
               </div>
               <div>
@@ -1261,6 +1288,15 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
               <div style={{ display: "flex", gap: 12 }}>
                 <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 5 }}><span style={lbl(P)}>Company name</span><input className="wp-field" style={fieldStyle} value={settingsDraft.company} onChange={(e) => setSettingsDraft((s) => ({ ...s, company: e.target.value }))} placeholder="e.g. Your Company Ltd" /></label>
                 <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 5 }}><span style={lbl(P)}>Planner title</span><input className="wp-field" style={fieldStyle} value={settingsDraft.title} onChange={(e) => setSettingsDraft((s) => ({ ...s, title: e.target.value }))} placeholder="Work Planner" /></label>
+              </div>
+              <div>
+                <div style={{ ...lbl(P), marginBottom: 8 }}>Days shown</div>
+                <div className="wp-seg" role="group" aria-label="Days shown">
+                  {[["mon-fri", "Mon–Fri"], ["mon-sat", "Mon–Sat"], ["mon-sun", "Mon–Sun"]].map(([k, t]) => (
+                    <button key={k} type="button" aria-pressed={(DAY_SETS[settingsDraft.days] ? settingsDraft.days : DEFAULT_DAYS) === k} onClick={() => setSettingsDraft((s) => ({ ...s, days: k }))}>{t}</button>
+                  ))}
+                </div>
+                <div style={{ fontSize: 12, color: P.muted, marginTop: 6 }}>{"A day you don’t show still appears in any week with a job on it."}</div>
               </div>
               <div>
                 <div style={{ ...lbl(P), marginBottom: 8 }}>Operatives</div>

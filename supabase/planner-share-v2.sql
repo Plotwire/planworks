@@ -18,11 +18,15 @@
 --      end_date (the job's last day) and sort_order (its place in the day).
 --      The job fields are the ones the link already shows; the owner's
 --      user_id is not included.
+--   3. adds the planner's "days shown" setting (Mon-Fri, Mon-Sat or Mon-Sun),
+--      so the link shows the same days as the office's planner.
 --
 -- The app calls planner_shared_v2() and falls back to planner_shared() until
 -- this file has been run, so nothing breaks in between.
 --
--- Re-running is safe: it replaces only planner_shared_v2 itself.
+-- Re-running is safe: it replaces only planner_shared_v2 itself. (Updated
+-- 12 Oct 2026 to add the days setting: if you ran an earlier copy, run this
+-- one again.)
 -- ============================================================================
 
 create or replace function public.planner_shared_v2(p_token text)
@@ -32,8 +36,9 @@ security definer
 set search_path = ''
 as $$
 declare
-  base     jsonb;
-  owner_id public.planner_settings.user_id%type;
+  base       jsonb;
+  owner_id   public.planner_settings.user_id%type;
+  shown_days jsonb;
 begin
   -- The original decides whether this link works, and what settings it shows.
   base := public.planner_shared(p_token)::jsonb;
@@ -41,12 +46,17 @@ begin
     return base;
   end if;
 
-  select ps.user_id into owner_id
+  select ps.user_id, ps.data -> 'days' into owner_id, shown_days
     from public.planner_settings ps
    where ps.data ->> 'shareToken' = p_token
    limit 1;
   if owner_id is null then
     return base;
+  end if;
+
+  -- The days the planner shows ("mon-fri", "mon-sat" or "mon-sun").
+  if shown_days is not null and jsonb_typeof(base -> 'settings') = 'object' then
+    base := jsonb_set(base, '{settings,days}', shown_days);
   end if;
 
   -- Roughly the four weeks the board shows, with a few days' slack either side
