@@ -11,8 +11,9 @@ import {
 import { useApp } from "@/components/AppShell";
 import { useTryPrompt, TryPrompt, LOCKED } from "@/components/TryMode";
 import { FONTS, COND, SEMI, palette, Pill, JobCard, lbl } from "@/components/planner/ui";
-import { addDays, diffDays, dayLabel, cellDate, windowDays, jobCells, sortDay } from "@/components/planner/dates";
+import { addDays, diffDays, dayLabel, parseISO, cellDate, windowDays, jobCells, sortDay, timeKey, todayISO } from "@/components/planner/dates";
 import { useJobDrag } from "@/components/planner/useJobDrag";
+import { useJobResize } from "@/components/planner/useJobResize";
 import { JobMenu, MoveDialog, ConfirmDialog, NoticeBar, ViewOnlyPrompt, btn } from "@/components/planner/PlannerOverlays";
 
 const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -50,6 +51,31 @@ function covers(j, w, d) {
   return j.w === w && j.d === d;
 }
 
+// Double-booked in one person's day: without job lengths, two jobs clash when
+// they start at the same time (or neither has a time), or when one of them
+// takes the whole day (a holiday, or a job running over several days). A
+// morning job and an afternoon job don't. Cancelled jobs never clash. It's a
+// warning only: booking it is still allowed.
+function clashIds(list) {
+  const act = list.filter((j) => j.st !== "cancelled");
+  const ids = new Set();
+  const allDay = (j) => Boolean(j.end && j.end > j.date) || /holiday/i.test(j.type || "");
+  for (let a = 0; a < act.length; a++) {
+    for (let b = a + 1; b < act.length; b++) {
+      const x = act[a], y = act[b];
+      if (allDay(x) || allDay(y) || timeKey(x.t) === timeKey(y.t)) { ids.add(x.id); ids.add(y.id); }
+    }
+  }
+  return ids;
+}
+
+// Calendar days from start to end, both counted.
+const spanDays = (start, end) => (end && end > start ? diffDays(start, end) + 1 : 1);
+
+// Remembered on this device only (view, tray open), never required.
+const remember = (k, v) => { try { localStorage.setItem("planworks:planner:" + k, v); } catch {} };
+const recall = (k, fallback) => { try { return localStorage.getItem("planworks:planner:" + k) ?? fallback; } catch { return fallback; } };
+
 // Same job, same values (ignoring the derived w / d)?
 const sameJob = (a, b) => {
   if (!a || !b) return a === b;
@@ -61,6 +87,37 @@ const sameJob = (a, b) => {
 function failText(err, undoing) {
   const why = err && err.message ? err.message : String(err || "");
   return (undoing ? "Couldn’t undo that, so the job is as it was. " : "Couldn’t save that change, so the job has been put back. ") + why;
+}
+
+// Quick add: type a job name (and a time) straight into a day. Enter or
+// clicking away saves; Esc, or leaving it empty, cancels. "More" opens the
+// full job form with what's been typed.
+function QuickAdd({ P, onSave, onCancel, onMore }) {
+  const [site, setSite] = useState("");
+  const [t, setT] = useState("08:00");
+  const done = useRef(false);
+  const finish = (save) => {
+    if (done.current) return;
+    done.current = true;
+    if (save && site.trim()) onSave(site, t); else onCancel();
+  };
+  const key = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); finish(false); }
+  };
+  const field = { fontFamily: FONTS, fontSize: 13.5, padding: "6px 8px", border: "1px solid " + P.line, borderRadius: 6, background: P.surface, color: P.ink, boxSizing: "border-box", minWidth: 0 };
+  return (
+    <div data-quick-add onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}
+      onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) finish(true); }}
+      style={{ background: P.surface, border: "1.5px solid " + P.accent2, borderRadius: 7, padding: 6, marginBottom: 6, display: "flex", flexDirection: "column", gap: 5, boxShadow: "0 6px 16px -10px rgba(10,30,40,.5)" }}>
+      <input autoFocus className="wp-field" aria-label="Job or site name" placeholder="Job or site" value={site} onChange={(e) => setSite(e.target.value)} onKeyDown={key} style={{ ...field, width: "100%" }} />
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 5, alignItems: "center" }}>
+        <input className="wp-field" aria-label="Start time" value={t} onChange={(e) => setT(e.target.value)} onKeyDown={key} style={{ ...field, width: 58 }} />
+        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => { done.current = true; onMore(site, t); }} style={{ marginLeft: "auto", font: "600 12px " + FONTS, color: P.accent2, background: "transparent", border: 0, cursor: "pointer", padding: "4px 2px" }}>{"More…"}</button>
+        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => finish(true)} style={{ font: "700 12px " + FONTS, color: "var(--action-ink, #1A2530)", background: "var(--action, #2C97A8)", border: 0, borderRadius: 6, cursor: "pointer", padding: "5px 9px" }}>Add</button>
+      </div>
+    </div>
+  );
 }
 
 // `sharedView`: rendered by the public share route (/planner/view), which sits
@@ -99,6 +156,11 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
   const [confirmDel, setConfirmDel] = useState(null); // job awaiting a confirmed delete
   const [notice, setNotice] = useState(null);       // { kind, text, n }
   const [viewOnly, setViewOnly] = useState(false);  // the lapsed prompt
+  const [view, setView] = useState(() => (recall("view", "week") === "day" ? "day" : "week"));
+  const [day, setDay] = useState(() => { const d = (new Date().getDay() + 6) % 7; return d > 5 ? 5 : d; });
+  const [trayOpen, setTrayOpen] = useState(() => recall("tray", "") === "open");
+  const [quickAdd, setQuickAdd] = useState(null);   // { c, date }: the quick-add box in that day
+  const lastTap = useRef({ key: "", t: 0, kind: "mouse" }); // for double-tap on iPad
   const cardRef = useRef(null);
   const gridRef = useRef(null);
   const undoStack = useRef([]);                     // [{ label, changes }]
@@ -226,11 +288,41 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
 
   // A person's jobs in board cell (w, d), in the order they show.
   const cellJobs = (c, w, d, list = jobs) => sortDay(list.filter((j) => j.c === c && covers(j, w, d)));
+  const loose = jobs.filter((j) => !j.date);   // the Unscheduled tray (planner-v2.sql)
+  const showTray = v2 && !sharedView;
 
-  const openNew = (c, date) => {
+  // Open the tray by itself the first time there's something in it.
+  const trayAuto = useRef(false);
+  useEffect(() => {
+    if (trayAuto.current || loading || !showTray) return;
+    trayAuto.current = true;
+    if (loose.length && recall("tray", "") !== "closed") setTrayOpen(true);
+  }, [loading, showTray, loose.length]);
+  const toggleTray = () => setTrayOpen((o) => { remember("tray", o ? "closed" : "open"); return !o; });
+  const changeView = (v) => { setView(v); remember("view", v); };
+  const goToday = () => {
+    const d = (new Date().getDay() + 6) % 7;
+    setWeek(0);
+    setDay(d > 5 ? 5 : d);
+    setTimeout(() => {
+      const el = document.querySelector("[data-today-col]");
+      if (el && gridRef.current) gridRef.current.scrollLeft = Math.max(0, el.offsetLeft - 200);
+    }, 30);
+  };
+  // Day view: step a day at a time across the four weeks (Saturday -> Monday).
+  const stepDay = (dir) => {
+    let w = week, d = day + dir;
+    if (d > 5) { d = 0; w += 1; }
+    if (d < 0) { d = 5; w -= 1; }
+    if (w < 0 || w > 3) return;
+    setWeek(w); setDay(d);
+  };
+
+  // date null: a new unscheduled job. pre: values already typed (quick add's "More").
+  const openNew = (c, date, pre = {}) => {
     if (sharedView) return;
     if (lapsed) { blocked(); return; }
-    setEditing({ id: uid(), c, date, end: null, order: null, t: "08:00", site: "", type: "Rewire", addr: "", cust: "", st: "booked", notes: "", imp: false, isNew: true });
+    setEditing({ id: uid(), c, date, end: null, order: null, t: "08:00", site: "", type: "Rewire", addr: "", cust: "", st: "booked", notes: "", imp: false, ...pre, isNew: true });
   };
   const openEdit = (id) => {
     if (sharedView) return;
@@ -239,6 +331,18 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
     if (j) setEditing({ ...j, isNew: false });
   };
   const setField = (f, v) => setEditing((e) => ({ ...e, [f]: v }));
+  // A new start day keeps a multi-day job the same length; no date clears it.
+  const setEditDate = (date) => setEditing((e) => ({
+    ...e, date,
+    end: date && e.date && e.end && e.end > e.date ? addDays(e.end, diffDays(e.date, date)) : null,
+  }));
+  // Last-day choices: the next three weeks (Sundays left out, they show on the Saturday).
+  const endChoices = (e) => {
+    const out = [];
+    for (let i = 1; i <= 21; i++) { const iso = addDays(e.date, i); if (parseISO(iso).getDay() !== 0) out.push(iso); }
+    if (e.end && e.end > e.date && !out.includes(e.end)) out.push(e.end);
+    return out;
+  };
 
   const cleanJob = (e) => ({ id: e.id, c: e.c, date: e.date, end: e.end || null, order: e.order ?? null, t: e.t, site: e.site, type: e.type, addr: e.addr, cust: e.cust, st: e.st, notes: e.notes, imp: !!e.imp });
 
@@ -247,10 +351,9 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
     const before = e.isNew ? null : jobs.find((j) => j.id === e.id) || null;
     const after = cleanJob(e);
     // A job moved to another day or person takes its place by start time there.
-    if (before && (before.date !== after.date || before.c !== after.c)) {
-      after.order = null;
-      if (before.end && before.date) after.end = addDays(before.end, diffDays(before.date, after.date));
-    }
+    if (before && (before.date !== after.date || before.c !== after.c)) after.order = null;
+    if (!after.date) { after.end = null; after.order = null; }
+    else if (after.end && after.end <= after.date) after.end = null;
     setEditing(null);
     if (before && sameJob(before, after)) return;
     commit((e.isNew ? "Added " : "Saved ") + (after.site || "the job"), [{ before, after }]);
@@ -280,8 +383,40 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
       after.order = null; // it joins the day by start time
     }
     changes.unshift({ before: cur, after: cleanJob(after) });
-    const where = samePlace ? "Moved within " + dayLabel(date) : "Moved to " + dayLabel(date) + (cur.c !== c ? " · " + nameOf(c) : "");
+    const where = !cur.date ? "Booked for " + dayLabel(date) + " · " + nameOf(c)
+      : samePlace ? "Moved within " + dayLabel(date)
+      : "Moved to " + dayLabel(date) + (cur.c !== c ? " · " + nameOf(c) : "");
     commit(label || where, changes);
+  };
+
+  // Back to the Unscheduled tray: no date, no end, no place in a day.
+  const unschedule = (job) => {
+    const cur = jobs.find((j) => j.id === job.id) || job;
+    if (!cur.date) return;
+    commit("Moved " + (cur.site || "the job") + " to Unscheduled", [{ before: cur, after: { ...cleanJob(cur), date: null, end: null, order: null } }]);
+  };
+
+  // Stretch (or shrink) a job so it ends on `end`.
+  const stretchJob = (job, end) => {
+    const cur = jobs.find((j) => j.id === job.id) || job;
+    const after = { ...cleanJob(cur), end: end > cur.date ? end : null };
+    if ((cur.end || null) === after.end) return;
+    const n = spanDays(cur.date, after.end);
+    commit(n > 1 ? dayLabel(cur.date) + " – " + dayLabel(after.end) + " · " + n + " days" : "Back to one day · " + dayLabel(cur.date), [{ before: cur, after }]);
+  };
+
+  // Quick add: a name and a time, typed straight into the day.
+  const openQuickAdd = (c, date) => {
+    if (sharedView) return;
+    if (lapsed) { blocked(); return; }
+    setQuickAdd({ c, date });
+  };
+  const saveQuickAdd = (site, t) => {
+    const qa = quickAdd;
+    setQuickAdd(null);
+    if (!qa || !site.trim()) return;
+    const job = { id: uid(), c: qa.c, date: qa.date, end: null, order: null, t: t.trim(), site: site.trim(), type: "", addr: "", cust: "", st: "booked", notes: "", imp: false };
+    commit("Added " + job.site + " · " + dayLabel(qa.date), [{ before: null, after: job }]);
   };
 
   const toggleDone = (job) => {
@@ -309,10 +444,17 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
     else if (action === "assign") { if (arg !== job.c) moveJob(job, { c: arg, date: job.date }, "Assigned to " + nameOf(arg)); }
     else if (action === "complete") toggleDone(job);
     else if (action === "edit") openEdit(job.id);
+    else if (action === "unschedule") unschedule(job);
     else if (action === "delete") setConfirmDel(job);
   };
 
   // ---- Drag and drop ----
+  // Where a dropped job starts: picked up by its third day and dropped on a
+  // Friday, a three-day job then runs Wednesday to Friday.
+  const dropStart = (job, date, extra) => {
+    if (!job.date || !extra || !extra.seg) return date;
+    return addDays(date, -diffDays(job.date, extra.seg));
+  };
   // What's under the pointer: a week tab, or a person's day (with the place
   // in that day where the job would go).
   const resolveTarget = (x, y, job) => {
@@ -320,6 +462,9 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
     if (!el) return null;
     const tab = el.closest("[data-week-tab]");
     if (tab) return { kind: "tab", w: Number(tab.dataset.weekTab) };
+    const dtab = el.closest("[data-day-tab]");
+    if (dtab) return { kind: "daytab", d: Number(dtab.dataset.dayTab) };
+    if (el.closest("[data-drop-tray]")) return { kind: "tray" };
     const cell = el.closest("[data-drop-cell]");
     if (!cell) return null;
     const cards = [...cell.querySelectorAll("[data-card]")].filter((n) => n.dataset.card !== job.id);
@@ -338,33 +483,57 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
     onTap: (job) => openEdit(job.id),
     onMenu: (job, x, y) => openMenu(job, x, y),
     onBlocked: () => blocked(),
-    onDrop: (job, target) => {
+    onDrop: (job, target, extra) => {
       lastDrop.current = Date.now();
-      if (!target || target.kind !== "cell") return;
-      moveJob(job, { c: target.c, date: target.date, index: target.index });
+      if (!target) return;
+      if (target.kind === "tray") { if (showTray) unschedule(job); return; }
+      if (target.kind !== "cell") return;
+      // A place in the day only means something on the job's first day.
+      const fromFirst = !extra || !extra.seg || extra.seg === job.date;
+      moveJob(job, { c: target.c, date: dropStart(job, target.date, extra), index: fromFirst ? target.index : null });
     },
   });
   const dragging = drag.drag;
   const over = dragging && dragging.target;
 
-  // Hold a dragged job over a week tab to open that week.
+  // Stretch handle: the day under the pointer, from any person's row.
+  const resize = useJobResize({
+    canResize: canEdit && v2,
+    onBlocked: () => blocked(),
+    resolveDate: (x, y) => {
+      const el = document.elementFromPoint(x, y);
+      const cell = el && el.closest("[data-drop-cell]");
+      return cell ? cell.dataset.date : null;
+    },
+    onResize: (job, end) => stretchJob(job, end),
+  });
+  const resizing = resize.resizing;
+
+  // Hold a dragged job over a week tab (or, in Day view, a day) to open it.
   useEffect(() => {
-    if (!over || over.kind !== "tab" || over.w === week) return;
-    const t = setTimeout(() => setWeek(over.w), 450);
-    return () => clearTimeout(t);
-  }, [over && over.kind, over && over.w, week]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!over) return;
+    if (over.kind === "tab" && over.w !== week) { const t = setTimeout(() => setWeek(over.w), 450); return () => clearTimeout(t); }
+    if (over.kind === "daytab" && over.d !== day) { const t = setTimeout(() => setDay(over.d), 450); return () => clearTimeout(t); }
+  }, [over && over.kind, over && over.w, over && over.d, week, day]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const dropLabel = (() => {
     if (!dragging) return "";
-    if (!over) return "Drop on a day";
+    if (!over) return showTray ? "Drop on a day, or on Unscheduled" : "Drop on a day";
     if (over.kind === "tab") return over.w === week ? "Week " + (over.w + 1) : "Hold to open week " + (over.w + 1);
+    if (over.kind === "daytab") return over.d === day ? DAY_NAMES[over.d] : "Hold to open " + DAY_NAMES[over.d];
+    if (over.kind === "tray") return dragging.job.date ? "Move to Unscheduled" : "Unscheduled";
     const j = dragging.job;
-    if (over.c === j.c && over.date === j.date) return v2 ? "Move within the day" : "Same day";
-    return "Move to " + (over.c !== j.c ? nameOf(over.c) + " · " : "") + dayLabel(over.date);
+    const start = dropStart(j, over.date, dragging.extra);
+    if (over.c === j.c && start === j.date) return v2 ? "Move within the day" : "Same day";
+    const n = j.date ? spanDays(j.date, j.end) : 1;
+    const when = n > 1 ? dayLabel(start) + " – " + dayLabel(addDays(start, n - 1)) : dayLabel(start);
+    return (j.date ? "Move to " : "Book for ") + (over.c !== j.c || !j.date ? nameOf(over.c) + " · " : "") + when;
   })();
 
-  const cardHandlers = (j) => (sharedView ? null : {
-    onPointerDown: (e) => drag.onPointerDown(e, j),
+  // seg: the day of a multi-day job the card was picked up from, so dropping
+  // it moves the whole job by the same number of days.
+  const cardHandlers = (j, seg = null) => (sharedView ? null : {
+    onPointerDown: (e) => drag.onPointerDown(e, j, seg ? { seg } : null),
     onContextMenu: (e) => { e.preventDefault(); if (drag.busy()) return; openMenu(j, e.clientX, e.clientY); },
     onKeyDown: (e) => {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openEdit(j.id); }
@@ -505,7 +674,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
       canvas.toBlob((blob) => {
         setExporting(false);
         if (!blob) { alert("Could not create image."); return; }
-        const fname = "work-planner-week.png";
+        const fname = view === "day" ? "work-planner-day.png" : "work-planner-week.png";
         let file = null;
         try { file = new File([blob], fname, { type: "image/png" }); } catch (e) {}
         if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -541,43 +710,95 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
 
   // One person's day on the board: their jobs, plus the drop target while a
   // job is dragged over it.
-  const renderCell = (c, d, di) => {
-    const list = cellJobs(c.id, week, di);
-    const isOver = over && over.kind === "cell" && over.c === c.id && over.w === week && over.d === di;
+  // d: { iso, narrow, isToday }; w, di: the board cell. dayView: the wide
+  // one-day layout (a column per person).
+  const renderCell = (c, d, w, di, dayView = false) => {
+    const list = cellJobs(c.id, w, di);
+    const clashes = clashIds(list);
+    const isOver = over && over.kind === "cell" && over.c === c.id && over.date === d.iso;
     const dragId = dragging ? dragging.job.id : null;
+    const rz = resizing && resizing.job.c === c.id && d.iso >= resizing.job.date && d.iso <= resizing.end;
     const line = <div key="drop-line" aria-hidden="true" style={{ height: 3, borderRadius: 2, background: P.accent2, margin: "1px 0 6px", position: "relative" }}><span style={{ position: "absolute", left: -3, top: -3, width: 9, height: 9, borderRadius: "50%", background: P.accent2 }} /></div>;
     const out = [];
     let k = 0;
     list.forEach((j) => {
       if (j.id !== dragId) { if (isOver && v2 && over.index === k) out.push(line); k++; }
+      const cells = j.end && j.end > j.date ? jobCells(j) : null;
+      const at = cells ? cells.findIndex((p) => p.w === w && p.d === di) : 0;
+      const seg = cells ? { i: at + 1, n: cells.length } : null;
+      const segDate = cells ? cells[at].date : j.date;
+      const lastDay = !cells || at === cells.length - 1;
       out.push(
         <div key={j.id} data-card={j.id}>
-          <JobCard j={j} cdef={CDEF} P={P} dark={dark} interactive={!sharedView}
+          <JobCard j={j} cdef={CDEF} P={P} dark={dark} interactive={!sharedView} seg={seg} clash={clashes.has(j.id)}
             state={j.id === dragId ? "source" : drag.lifted === j.id ? "lifted" : null}
-            handlers={cardHandlers(j)} />
+            handlers={cardHandlers(j, cells ? segDate : null)}
+            stretch={canEdit && v2 && lastDay && !dayView ? (e) => resize.onHandleDown(e, j) : null} />
         </div>
       );
     });
     if (isOver && v2 && over.index >= k) out.push(line);
+    const qa = quickAdd && quickAdd.c === c.id && quickAdd.date === d.iso;
+    const empty = (t) => !t.closest("[data-card]") && !t.closest("[data-quick-add]");
     return (
-      <div key={di} className="wp-cell" data-drop-cell data-c={c.id} data-w={week} data-d={di} data-date={d.iso}
+      <div key={dayView ? c.id : di} className="wp-cell" data-drop-cell data-c={c.id} data-w={w} data-d={di} data-date={d.iso} data-today-col={d.isToday && c === roster[0] ? "" : undefined}
+        onPointerDown={(ev) => { lastTap.current.kind = ev.pointerType; }}
         onClick={(ev) => {
-          if (ev.target.closest("[data-card]") || Date.now() - lastDrop.current < 400) return;
-          openNew(c.id, d.iso);
+          if (Date.now() - lastDrop.current < 400) return;
+          if (ev.target.closest(".wp-add")) { openQuickAdd(c.id, d.iso); return; }
+          // Double-tap on iPad (a mouse gets onDoubleClick). Done on the click,
+          // after the tap's own focus change, so the new box keeps the keyboard.
+          if (lastTap.current.kind === "mouse" || !empty(ev.target)) return;
+          const key = c.id + "|" + d.iso, now = Date.now();
+          if (lastTap.current.key === key && now - lastTap.current.t < 400) { lastTap.current = { ...lastTap.current, key: "", t: 0 }; openQuickAdd(c.id, d.iso); }
+          else lastTap.current = { ...lastTap.current, key, t: now };
         }}
+        onDoubleClick={(ev) => { if (empty(ev.target)) openQuickAdd(c.id, d.iso); }}
         style={{
-          ...dayFlex(d.narrow), padding: "7px 7px 2px", borderRight: "2px solid " + P.rowSep, minHeight: 82,
-          cursor: readOnly ? "default" : "pointer",
-          background: isOver ? P.drop : d.isToday ? P.today : d.narrow ? P.cellNarrow : P.cell,
-          outline: isOver ? "2.5px dashed " + P.accent2 : "none", outlineOffset: -4,
+          ...(dayView ? { flex: "1 1 0", minWidth: 210, minHeight: "48vh", padding: "9px 9px 2px" } : { ...dayFlex(d.narrow), minWidth: 0, padding: "7px 7px 2px", minHeight: 82 }),
+          borderRight: "2px solid " + P.rowSep, touchAction: "manipulation",
+          cursor: readOnly ? "default" : "cell",
+          background: isOver || rz ? P.drop : d.isToday && !dayView ? P.today : d.narrow && !dayView ? P.cellNarrow : P.cell,
+          outline: isOver || rz ? "2.5px dashed " + P.accent2 : "none", outlineOffset: -4,
         }}>
         {out}
-        {!readOnly && <div className="wp-add" style={{ textAlign: "center", color: P.muted, fontFamily: COND, fontWeight: 600, fontSize: 13, padding: "2px 0 4px" }}>+ add job</div>}
+        {qa && <QuickAdd P={P} onSave={saveQuickAdd} onCancel={() => setQuickAdd(null)}
+          onMore={(site, t) => { setQuickAdd(null); openNew(c.id, d.iso, { site, t }); }} />}
+        {!readOnly && !qa && <div className="wp-add" style={{ textAlign: "center", color: P.muted, fontFamily: COND, fontWeight: 600, fontSize: 13, padding: "2px 0 4px", cursor: "pointer" }}>+ add job</div>}
       </div>
     );
   };
 
-  const menuItems = ["duplicate", "move", "assign", "complete", "edit", "-", "delete"];
+  // The Unscheduled tray: jobs with no date yet. Drop a job here to take it
+  // off the board; drag one out onto a day to book it.
+  const renderTray = () => {
+    const isOver = over && over.kind === "tray";
+    const dragId = dragging ? dragging.job.id : null;
+    return (
+      <aside className="wp-tray" data-drop-tray aria-label="Unscheduled jobs" style={{ width: 252, flex: "none", alignSelf: "flex-start", background: P.surface, border: (isOver ? "2.5px dashed " : "1px solid ") + (isOver ? P.accent2 : P.line), borderRadius: 14, overflow: "hidden", boxShadow: dark ? "0 16px 44px -22px rgba(0,0,0,.6)" : "0 16px 44px -22px rgba(20,40,50,.35)" }}>
+        <div style={{ background: P.header, color: P.headerText, padding: "14px 16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span style={{ fontFamily: COND, fontWeight: 700, fontSize: 18, letterSpacing: ".03em", textTransform: "uppercase" }}>Unscheduled</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ font: "700 12px " + FONTS, background: P.accent, color: P.accentInk, borderRadius: 999, padding: "2px 8px" }}>{loose.length}</span>
+            <button type="button" onClick={toggleTray} aria-label="Hide the Unscheduled tray" style={{ background: "transparent", border: 0, color: P.headerSub, fontSize: 20, lineHeight: 1, cursor: "pointer" }}>{"×"}</button>
+          </span>
+        </div>
+        <div style={{ padding: 10, background: isOver ? P.drop : "transparent", maxHeight: "70vh", overflow: "auto" }}>
+          <div style={{ fontSize: 12, color: P.muted, margin: "0 2px 8px", lineHeight: 1.4 }}>{loose.length ? "Jobs with no date yet. Drag one onto a day to book it." : "Nothing waiting. Drag a job here to take it off the board until it has a date."}</div>
+          {sortDay(loose).map((j) => (
+            <div key={j.id} data-card={j.id}>
+              <JobCard j={j} cdef={CDEF} P={P} dark={dark} interactive state={j.id === dragId ? "source" : drag.lifted === j.id ? "lifted" : null} handlers={cardHandlers(j)} />
+            </div>
+          ))}
+          <button type="button" onClick={() => openNew((roster[0] || {}).id, null)} style={{ width: "100%", marginTop: 4, fontFamily: COND, fontWeight: 700, fontSize: 13.5, padding: "8px 10px", borderRadius: 8, cursor: "pointer", background: "transparent", color: P.accent2, border: "1.5px dashed " + P.accent2 }}>+ Add unscheduled job</button>
+        </div>
+      </aside>
+    );
+  };
+
+  const menuItems = (job) => (job && !job.date
+    ? ["duplicate", "move", "assign", "complete", "edit", "-", "delete"]
+    : ["duplicate", "move", "assign", "complete", "edit", ...(showTray ? ["unschedule"] : []), "-", "delete"]);
   const dupCount = dupCopies(duplicating).length;
   const windowList = windowDays();
 
@@ -595,39 +816,63 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
           .wp-cname{width:112px}
           .wp-row{min-width:820px}
           .wp-wt{min-width:auto;font-size:17px !important}
-          .wp-board{display:none}
+          .wp-board,.wp-tray{display:none}
           .wp-mobile{display:block}
         }
         .wp-cell .wp-add{opacity:0;transition:opacity .12s}
         .wp-cell:hover .wp-add{opacity:1}
+        @media (hover:none){.wp-cell .wp-add{opacity:.55}}
         .wp-dragging .wp-cell .wp-add{opacity:0}
         .wp-card:focus-visible{outline:2.5px solid ${P.accent};outline-offset:2px}
         .wp-field:focus{outline:none;border-color:${P.accent2};box-shadow:0 0 0 3px ${dark ? "rgba(63,183,201,.22)" : "rgba(44,151,168,.16)"}}
         .wp-home{display:inline-flex;align-items:center;gap:7px;font-family:${COND};font-weight:700;font-size:14px;letter-spacing:.02em;padding:9px 16px;border-radius:8px;cursor:pointer;background:${P.surface};color:${P.ink};border:1px solid ${P.line};transition:background .15s ease,color .15s ease,border-color .15s ease}
         .wp-home:hover{background:#2C97A8;color:#1A2530;border-color:#2C97A8}
         .wp-home svg{display:block}
+        .wp-tool{display:inline-flex;align-items:center;font-family:${COND};font-weight:700;font-size:14px;letter-spacing:.02em;padding:9px 14px;border-radius:8px;cursor:pointer;background:${P.surface};color:${P.ink};border:1px solid ${P.line}}
+        .wp-tool:hover{border-color:${P.accent2}}
+        .wp-tool[aria-pressed="true"]{border-color:${P.accent2};color:${P.accent2}}
+        .wp-seg{display:inline-flex;border:1px solid ${P.line};border-radius:8px;overflow:hidden;background:${P.surface}}
+        .wp-seg button{font-family:${COND};font-weight:700;font-size:14px;padding:9px 15px;border:0;background:transparent;color:${P.ink2};cursor:pointer}
+        .wp-seg button[aria-pressed="true"]{background:${P.accent2};color:#fff}
+        .wp-grip{opacity:0;transition:opacity .12s;background:${P.accent2};color:#fff}
+        .wp-card:hover .wp-grip,.wp-grip[data-multi]{opacity:1}
+        @media (hover:none){.wp-grip{opacity:1;background:transparent;color:${P.muted}}.wp-grip[data-multi]{background:${P.accent2};color:#fff}}
+        @media (max-width:1250px){.wp-hint{display:none}}
+        @media (max-width:900px){.wp-toolbar .wp-tool,.wp-toolbar .wp-seg{display:none}}
         ${dragging ? "body,body *{cursor:grabbing !important}" : ""}
       `}</style>
 
-      <div style={{ width: 1300, maxWidth: "100%", display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+      <div className="wp-toolbar" style={{ width: 1300, maxWidth: "100%", display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         {!readOnly && (
-          <button className="wp-home" onClick={() => router.push("/")} title="Back to dashboard" style={{ marginRight: "auto" }}>
+          <button className="wp-home" onClick={() => router.push("/")} title="Back to dashboard">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
             Dashboard
           </button>
         )}
+        <button className="wp-tool" onClick={goToday} title="Jump to today">Today</button>
+        <div className="wp-seg" role="group" aria-label="View">
+          <button type="button" aria-pressed={view === "week"} onClick={() => changeView("week")}>Week</button>
+          <button type="button" aria-pressed={view === "day"} onClick={() => changeView("day")}>Day</button>
+        </div>
+        {showTray && (
+          <button type="button" className="wp-tool" data-drop-tray={!trayOpen ? "" : undefined} aria-pressed={trayOpen} onClick={toggleTray}
+            style={over && over.kind === "tray" && !trayOpen ? { borderStyle: "dashed", borderColor: P.accent2, background: P.drop } : undefined}>
+            {"Unscheduled"}<span style={{ marginLeft: 7, font: "700 11.5px " + FONTS, background: loose.length ? P.accent : P.line2, color: loose.length ? P.accentInk : P.muted, borderRadius: 999, padding: "1px 7px" }}>{loose.length}</span>
+          </button>
+        )}
+        <span style={{ flex: 1 }} />
         {readOnly ? (
           <span style={{ fontSize: 12.5, color: P.muted }}>{"Viewing only — this diary updates automatically when the office changes it."}</span>
         ) : (
           <>
-            <span style={{ fontSize: 12.5, color: P.muted }}>{"Send the lads a view-only link, or share this week as an image."}</span>
+            <span className="wp-hint" style={{ fontSize: 12.5, color: P.muted }}>{"Send the lads a view-only link, or share this " + (view === "day" ? "day" : "week") + " as an image."}</span>
             <button onClick={openShare} style={{ fontFamily: COND, fontWeight: 700, fontSize: 14, letterSpacing: ".02em", padding: "9px 18px", borderRadius: 8, cursor: "pointer", background: P.surface, color: P.accent2, border: "1px solid " + P.accent2 }}>
               {"Get view-only link ▸"}
             </button>
           </>
         )}
         <button onClick={exportImage} style={{ fontFamily: COND, fontWeight: 700, fontSize: 14, letterSpacing: ".02em", padding: "9px 18px", borderRadius: 8, cursor: "pointer", background: P.accent2, color: "#fff", border: "1px solid " + P.accent2 }}>
-          {exporting ? "Preparing image…" : "Share this week as image ▸"}
+          {exporting ? "Preparing image…" : (view === "day" ? "Share this day as image ▸" : "Share this week as image ▸")}
         </button>
       </div>
 
@@ -639,7 +884,8 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
         </div>
       )}
 
-      <div ref={cardRef} className="wp-board" style={{ width: 1300, maxWidth: "100%", background: P.surface, border: "1px solid " + P.line, borderRadius: 14, overflow: "hidden", boxShadow: dark ? "0 16px 44px -22px rgba(0,0,0,.6)" : "0 16px 44px -22px rgba(20,40,50,.35)" }}>
+      <div className="wp-boardwrap" style={{ width: 1300, maxWidth: "100%", display: "flex", gap: 14, alignItems: "flex-start" }}>
+      <div ref={cardRef} className="wp-board" style={{ flex: "1 1 auto", minWidth: 0, width: "100%", background: P.surface, border: "1px solid " + P.line, borderRadius: 14, overflow: "hidden", boxShadow: dark ? "0 16px 44px -22px rgba(0,0,0,.6)" : "0 16px 44px -22px rgba(20,40,50,.35)" }}>
         <div style={{ background: P.header, color: P.headerText, padding: "18px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 20, flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 13 }}>
             <span style={{ fontFamily: COND, fontWeight: 700, fontSize: 26, letterSpacing: ".02em", textTransform: "uppercase" }}>{settings.company || "Your Company"}</span>
@@ -648,11 +894,19 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="3" /><path d="M19.4 13a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 0 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9 2 2 0 0 1 0-4 1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 2.9-1.2 2 2 0 0 1 4 0 1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-1.5 1z" /></svg>
             </button>}
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <button onClick={() => setWeek((w) => Math.max(0, w - 1))} style={navBtn(week === 0)}>{"‹ Prev"}</button>
-            <div className="wp-wt" style={{ fontFamily: SEMI, fontWeight: 700, fontSize: 21, textAlign: "center" }}>{weekTitle}</div>
-            <button onClick={() => setWeek((w) => Math.min(3, w + 1))} style={navBtn(week === 3)}>{"Next ›"}</button>
-          </div>
+          {view === "day" ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              <button onClick={() => stepDay(-1)} style={navBtn(week === 0 && day === 0)}>{"‹ Prev"}</button>
+              <div className="wp-wt" style={{ fontFamily: SEMI, fontWeight: 700, fontSize: 21, textAlign: "center" }}>{DAY_NAMES[day] + " " + days[day].date + " " + weekStart.getFullYear()}</div>
+              <button onClick={() => stepDay(1)} style={navBtn(week === 3 && day === 5)}>{"Next ›"}</button>
+            </div>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              <button onClick={() => setWeek((w) => Math.max(0, w - 1))} style={navBtn(week === 0)}>{"‹ Prev"}</button>
+              <div className="wp-wt" style={{ fontFamily: SEMI, fontWeight: 700, fontSize: 21, textAlign: "center" }}>{weekTitle}</div>
+              <button onClick={() => setWeek((w) => Math.min(3, w + 1))} style={navBtn(week === 3)}>{"Next ›"}</button>
+            </div>
+          )}
         </div>
 
         <div style={{ display: "flex", gap: 8, padding: "11px 24px", background: P.surfaceAlt, borderBottom: "1px solid " + P.line2, alignItems: "center", flexWrap: "wrap" }}>
@@ -666,10 +920,40 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
               </button>
             );
           })}
-          <span style={{ fontSize: 12.5, color: P.muted, fontStyle: "italic", marginLeft: 6 }}>{readOnly ? "Rolls automatically · view only" : "Drag a job to move it · right-click (long-press on iPad) for more · tap a space to add"}</span>
+          <span style={{ fontSize: 12.5, color: P.muted, fontStyle: "italic", marginLeft: 6 }}>{readOnly ? "Rolls automatically · view only" : "Drag a job to move it · right-click (long-press on iPad) for more · double-click a space to add"}</span>
           <span className="wp-swipe" style={{ width: "100%", fontSize: 12, color: P.accent2, fontWeight: 600, marginTop: 2 }}>{"↔ Swipe the board sideways to see all days"}</span>
         </div>
 
+        {view === "day" && (
+          <div style={{ display: "flex", gap: 7, padding: "10px 24px", background: P.surface, borderBottom: "1px solid " + P.line2, overflowX: "auto" }}>
+            {days.map((d, i) => {
+              const on = i === day;
+              const hot = over && over.kind === "daytab" && over.d === i;
+              return (
+                <button key={i} data-day-tab={i} onClick={() => setDay(i)} aria-pressed={on} style={{ flex: "none", fontFamily: COND, fontWeight: 700, fontSize: 13.5, padding: "6px 14px", borderRadius: 8, cursor: "pointer", lineHeight: 1.2, textAlign: "center", background: on ? P.activeTabBg : hot ? P.drop : P.surface, color: on ? P.activeTabInk : P.ink2, border: (hot ? "2px dashed " : "1px solid ") + (on || hot ? P.activeTabBg : P.line) }}>
+                  {d.name.slice(0, 3) + " " + d.date}{d.isToday && <span style={{ marginLeft: 6, fontSize: 10, letterSpacing: ".08em", textTransform: "uppercase", opacity: .9 }}>Today</span>}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {view === "day" ? (
+          <div ref={gridRef} style={{ maxHeight: "66vh", overflow: "auto", position: "relative" }}>
+            <div style={{ display: "flex", minWidth: roster.length * 214, position: "sticky", top: 0, zIndex: 3, background: P.colHead }}>
+              {roster.map((c) => (
+                <div key={c.id} style={{ flex: "1 1 0", minWidth: 210, padding: "11px 14px", color: P.headerText, borderRight: "1px solid rgba(255,255,255,.18)", display: "flex", alignItems: "center", gap: 9 }}>
+                  <span style={{ width: 11, height: 11, borderRadius: 3, background: c.color, flex: "none" }} />
+                  <span style={{ fontFamily: SEMI, fontWeight: 700, fontSize: 15.5 }}>{c.name}</span>
+                  <span style={{ marginLeft: "auto", fontSize: 12, color: P.headerSub }}>{cellJobs(c.id, week, day).length || ""}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", minWidth: roster.length * 214, alignItems: "stretch" }}>
+              {roster.map((c) => renderCell(c, days[day], week, day, true))}
+            </div>
+          </div>
+        ) : (
         <div ref={gridRef} style={{ maxHeight: "62vh", overflow: "auto", position: "relative" }}>
         <div className="wp-row" style={{ display: "flex", alignItems: "stretch", background: P.colHead, position: "sticky", top: 0, zIndex: 3 }}>
           <div className="wp-cname" style={{ padding: "12px 16px", color: P.headerSub, position: "sticky", left: 0, zIndex: 4, backgroundColor: P.colHead, boxShadow: "3px 0 6px -3px rgba(10,25,35,.35)", fontFamily: COND, fontWeight: 600, fontSize: 13, letterSpacing: ".09em", textTransform: "uppercase", borderRight: "2px solid rgba(255,255,255,.22)" }}>Contractor</div>
@@ -688,11 +972,12 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
               <span style={{ width: 11, height: 11, borderRadius: 3, background: c.color, flex: "none" }} />
               <span style={{ fontFamily: SEMI, fontWeight: 700, fontSize: 15, lineHeight: 1.1, color: P.ink }}>{c.name}</span>
             </div>
-            {days.map((d, di) => renderCell(c, d, di))}
+            {days.map((d, di) => renderCell(c, d, week, di))}
           </div>
         ))}
 
         </div>
+        )}
 
         <div style={{ display: "flex", flexWrap: "wrap", gap: "16px 26px", padding: "15px 24px", background: P.surfaceAlt, borderTop: "1px solid " + P.line2, alignItems: "center" }}>
           <span style={{ fontFamily: COND, fontWeight: 600, fontSize: 12, letterSpacing: ".08em", textTransform: "uppercase", color: P.muted }}>Key</span>
@@ -704,8 +989,17 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
           <span style={{ width: 1, height: 16, background: P.line }} />
           {["booked", "done", "cancelled"].map((k) => <Pill key={k} k={k} dark={dark} />)}
           <span style={{ font: "700 9px/1 " + FONTS, letterSpacing: ".08em", textTransform: "uppercase", padding: "3px 5px", borderRadius: 3, background: dark ? "#e05563" : "#c0392b", color: "#fff" }}>{"Important"}</span>
+          <span style={{ font: "700 9px/1 " + FONTS, letterSpacing: ".06em", textTransform: "uppercase", padding: "3px 6px", borderRadius: 999, background: P.amber, color: "#1A2530" }}>{"⚠ Double-booked"}</span>
         </div>
       </div>
+      {showTray && trayOpen && renderTray()}
+      </div>
+
+      {resizing && (
+        <div aria-hidden="true" style={{ position: "fixed", left: resizing.x + 14, top: resizing.y + 14, zIndex: 100, pointerEvents: "none", padding: "5px 10px", borderRadius: 7, background: "#1C2630", color: "#fff", font: "700 12px " + FONTS, whiteSpace: "nowrap", boxShadow: "0 8px 18px -8px rgba(0,0,0,.5)" }}>
+          {spanDays(resizing.job.date, resizing.end) > 1 ? dayLabel(resizing.job.date) + " – " + dayLabel(resizing.end) + " · " + spanDays(resizing.job.date, resizing.end) + " days" : "One day · " + dayLabel(resizing.job.date)}
+        </div>
+      )}
 
       {/* Mobile view — phones get a readable, tappable list instead of the grid */}
       <div className="wp-mobile">
@@ -775,7 +1069,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
 
       {menu && (
         <JobMenu x={menu.x} y={menu.y} job={jobs.find((j) => j.id === menu.job.id) || menu.job} P={P} roster={roster}
-          title={dayLabel(menu.job.date) + " · " + nameOf(menu.job.c)} items={menuItems}
+          title={(menu.job.date ? dayLabel(menu.job.date) : "Unscheduled") + " · " + nameOf(menu.job.c)} items={menuItems(menu.job)}
           onPick={onMenuPick} onClose={() => setMenu(null)} />
       )}
 
@@ -803,13 +1097,14 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
           <div style={{ width: 440, maxWidth: "100%", maxHeight: "92vh", overflow: "auto", background: P.surface, borderRadius: 14, boxShadow: "0 24px 60px -20px rgba(0,0,0,.55)" }}>
             <div style={{ background: P.header, color: P.headerText, padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <span style={{ fontFamily: SEMI, fontWeight: 700, fontSize: 19 }}>{editing.isNew ? "New job" : "Edit job"}</span>
-              <span style={{ fontFamily: COND, fontWeight: 600, fontSize: 13, color: P.headerSub }}>{nameOf(editing.c) + " · " + dayLabel(editing.date)}</span>
+              <span style={{ fontFamily: COND, fontWeight: 600, fontSize: 13, color: P.headerSub }}>{nameOf(editing.c) + " · " + (editing.date ? (editing.end && editing.end > editing.date ? dayLabel(editing.date) + " – " + dayLabel(editing.end) : dayLabel(editing.date)) : "Unscheduled")}</span>
             </div>
             <div style={{ padding: "18px 20px", display: "flex", flexDirection: "column", gap: 13 }}>
               <div style={{ display: "flex", gap: 12 }}>
                 <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 5 }}><span style={lbl(P)}>Contractor</span><select className="wp-field" style={fieldStyle} value={editing.c} onChange={(e) => setField("c", e.target.value)}>{roster.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
                 <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 5 }}><span style={lbl(P)}>Day</span>
-                  <select className="wp-field" style={fieldStyle} value={editing.date || ""} onChange={(e) => setField("date", e.target.value)}>
+                  <select className="wp-field" style={fieldStyle} value={editing.date || ""} onChange={(e) => setEditDate(e.target.value || null)}>
+                    {(v2 || !editing.date) && <option value="">{v2 ? "No date (Unscheduled)" : "Pick a day"}</option>}
                     {editing.date && !windowList.some((x) => x.date === editing.date) && <option value={editing.date}>{dayLabel(editing.date)}</option>}
                     {[0, 1, 2, 3].map((w) => (
                       <optgroup key={w} label={"Week " + (w + 1)}>
@@ -819,6 +1114,14 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
                   </select>
                 </label>
               </div>
+              {v2 && editing.date && (
+                <label style={{ display: "flex", flexDirection: "column", gap: 5 }}><span style={lbl(P)}>Last day</span>
+                  <select className="wp-field" style={fieldStyle} value={editing.end && editing.end > editing.date ? editing.end : ""} onChange={(e) => setField("end", e.target.value || null)}>
+                    <option value="">{"Same day (one-day job)"}</option>
+                    {endChoices(editing).map((iso) => <option key={iso} value={iso}>{dayLabel(iso) + " · " + spanDays(editing.date, iso) + " days"}</option>)}
+                  </select>
+                </label>
+              )}
               <div style={{ display: "flex", gap: 12 }}>
                 <label style={{ width: 120, display: "flex", flexDirection: "column", gap: 5 }}><span style={lbl(P)}>Start time</span><input className="wp-field" style={fieldStyle} value={editing.t} onChange={(e) => setField("t", e.target.value)} placeholder="08:00" /></label>
                 <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 5 }}><span style={lbl(P)}>Status</span><select className="wp-field" style={fieldStyle} value={editing.st} onChange={(e) => setField("st", e.target.value)}><option value="booked">Booked</option><option value="done">Done</option><option value="cancelled">Cancelled</option></select></label>

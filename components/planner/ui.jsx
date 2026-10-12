@@ -29,7 +29,9 @@ export const lbl = (P) => ({ fontFamily: COND, fontWeight: 600, fontSize: 12, le
 // state: "lifted" (held on iPad), "source" (being dragged: a faded outline is
 // left behind), "ghost" (the copy that follows the pointer). clash: the person
 // is double-booked that day. seg: { i, n } for one day of a multi-day job.
-export function JobCard({ j, cdef, P, dark, state = null, clash = false, seg = null, handlers = null, interactive = false }) {
+// stretch: pointer-down handler for the handle on the right edge that
+// stretches the job across days (shown on the day the job ends).
+export function JobCard({ j, cdef, P, dark, state = null, clash = false, seg = null, handlers = null, interactive = false, stretch = null }) {
   const c = cdef[j.c] || { color: P.muted };
   const cancelled = j.st === "cancelled";
   const imp = !!j.imp && !cancelled;
@@ -63,11 +65,20 @@ export function JobCard({ j, cdef, P, dark, state = null, clash = false, seg = n
         transition: "transform .12s ease, box-shadow .12s ease",
         userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none",
         position: "relative",
+        paddingRight: stretch ? 16 : 8,
       }}>
+      {seg && seg.i > 1 && <span aria-hidden="true" title="Continues from the day before" style={{ position: "absolute", left: -2, top: "50%", transform: "translate(-50%,-50%)", width: 14, height: 14, borderRadius: 999, background: P.accent2, color: "#fff", font: "700 11px/13px " + FONTS, textAlign: "center", zIndex: 1 }}>{"‹"}</span>}
+      {seg && seg.i < seg.n && <span aria-hidden="true" title="Continues the next day" style={{ position: "absolute", right: -8, top: "50%", transform: "translateY(-50%)", width: 14, height: 14, borderRadius: 999, background: P.accent2, color: "#fff", font: "700 11px/13px " + FONTS, textAlign: "center", zIndex: 1 }}>{"›"}</span>}
+      {stretch && (
+        <span className="wp-grip" data-multi={seg && seg.n > 1 ? "" : undefined} title="Drag to stretch across days" aria-label="Stretch across days" onPointerDown={stretch}
+          style={{ position: "absolute", top: 0, right: 0, bottom: 0, width: 12, borderRadius: "0 5px 5px 0", cursor: "ew-resize", touchAction: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <span style={{ width: 4, height: 16, borderLeft: "1.5px solid currentColor", borderRight: "1.5px solid currentColor" }} />
+        </span>
+      )}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 6 }}>
         <span style={{ fontFamily: COND, fontWeight: 700, fontSize: 14, color: imp ? RED : P.accent2 }}>{j.t || "—"}</span>
         <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap", justifyContent: "flex-end" }}>
-          {warn && <span title="This person has another job at the same time that day" style={{ font: "700 9px/1 " + FONTS, letterSpacing: ".06em", textTransform: "uppercase", padding: "3px 5px", borderRadius: 999, background: P.amber, color: "#1A2530" }}>{"⚠ Double-booked"}</span>}
+          {warn && <span title="This person has another job at the same time that day" style={{ whiteSpace: "nowrap", font: "700 9px/1 " + FONTS, letterSpacing: ".06em", textTransform: "uppercase", padding: "3px 5px", borderRadius: 999, background: P.amber, color: "#1A2530" }}>{"⚠ Double-booked"}</span>}
           {imp && <span style={{ font: "700 9px/1 " + FONTS, letterSpacing: ".08em", textTransform: "uppercase", padding: "3px 5px", borderRadius: 3, background: RED, color: "#fff" }}>{"Important"}</span>}
           <Pill k={j.st} dark={dark} />
         </div>
