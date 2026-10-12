@@ -149,7 +149,10 @@ body isn't recorded in the repo, so it was left untouched. To fix: record its
 current body in `supabase/`, then make it return nothing when
 `public.billing_enforced_for(owner)` is true and `public.access_level(owner)`
 isn't `full`. Keep it SECURITY DEFINER with an empty search_path, and never
-add "force row level security" to the planner tables.
+add "force row level security" to the planner tables. The app now reads the
+link through `planner_shared_v2()` (`supabase/planner-share-v2.sql`), which
+calls `planner_shared()` first and returns nothing whenever it does, so this
+one change covers both.
 
 ## Reconciliation: card disputes aren't checked
 
