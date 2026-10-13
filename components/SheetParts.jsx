@@ -17,6 +17,7 @@ import { pickerGroups, librarySymbols, picksFromSettings } from "@/lib/symbolLib
 import SymbolLibrary from "@/components/SymbolLibrary";
 import { findFurniture, FURNITURE, FURNITURE_VIEWBOX, FURNITURE_COLOUR } from "@/lib/furniture.jsx";
 import { drawSymbol } from "@/lib/symbolPdf";
+import { WIRE_STRENGTHS, normaliseWireStrength, wireStyle } from "@/lib/wireStrength";
 import { buildInitialBoq, addMissingLabour, reconcileBoq, hasTypedDrawingQtys, isDrawingLinked, newBoqItem, templateForEditing, templateForSaving, newTemplateItem } from "@/lib/boqTemplate";
 import { useApp } from "@/components/AppShell";
 import { DEFAULT_TITLEBLOCK, resizeImageToDataUrl } from "@/lib/titleBlock";
@@ -73,7 +74,7 @@ const TOOLS = {
  * ========================================================================= */
 export function TopBar({
   meta, onHome, theme, onToggleTheme, onShowMeta, onImport, onUndo, onRedo, onSave, savedFlash, onShowProjects,
-  onExportJSON, onPrint, colourMode, onToggleColour, onNormalise, normaliseFlash,
+  onExportJSON, onPrint, colourMode, onToggleColour, wireStrength, onWireStrength, onNormalise, normaliseFlash,
   snapEnabled, onToggleSnap, onShowBoq, onShowTitleBlock, onShowNotes,
   sidebarHidden, onToggleSidebar, trialPill = null, onEditFloorPlan = null, onShowShortcuts = null, shortcutsOpen = false,
 }) {
@@ -117,6 +118,7 @@ export function TopBar({
           snapEnabled={snapEnabled} onToggleSnap={onToggleSnap}
           onNormalise={onNormalise} normaliseFlash={normaliseFlash}
           colourMode={colourMode} onToggleColour={onToggleColour}
+          wireStrength={wireStrength} onWireStrength={onWireStrength}
           sidebarHidden={sidebarHidden} onToggleSidebar={onToggleSidebar}
           theme={theme} onToggleTheme={onToggleTheme}
         />
@@ -336,16 +338,27 @@ export function TbMenuItem({ icon: Icon, label, onClick, title, checked, right =
   );
 }
 
-// "View" dropdown: Grid, Reset sizes, colour mode, Hide panels, Light/dark.
+// "View" dropdown: Grid, Reset sizes, colour mode, wire lines, Hide panels,
+// Light/dark.
 function ViewMenu({ snapEnabled, onToggleSnap, onNormalise, normaliseFlash, colourMode, onToggleColour,
-                    sidebarHidden, onToggleSidebar, theme, onToggleTheme }) {
+                    wireStrength, onWireStrength, sidebarHidden, onToggleSidebar, theme, onToggleTheme }) {
   const colourLabel = colourMode === "navy" ? "Navy" : colourMode === "red" ? "Classic Red" : colourMode === "colour" ? "Colour" : "Mono";
   return (
-    <TbMenu icon={SlidersHorizontal} label="View" title="View options">
+    <TbMenu icon={SlidersHorizontal} label="View" title="View options" width="w-64">
       <TbMenuItem icon={Grid3x3} label="Grid" checked={Boolean(snapEnabled)} onClick={onToggleSnap} />
       <TbMenuItem icon={Ruler} label={normaliseFlash ? "Sizes reset ✓" : "Reset sizes"} onClick={onNormalise} title="Make all symbols the same size" />
       <TbMenuItem icon={PaletteIcon} label="Colours" onClick={onToggleColour} title="Cycle the symbol colours"
         right={<span className="text-[11px] font-semibold text-[#22808F]">{colourLabel}</span>} />
+      {/* Wire lines: how dark and thick the dashed wiring lines draw, on screen,
+          in print and in the PDF. Saved on the drawing. */}
+      {onWireStrength && (
+        <div className="px-3 pt-1.5 pb-2" title="How dark and thick the dashed wiring lines are, on screen, in print and in the PDF">
+          <div className="flex items-center gap-2.5 h-7 text-[12px] font-medium text-slate-700 dark:text-slate-200">
+            <Cable size={15} className="shrink-0 text-[#22808F]" /> Wire lines
+          </div>
+          <ChoiceGroup label="Wire lines" options={WIRE_STRENGTHS} value={normaliseWireStrength(wireStrength)} onChange={onWireStrength} />
+        </div>
+      )}
       <TbPanelsItem hidden={sidebarHidden} onClick={onToggleSidebar} />
       <TbThemeItem theme={theme} onClick={onToggleTheme} />
     </TbMenu>
@@ -787,7 +800,7 @@ export function Workspace({
   bgImage, placed, wires, annotations,
   furniture,
   walls, wallDraft, wallCursor, wallThickness,
-  legendItems, colourMode, symbolSize,
+  legendItems, colourMode, wireStrength, symbolSize,
   wireStart, onWireSelect,
   spacePressed, DRAW, showGrid, gridSize,
   onViewportMouseDown, onViewportMouseMove, onViewportMouseUp, onViewportDoubleClick,
@@ -885,6 +898,7 @@ export function Workspace({
           walls={walls} wallDraft={wallDraft} wallCursor={wallCursor} wallThickness={wallThickness}
           legendItems={legendItems}
           colourMode={colourMode}
+          wireStrength={wireStrength}
           symbolSize={symbolSize}
           wireStart={wireStart} onWireSelect={onWireSelect}
           spacePressed={spacePressed}
@@ -927,7 +941,7 @@ export function Sheet({
   bgImage, placed, wires, annotations, legendItems,
   furniture,
   walls, wallDraft, wallCursor, wallThickness,
-  colourMode, symbolSize, wireStart, onWireSelect,
+  colourMode, wireStrength, symbolSize, wireStart, onWireSelect,
   spacePressed, DRAW, showGrid, gridSize, zoom, pan, viewportRef,
   onDrawingDrop, onDrawingDragOver, onDrawingDragLeave,
   onItemMouseDown, onAnnotationBodyMouseDown, onAnnotationAnchorMouseDown,
@@ -974,7 +988,7 @@ export function Sheet({
         placed={placed} wires={wires} annotations={annotations}
         furniture={furniture}
         walls={walls} wallDraft={wallDraft} wallCursor={wallCursor} wallThickness={wallThickness}
-        colourMode={colourMode} symbolSize={symbolSize}
+        colourMode={colourMode} wireStrength={wireStrength} symbolSize={symbolSize}
         wireStart={wireStart} onWireSelect={onWireSelect}
         spacePressed={spacePressed} zoom={zoom} pan={pan} viewportRef={viewportRef}
         showGrid={showGrid} gridSize={gridSize}
@@ -1437,28 +1451,18 @@ function PlanBackground({ bgImage, imageDisplay, viewportRef }) {
   );
 }
 
-// Switch-to-light link lines ("wires"). Quiet by default so the symbols stay
-// the main thing on a busy sheet: a lighter tint of the line colour, a thinner
-// line and short dashes. Sizes are sheet units, and the sheet prints at A3
-// (1 unit = 0.265 mm): a 0.21 mm line, 1.1 mm dashes, 0.8 mm gaps. The editor
-// and the print sheet both draw with this, and the PDF overlay is captured
-// from the print sheet, so screen, print and PDF match. Hovered or selected
-// in the editor, a line shows at full strength. Saved wires are unchanged.
-const WIRE = {
-  width: 0.8,
-  dash: "4 3",
-  // 55% of the full colour, mixed with white (a tint, not opacity, so crossing
-  // lines don't darken where they overlap and every printer shows the same)
-  colour: (mode) => (mode === "mono" ? "#787878" : "#EC8888"),
-  fullWidth: 1.2,
-  fullColour: (mode) => (mode === "mono" ? "#0a0a0a" : "#dc2626"),
-};
+// Switch-to-light link lines ("wires") draw with wireStyle() (lib/wireStrength):
+// the drawing's Wire lines setting (Light / Standard / Bold) decides how dark
+// and thick they are. The editor and the print sheet both use it, and the PDF
+// overlay is captured from the print sheet, so screen, print and PDF match.
+// Hovered (Select tool) or selected in the editor, a line shows at full
+// strength. Saved wires are unchanged.
 
 function DrawingArea({
   drawingAreaRef, DRAW, bgImage, placed, wires, annotations,
   furniture,
   walls, wallDraft, wallCursor, wallThickness,
-  colourMode, symbolSize, wireStart, onWireSelect, spacePressed,
+  colourMode, wireStrength, symbolSize, wireStart, onWireSelect, spacePressed,
   zoom, pan, viewportRef, showGrid, gridSize,
   onDrop, onDragOver, onDragLeave,
   onItemMouseDown, onAnnotationBodyMouseDown, onAnnotationAnchorMouseDown,
@@ -1476,6 +1480,7 @@ function DrawingArea({
   const selectedAnnoId = selection?.kind === "annotation" ? selection.id : null;
   const selectedWireId = selection?.kind === "wire" ? selection.id : null;
   const [hoverWireId, setHoverWireId] = useState(null);
+  const wireLook = wireStyle(wireStrength, colourMode);
   // Fit the bgImage into the drawing area
   const imageDisplay = useMemo(
     () => (bgImage ? planFootprint(DRAW, bgImage.w, bgImage.h) : null),
@@ -1569,9 +1574,9 @@ function DrawingArea({
               )}
               <line
                 x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-                stroke={isSel ? "#22808F" : full ? WIRE.fullColour(colourMode) : WIRE.colour(colourMode)}
-                strokeWidth={isSel ? 1.8 : full ? WIRE.fullWidth : WIRE.width}
-                strokeDasharray={WIRE.dash}
+                stroke={isSel ? "#22808F" : full ? wireLook.hoverColour : wireLook.colour}
+                strokeWidth={isSel ? 1.8 : full ? wireLook.hoverWidth : wireLook.width}
+                strokeDasharray={wireLook.dash}
                 strokeLinecap="butt"
                 style={{ pointerEvents: "none" }}
               />
@@ -3447,7 +3452,7 @@ function withFreshLinks(bg, links) {
 
 // notice / closeLabel: used when the preview is the whole view (a lapsed
 // subscription's read-only drawings) rather than a step from the editor.
-export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1, DRAW, onClose, onPrint, notice = null, closeLabel = null, onShowBoq = null }) {
+export function PrintPreview({ project, legendItems, colourMode, wireStrength, symbolScale = 1, DRAW, onClose, onPrint, notice = null, closeLabel = null, onShowBoq = null }) {
   const { meta, notes } = project;
   const projectSheets = project.sheets && project.sheets.length
     ? project.sheets
@@ -3815,6 +3820,7 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
                 placed={s.placed} wires={s.wires} annotations={s.annotations}
                 legendItems={legendFor(s.placed)}
                 colourMode={colourMode}
+                wireStrength={wireStrength}
                 symbolScale={typeof s.symbolScale === "number" ? s.symbolScale : symbolScale}
                 DRAW={DRAW}
                 onPlanError={onPlanError}
@@ -3870,7 +3876,7 @@ export function PrintPreview({ project, legendItems, colourMode, symbolScale = 1
 }
 
 // A non-interactive version of the Sheet used by Print Preview.
-function PrintSheet({ meta, notes, bgImage, placed, wires, annotations, legendItems, colourMode, symbolScale = 1, DRAW, onPlanError }) {
+function PrintSheet({ meta, notes, bgImage, placed, wires, annotations, legendItems, colourMode, wireStrength, symbolScale = 1, DRAW, onPlanError }) {
   return (
     <div style={{
       width: SHEET.width, height: SHEET.height,
@@ -3892,6 +3898,7 @@ function PrintSheet({ meta, notes, bgImage, placed, wires, annotations, legendIt
         bgImage={bgImage}
         placed={placed} wires={wires} annotations={annotations}
         colourMode={colourMode}
+        wireStrength={wireStrength}
         symbolScale={symbolScale}
         onPlanError={onPlanError}
       />
@@ -3959,11 +3966,12 @@ function NotesColumnStatic({ notes }) {
   );
 }
 
-function DrawingAreaStatic({ DRAW, bgImage, placed, wires, annotations, colourMode, symbolScale = 1, onPlanError }) {
+function DrawingAreaStatic({ DRAW, bgImage, placed, wires, annotations, colourMode, wireStrength, symbolScale = 1, onPlanError }) {
   const imageDisplay = useMemo(
     () => (bgImage ? planFootprint(DRAW, bgImage.w, bgImage.h) : null),
     [bgImage, DRAW.w, DRAW.h]
   );
+  const wireLook = wireStyle(wireStrength, colourMode);
 
   return (
     <div data-plan-area="" style={{
@@ -3989,8 +3997,8 @@ function DrawingAreaStatic({ DRAW, bgImage, placed, wires, annotations, colourMo
           return (
             <line key={w.id}
               x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-              stroke={WIRE.colour(colourMode)}
-              strokeWidth={WIRE.width} strokeDasharray={WIRE.dash} strokeLinecap="butt"/>
+              stroke={wireLook.colour}
+              strokeWidth={wireLook.width} strokeDasharray={wireLook.dash} strokeLinecap="butt"/>
           );
         })}
         {annotations.map(a => {
