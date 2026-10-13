@@ -59,6 +59,7 @@ function wrap(text, font, size, width, maxLines) {
     .map((c) => ({ ...c, items: S.CATALOGUE.filter((s) => s.category === c.key && (!proof || !originalIds.has(s.id))) }))
     .filter((c) => c.items.length);
   const total = S.CATALOGUE.length, nNew = S.CATALOGUE.filter((s) => !originalIds.has(s.id)).length;
+  const nDraft = S.CATALOGUE.filter((s) => s.draft).length;
 
   const cellW = proof ? 112 : 70, cellH = proof ? 118 : 66, glyph = proof ? 72 : 32;
   const cols = Math.floor((A3[0] - 2 * M) / cellW);
@@ -74,13 +75,13 @@ function wrap(text, font, size, width, maxLines) {
     const top = A3[1] - M;
     page.drawText(proof ? "Symbol Library - drawing proof (new symbols)" : "Plotwire Symbol Library - review sheet", { x: M, y: top - 16, size: 16, font: bold, color: NAVY });
     if (!proof) {
-      page.drawText(safe(`${total} symbols by category: ${total - nNew} existing (as used today, unchanged) and ${nNew} new, drawn in-house and marked DRAFT (hidden from users until approved).`), { x: M, y: top - 33, size: 8.5, font, color: GREY });
+      page.drawText(safe(`${total} symbols by category: ${total - nNew} existing (as used today, unchanged) and ${nNew} new, drawn in-house${nDraft ? `, ${nDraft} of them DRAFT (hidden from users until approved)` : ""}.`), { x: M, y: top - 33, size: 8.5, font, color: GREY });
       page.drawText("Each symbol shows its legend code (bold) and name. Drawn as vectors with the app's own PDF export code, in screen colours.", { x: M, y: top - 45, size: 8.5, font, color: GREY });
       // Key
       const kx = A3[0] - M - 210;
       page.drawRectangle({ x: kx, y: top - 36, width: 26, height: 11, color: TEAL });
       page.drawText("NEW", { x: kx + 5.5, y: top - 33, size: 7, font: bold, color: PAPER });
-      page.drawText("= new symbol, draft for approval", { x: kx + 32, y: top - 33, size: 8, font, color: NAVY });
+      page.drawText(nDraft ? "= new symbol, draft for approval" : "= new symbol", { x: kx + 32, y: top - 33, size: 8, font, color: NAVY });
     }
     y = top - headH;
   };

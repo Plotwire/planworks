@@ -1,7 +1,7 @@
 /* ============================================================================
- * Draft symbols: Sockets & power, Distribution, EV & renewables.
+ * Newer symbols: Sockets & power, Distribution, EV & renewables.
  * Drawn in-house with lib/symbolKit.jsx to UK layout-drawing conventions.
- * Drafts are hidden from users until approved (see lib/symbolDrafts/index.js).
+ * Approved as drawn on 13 Oct 2026 (see lib/symbolDrafts/index.js).
  * ========================================================================= */
 
 "use client";

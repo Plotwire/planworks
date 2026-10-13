@@ -1,10 +1,10 @@
 /* ============================================================================
- * Draft symbols: Fire alarm, Data & comms, Security & access, Care/nurse call.
+ * Newer symbols: Fire alarm, Data & comms, Security & access, Care/nurse call.
  * Drawn in-house with lib/symbolKit.jsx to UK layout-drawing conventions:
  * BS 5839-1 style fire alarm devices (call point as a square with a filled
  * centre, detectors as circles lettered by type), nurse call and disabled
  * toilet alarm devices lettered NC / DT.
- * Drafts are hidden from users until approved (see lib/symbolDrafts/index.js).
+ * Approved as drawn on 13 Oct 2026 (see lib/symbolDrafts/index.js).
  * ========================================================================= */
 
 "use client";

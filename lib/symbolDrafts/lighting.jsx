@@ -1,9 +1,9 @@
 /* ============================================================================
- * Draft symbols: Lighting, Emergency lighting, External lighting.
+ * Newer symbols: Lighting, Emergency lighting, External lighting.
  * Drawn in-house with lib/symbolKit.jsx to UK layout-drawing conventions:
  * the emergency mark is a luminaire with its left half filled (BS 5266 style
  * layouts), exit signs carry the running-man pictogram and a direction arrow.
- * Drafts are hidden from users until approved (see lib/symbolDrafts/index.js).
+ * Approved as drawn on 13 Oct 2026 (see lib/symbolDrafts/index.js).
  * ========================================================================= */
 
 "use client";

@@ -3,7 +3,8 @@
 // Checks the catalogue (ids, codes, categories), that every symbol uses only
 // what the PDF export can draw, that the original symbols are exactly as on
 // master (drawing, colours, legend text), that the Domestic starter is the
-// picker exactly as it was, and that presets and BOQ links name real symbols.
+// picker exactly as it was, that no new symbol reaches a picker unticked, and
+// that presets and BOQ links name real symbols.
 // Exits non-zero on any error.
 const path = require("path");
 const fs = require("fs");
@@ -22,7 +23,7 @@ const err = (m) => errors.push(m), warn = (m) => warnings.push(m);
 
 const cat = S.CATALOGUE;
 const originalIds = new Set(Object.values(S.SYMBOLS).flatMap((g) => g.items.map((i) => i.id)));
-const drafts = cat.filter((s) => !originalIds.has(s.id));
+const newer = cat.filter((s) => !originalIds.has(s.id));
 
 // 1. Ids and codes
 const ids = new Set(), codes = new Map();
@@ -44,7 +45,7 @@ for (const id of originalIds) {
   if (s.code === id.toUpperCase()) err(`original ${id} has no ORIGINAL_INFO entry`);
   if (s.draft) err(`original ${id} is marked draft`);
 }
-for (const s of drafts) {
+for (const s of newer) {
   if (!/^[a-z]{2}_[a-z0-9_]+$/.test(s.id)) warn(`${s.id}: id style`);
   if (!s.height) warn(`${s.id}: no mounting height`);
 }
@@ -97,14 +98,16 @@ try {
 for (const p of Lib.PRESETS) for (const id of p.ids) if (!S.findSymbol(id)) err(`preset ${p.key} names unknown symbol ${id}`);
 for (const [k, list] of Object.entries(SECONDFIX_SYMBOLS)) for (const id of list) if (!S.findSymbol(id)) err(`BOQ line ${k} names unknown symbol ${id}`);
 if (Lib.allPicks().some((id) => S.findSymbol(id).draft)) err("a draft symbol can be ticked");
-if (Lib.pickerGroups(drafts.map((s) => s.id)).length) err("draft symbols reach the picker");
+if (Lib.pickerGroups(cat.filter((s) => s.draft).map((s) => s.id)).length) err("draft symbols reach the picker");
+if (Lib.picksFromSettings(undefined).some((id) => !originalIds.has(id))) err("a new symbol reaches the picker of an account that hasn't ticked it");
+for (const s of cat) if (s.isNew && (s.draft || originalIds.has(s.id))) err(`${s.id}: New badge on a ${s.draft ? "draft" : "original"} symbol`);
 if (Lib.picksFromSettings({ picks: ["nope", "sw_light", "sw_light"] }).join() !== "sw_light") err("picksFromSettings doesn't clean saved picks");
 if (Lib.picksFromSettings({ picks: [] }).length !== 0) err("an empty saved selection isn't kept empty");
 
 // Report
 const byCat = Object.fromEntries(S.LIBRARY_CATEGORIES.map((c) => [c.label, [0, 0]]));
 for (const s of cat) byCat[S.LIBRARY_CATEGORIES.find((c) => c.key === s.category).label][originalIds.has(s.id) ? 0 : 1]++;
-console.log(`Catalogue: ${cat.length} symbols (${originalIds.size} original, ${drafts.length} new, ${cat.filter((s) => s.draft).length} draft)`);
+console.log(`Catalogue: ${cat.length} symbols (${originalIds.size} original, ${newer.length} new, ${cat.filter((s) => s.draft).length} draft, ${cat.filter((s) => s.isNew).length} badged New)`);
 for (const [k, [o, n]] of Object.entries(byCat)) console.log(`  ${k.padEnd(24)} ${String(o).padStart(3)} original  ${String(n).padStart(3)} new`);
 for (const p of Lib.PRESETS) console.log(`Preset ${p.label}: ${p.ids.length} named, ${Lib.presetPicks(p.key).length} tickable now`);
 if (warnings.length) { console.log(`\n${warnings.length} warning(s):`); warnings.forEach((w) => console.log("  - " + w)); }

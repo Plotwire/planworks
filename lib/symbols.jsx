@@ -15,7 +15,7 @@
 "use client";
 
 import React from "react";
-import { DRAFT_SYMBOLS, APPROVED } from "./symbolDrafts";
+import { NEWER_SYMBOLS } from "./symbolDrafts";
 
 const STROKE = 1.5;
 const FEEDER = 1.0;
@@ -821,21 +821,22 @@ const ORIGINAL_INFO = {
 
 const CATEGORY_COLOUR = Object.fromEntries(LIBRARY_CATEGORIES.map((c) => [c.key, c.colour]));
 
-// Every symbol: { id, name, code, category, materials, colour, svg, forceColor?, draft }.
+// Every symbol: { id, name, code, category, materials, colour, svg, forceColor?, draft, isNew }.
 // colour is the CATEGORY_COLOURS key it draws in. draft: drawn but not yet
 // approved -- hidden from the library page and the picker (lib/symbolLibrary.js),
-// but still found by findSymbol so nothing that names one can break.
+// but still found by findSymbol so nothing that names one can break. isNew:
+// shows a "New" badge on the library page (lib/symbolDrafts/index.js).
 export const CATALOGUE = [
   ...Object.entries(SYMBOLS).flatMap(([colour, group]) => group.items.map((s) => {
     // (The symbol check script flags any original missing from ORIGINAL_INFO.)
     const [code, category, materials] = ORIGINAL_INFO[s.id] || [s.id.toUpperCase(), "power", "Wiring accessories"];
-    return { ...s, code, category, materials, colour, draft: false };
+    return { ...s, code, category, materials, colour, draft: false, isNew: false };
   })),
-  ...DRAFT_SYMBOLS.map((s) => ({ ...s, colour: CATEGORY_COLOUR[s.category], draft: !APPROVED.has(s.id) })),
+  ...NEWER_SYMBOLS.map((s) => ({ ...s, colour: CATEGORY_COLOUR[s.category] })),
 ];
 
 // The newer symbols' legend text, alongside the originals' (which are untouched).
-for (const s of DRAFT_SYMBOLS) {
+for (const s of NEWER_SYMBOLS) {
   if (!SYMBOL_META[s.id]) SYMBOL_META[s.id] = { description: s.description || s.name, height: s.height || "Per location" };
 }
 

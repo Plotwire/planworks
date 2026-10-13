@@ -246,3 +246,14 @@ layout may rely on it. To fix: find what needs the full-height wrapper (most
 likely the app root), give that element its own class or `h-full`, narrow the
 rule to it, then check the dashboard, the editor, the sketch tool and every
 modal and toast still lay out correctly.
+
+## Symbol Library: retire the "New" badge on the October 2026 symbols
+
+*Added 13 Oct 2026 (branch symbol-library).*
+
+The 253 in-house symbols approved on 13 Oct 2026 show a "New" badge on the
+Symbol Library page, so accounts can spot them without them appearing in
+anyone's picker. The badge doesn't expire by itself. After a few weeks live,
+set `isNew: false` on that batch in `lib/symbolDrafts/index.js` and run
+`node scripts/symbol-library/check.cjs`. (The folder name `symbolDrafts` is
+historical: approved batches live there too.)

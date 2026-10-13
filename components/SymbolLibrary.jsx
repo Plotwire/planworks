@@ -11,8 +11,9 @@
  *
  * Used as the /symbols page and, from the editor's "More symbols…" link, as a
  * window over the editor (modal) so an open drawing is never left.
- * Draft symbols are never offered; development builds can show them, greyed
- * out and not tickable, for review.
+ * Newly approved symbols carry a "New" badge; they are never ticked for anyone
+ * until the account ticks them. Draft symbols are never offered; development
+ * builds can show them, greyed out and not tickable, for review.
  * ========================================================================= */
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -22,6 +23,7 @@ import { LIBRARY_CATEGORIES, SYMBOL_META, VIEWBOX, resolveColours } from "@/lib/
 import { librarySymbols, PRESETS, presetPicks, allPicks, picksFromSettings } from "@/lib/symbolLibrary";
 
 const DEV = process.env.NODE_ENV !== "production";
+const HAS_DRAFTS = librarySymbols({ drafts: true }).some((s) => s.draft);
 const SAVE_DELAY = 600;
 
 function Preview({ sym, size = 44 }) {
@@ -189,7 +191,7 @@ export default function SymbolLibrary({ onClose, modal = false }) {
               {c.label} <i>{countIn(c.key)}</i>
             </button>
           ))}
-          {DEV && (
+          {DEV && HAS_DRAFTS && (
             <label className="lib-dev" title="Development builds only: draft symbols are never offered to users">
               <input type="checkbox" checked={showDrafts} onChange={(e) => setShowDrafts(e.target.checked)}/> Show drafts
             </label>
@@ -220,15 +222,16 @@ export default function SymbolLibrary({ onClose, modal = false }) {
                     {c.items.map((s) => {
                       const meta = SYMBOL_META[s.id] || {};
                       const isOn = picks.has(s.id);
+                      const badge = s.draft ? "Draft" : s.isNew ? "New" : null;
                       return (
-                        <label key={s.id} className={"lib-card" + (isOn ? " is-on" : "") + (s.draft ? " is-draft" : "")} title={(meta.description || s.name) + (meta.height ? " · " + meta.height : "")}>
-                          <input type="checkbox" checked={isOn} disabled={s.draft} onChange={() => toggle(s.id)} aria-label={s.name}/>
+                        <label key={s.id} className={"lib-card" + (isOn ? " is-on" : "") + (s.draft ? " is-draft" : "") + (badge ? " has-badge" : "")} title={(meta.description || s.name) + (meta.height ? " · " + meta.height : "")}>
+                          <input type="checkbox" checked={isOn} disabled={s.draft} onChange={() => toggle(s.id)} aria-label={s.name + (badge ? " (" + badge.toLowerCase() + ")" : "")}/>
                           <Preview sym={s}/>
                           <span className="lib-card-t">
                             <span className="lib-name">{s.name}</span>
                             <span className="lib-meta"><b>{s.code}</b>{s.materials}</span>
                           </span>
-                          {s.draft && <span className="lib-draft">Draft</span>}
+                          {badge && <span className={s.draft ? "lib-draft" : "lib-new"} aria-hidden="true">{badge}</span>}
                         </label>
                       );
                     })}
@@ -303,14 +306,16 @@ html.dark .pw-lib .lib-link{color:var(--teal)}
 .pw-lib .lib-card:hover{border-color:rgba(63,183,201,.6)}
 .pw-lib .lib-card.is-on{border-color:var(--teal-600); background:var(--on)}
 .pw-lib .lib-card.is-draft{cursor:default; opacity:.7; border-style:dashed}
-.pw-lib .lib-card.is-draft .lib-card-t{padding-right:36px}
+.pw-lib .lib-card.has-badge .lib-card-t{padding-right:36px}
 .pw-lib .lib-card input{width:17px; height:17px; flex:none; margin:0; accent-color:var(--teal-600); cursor:inherit}
 .pw-lib .lib-card svg{background:#fff; border-radius:8px; padding:2px}
 .pw-lib .lib-card-t{display:flex; flex-direction:column; gap:3px; min-width:0}
 .pw-lib .lib-name{font-size:12.5px; font-weight:600; color:var(--ink); line-height:1.25; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden}
 .pw-lib .lib-meta{font-size:11px; color:var(--muted); line-height:1.3; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .pw-lib .lib-meta b{color:var(--ink-2); margin-right:6px; font-weight:700}
-.pw-lib .lib-draft{position:absolute; top:6px; right:7px; font-size:9.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--navy); background:#F2B233; border-radius:4px; padding:1px 5px}
+.pw-lib .lib-draft, .pw-lib .lib-new{position:absolute; top:6px; right:7px; font-size:9.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--navy); border-radius:4px; padding:1px 5px}
+.pw-lib .lib-draft{background:#F2B233}
+.pw-lib .lib-new{background:var(--teal-600)}
 .pw-lib .lib-empty{padding:18px 4px; font-size:13px; color:var(--muted)}
 
 @media (max-width:640px){

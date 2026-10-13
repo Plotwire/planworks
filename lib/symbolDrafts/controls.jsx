@@ -1,9 +1,9 @@
 /* ============================================================================
- * Draft symbols: Switching & controls, Heating & ventilation.
+ * Newer symbols: Switching & controls, Heating & ventilation.
  * Drawn in-house with lib/symbolKit.jsx to UK layout-drawing conventions:
  * switches keep the original pivot-and-lever mark, with key, timer and
  * sensor variants marked beside it.
- * Drafts are hidden from users until approved (see lib/symbolDrafts/index.js).
+ * Approved as drawn on 13 Oct 2026 (see lib/symbolDrafts/index.js).
  * ========================================================================= */
 
 "use client";
