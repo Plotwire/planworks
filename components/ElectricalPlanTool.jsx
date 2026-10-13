@@ -26,6 +26,7 @@ import { getSketchData } from "@/lib/cad/sketchStore";
 import { SHEET, DRAW } from "@/lib/cad/sheet";
 import { applyPlanToSheet, scaleLabel, outsideNote } from "@/lib/cad/planScale";
 import { DEFAULT_TITLEBLOCK } from "@/lib/titleBlock";
+import { normaliseWireStrength, wireStrengthField } from "@/lib/wireStrength";
 import { useTryUsage, useTryPrompt, TryPill, TryPrompt, LOCKED, drawingSymbolCount } from "@/components/TryMode";
 import { ShortcutsCard, StatusHint, TOUCH } from "@/components/Shortcuts";
 import dynamic from "next/dynamic";
@@ -107,6 +108,7 @@ function freshProject() {
     titleBlock: null, // null = use the account default; set = job-specific
     colourMode: "red",     // new drawings start on Classic Red; the toolbar palette
                            // button still cycles red -> mono -> navy -> colour
+    // (no wireStrength: new drawings start on Standard; see lib/wireStrength)
     sheets: [sheet],
     activeSheetId: sheet.id,
   };
@@ -136,7 +138,8 @@ function normaliseProject(p) {
       // when present, so sheets without one are unchanged.
       ...(s.sketchId ? { sketchId: s.sketchId } : {}),
     }));
-    return { meta, notes: projNotesText, boq: p.boq || null, titleBlock: p.titleBlock || null, colourMode: p.colourMode || "colour", sheets, activeSheetId: sheets.find(s => s.id === p.activeSheetId) ? p.activeSheetId : sheets[0].id };
+    // Wire lines: kept only when not Standard, so older drawings are unchanged.
+    return { meta, notes: projNotesText, boq: p.boq || null, titleBlock: p.titleBlock || null, colourMode: p.colourMode || "colour", ...wireStrengthField(p.wireStrength), sheets, activeSheetId: sheets.find(s => s.id === p.activeSheetId) ? p.activeSheetId : sheets[0].id };
   }
   // Legacy flat project → wrap its drawing into a single sheet.
   const sheet = {
@@ -152,7 +155,7 @@ function normaliseProject(p) {
     notes: seedNotes(null),
     symbolScale: typeof p.symbolScale === "number" ? p.symbolScale : 1,
   };
-  return { meta, notes: projNotesText, boq: p.boq || null, titleBlock: p.titleBlock || null, colourMode: p.colourMode || "colour", sheets: [sheet], activeSheetId: sheet.id };
+  return { meta, notes: projNotesText, boq: p.boq || null, titleBlock: p.titleBlock || null, colourMode: p.colourMode || "colour", ...wireStrengthField(p.wireStrength), sheets: [sheet], activeSheetId: sheet.id };
 }
 
 // ---- Plan-image storage helpers --------------------------------------------
@@ -540,6 +543,10 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const symbolScale = activeSheet.symbolScale ?? 1;
   const setSymbolScale = (v) => setActiveSheet({ symbolScale: v });
   const colourMode = project.colourMode || "colour";
+  // Wire lines (View menu): saved on the drawing like the colours; Standard is
+  // stored as no field at all (lib/wireStrength).
+  const wireStrength = normaliseWireStrength(project.wireStrength);
+  const setWireStrength = (v) => setProject(({ wireStrength: _old, ...p }) => ({ ...p, ...wireStrengthField(v) }));
   const [isPanning, setIsPanning] = useState(false);
   const [spacePressed, setSpacePressed] = useState(false);
   const [draggingFile, setDraggingFile] = useState(false);
@@ -2022,6 +2029,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         onPrint={access.isTry ? () => tryPrompt.show(LOCKED.export) : () => setPrintPreview(true)}
         colourMode={colourMode}
         onToggleColour={() => setProject(p => ({ ...p, colourMode: ({ navy: "colour", colour: "red", red: "mono", mono: "navy" })[p.colourMode || "colour"] }))}
+        wireStrength={wireStrength}
+        onWireStrength={setWireStrength}
         onNormalise={normaliseSizes}
         normaliseFlash={normaliseFlash}
         snapEnabled={snapEnabled}
@@ -2114,6 +2123,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
             wallThickness={WALL_THICKNESS}
             legendItems={legendItems}
             colourMode={colourMode}
+            wireStrength={wireStrength}
             symbolSize={48 * symbolScale}
             wireStart={wireStart}
             onWireSelect={onWireSelect}
@@ -2245,6 +2255,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
           project={project}
           legendItems={legendItems}
           colourMode={colourMode}
+          wireStrength={wireStrength}
           symbolScale={symbolScale}
           DRAW={DRAW}
           onClose={readOnly ? leaveToDashboard : () => setPrintPreview(false)}
