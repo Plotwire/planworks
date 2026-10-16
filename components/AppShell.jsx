@@ -341,7 +341,7 @@ function AppGates({ children }) {
       // the session, so it keeps the crash-recovery draft too.
       clearSignedOutDeviceData();
       // Nor the drawings, plan images and saves kept for a weak signal.
-      await clearDevice();
+      await clearDevice(sessionUserId);
       // Nor a remembered return from Stripe: signing out on purpose isn't the
       // "session expired on the way back" case that sends them to sign-in.
       forgetCheckoutReturn();
@@ -436,7 +436,7 @@ function AppGates({ children }) {
     const kept = uid ? await keptAccount(uid, "company") : undefined;
     if (kept) show(kept);
     try {
-      const [profile, logos] = await Promise.all([getCompanyProfile(), listCompanyLogos()]);
+      const [profile, logos] = await Promise.all([getCompanyProfile(), listCompanyLogos({ strict: true })]);
       show({ profile, logos });
       if (uid) keepAccount(uid, "company", { profile, logos });
     } catch (err) {

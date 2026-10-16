@@ -313,3 +313,9 @@ None of these lose work.
 - **App icons are static PNGs** in `public/icons` (drawn by a script from the
   dashboard's brandmark). Next's icon generator (`next/og`) fails to build
   on Windows with Node 24 ("Invalid URL"), so it isn't used.
+- **If the browser's storage stops working mid-session** (rare: some private
+  windows, or iOS dropping its storage process), the drawings outbox keeps
+  saves in that tab's memory until they upload (`memOnly` in
+  `lib/device/outbox.js`). The status bar still says "Saved on this device",
+  but they're lost if the tab is closed before signal returns. To fix, show a
+  distinct status for memory-only saves and warn before the tab closes.
