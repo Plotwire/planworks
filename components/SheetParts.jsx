@@ -2187,6 +2187,30 @@ export function StatusCount({ label, value }) {
   return <span>{label} <span className="text-[#22808F] ml-1" style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>{value}</span></span>;
 }
 
+// Where this drawing's last save is (lib/device/outbox), for the status bar.
+// Waiting or stuck, it's a button that tries again now.
+const SYNC_LABELS = {
+  local:   { text: "Saved on this device", dot: "#94A3B8", title: "Saved on this device. It goes up to your account in the background." },
+  syncing: { text: "Saved on this device", dot: "#3FB7C9", title: "Saved on this device, and going up to your account now." },
+  synced:  { text: "Synced", dot: "#2C97A8", title: "Saved to your account." },
+  waiting: { text: "Waiting for signal", dot: "#E0A100", title: "Saved on this device. It will go up to your account as soon as there's signal. Tap to try now." },
+  stuck:   { text: "Couldn't sync", dot: "#D9534F", title: "Saved on this device, but your account wouldn't take it yet. It keeps trying. Tap to try now." },
+};
+export function SyncStatus({ state, onRetry }) {
+  const s = SYNC_LABELS[state];
+  if (!s) return null;
+  const retry = state === "waiting" || state === "stuck";
+  const body = (
+    <>
+      <span aria-hidden className={`inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle${state === "syncing" ? " animate-pulse" : ""}`} style={{ background: s.dot }} />
+      {s.text.toUpperCase()}
+    </>
+  );
+  return retry
+    ? <button type="button" onClick={onRetry} title={s.title} role="status" className="mr-4 hover:text-slate-700 dark:hover:text-slate-200 underline-offset-2 hover:underline">{body}</button>
+    : <span title={s.title} role="status" className="mr-4">{body}</span>;
+}
+
 // keys: the editor's + / - / 0 in the tooltips (the sketch has no zoom keys).
 export function ZoomControls({ zoom, onIn, onOut, onFit, keys = true }) {
   return (

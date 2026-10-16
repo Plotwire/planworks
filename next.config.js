@@ -1,6 +1,17 @@
+// Names this build for the service worker (public/sw.js): a new deploy
+// installs a new worker, which drops the previous build's cached pages.
+// Vercel sets VERCEL_GIT_COMMIT_SHA; a local build uses the time.
+const BUILD_ID = (process.env.VERCEL_GIT_COMMIT_SHA || `local-${Date.now()}`).slice(0, 24);
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  env: { NEXT_PUBLIC_BUILD_ID: BUILD_ID },
+  // The service worker itself must never be cached by the browser, or a new
+  // deploy's worker would be missed.
+  async headers() {
+    return [{ source: "/sw.js", headers: [{ key: "Cache-Control", value: "no-cache, no-store, must-revalidate" }, { key: "Service-Worker-Allowed", value: "/" }] }];
+  },
   // ESLint isn't configured yet; setting it up is a separate cleanup, so we
   // don't let it block Vercel builds for now. Revisit when we add tooling.
   eslint: {

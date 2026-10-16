@@ -24,6 +24,10 @@ import { LEGAL_LINKS } from "@/lib/legal";
 import TermsGate from "@/components/TermsGate";
 import RotateNotice from "@/components/RotateNotice";
 import { hasAcceptedCurrentTerms, recordTermsAcceptance, acceptedAtSignup } from "@/lib/termsAcceptance";
+import { LEGAL_VERSION } from "@/lib/legal";
+import { registerServiceWorker } from "@/lib/device/serviceWorker";
+import { startDevice, pauseDevice, clearDevice, unsentCount } from "@/lib/device/session";
+import { rememberGate, recallGate, forgetGate } from "@/lib/device/gates";
 
 const AppCtx = createContext(null);
 export const useApp = () => useContext(AppCtx) || {};
@@ -177,6 +181,9 @@ function AppGates({ children }) {
     try { localStorage.setItem("planworks:theme", theme); } catch {}
   }, [theme]);
 
+  // The app shell cache (public/sw.js): the app opens on a weak signal or none.
+  useEffect(() => { registerServiceWorker(); }, []);
+
   useEffect(() => {
     if (!isConfigured || !supabase) { setChecking(false); setSession(false); return; }
     let active = true;
@@ -218,14 +225,30 @@ function AppGates({ children }) {
     []
   );
 
+  // This account's drawings, plan images and unsent saves on this device
+  // (lib/device): anything kept for another account is deleted, and this
+  // account's waiting saves start uploading.
+  useEffect(() => {
+    if (sessionUserId) startDevice(sessionUserId);
+    else pauseDevice();
+  }, [sessionUserId]);
+
   useEffect(() => {
     const user = session?.user;
-    setTerms({ uid: user?.id || null, step: "unknown", error: "" });
+    // Accepted before, as the server confirmed on this device: straight in,
+    // and checked again below. A weak signal never holds the app at the splash.
+    const termsGate = "terms:" + LEGAL_VERSION;
+    const knownOk = user && recallGate(user.id, termsGate) === true;
+    setTerms({ uid: user?.id || null, step: knownOk ? "ok" : "unknown", error: "" });
     if (!user) return;
     // Also ignore this check once a newer one has started, even for the same
     // user (signed out and back in elsewhere): its answer may be out of date.
     let active = true;
-    const land = (patch) => { if (active) setTermsFor(user.id, patch); };
+    const land = (patch) => {
+      if (!active) return;
+      if (patch.step === "ok") rememberGate(user.id, termsGate, true);
+      setTermsFor(user.id, patch);
+    };
     (async () => {
       try {
         if (await hasAcceptedCurrentTerms(user.id)) { land({ step: "ok" }); return; }
@@ -236,9 +259,13 @@ function AppGates({ children }) {
           land({ step: "ok" });
           return;
         }
+        forgetGate(user.id, termsGate);
         land({ step: "needed" });
       } catch (err) {
         console.warn("terms acceptance check failed:", err?.message);
+        // Already let in on the server's last answer: stay in. The check runs
+        // again on the next start.
+        if (knownOk) return;
         land({
           step: "needed",
           error: "We couldn't confirm that you've accepted the current terms. Tick both boxes and try again.",
@@ -270,12 +297,22 @@ function AppGates({ children }) {
   const signOut = useCallback(async () => {
     const failed = "Couldn't log out. Check your connection and try again.";
     try {
+      // Saves still waiting for signal live only on this device, and logging
+      // out deletes them (below). Say so first.
+      const waiting = await unsentCount(sessionUserId);
+      if (waiting > 0 && !window.confirm(
+        `${waiting === 1 ? "1 save is" : `${waiting} saves are`} still waiting for signal on this device. ` +
+        "If you log out now, those changes will be lost.\n\nLog out anyway?")) {
+        return "Not logged out.";
+      }
       const { error } = (await supabase?.auth.signOut()) || {};
       if (error) return failed;
       // Signed out: don't leave client details or per-user flags on this
       // device (lib/deviceData.js). Only on success -- a failed sign-out keeps
       // the session, so it keeps the crash-recovery draft too.
       clearSignedOutDeviceData();
+      // Nor the drawings, plan images and saves kept for a weak signal.
+      await clearDevice();
       // Nor a remembered return from Stripe: signing out on purpose isn't the
       // "session expired on the way back" case that sends them to sign-in.
       forgetCheckoutReturn();
@@ -283,7 +320,7 @@ function AppGates({ children }) {
     } catch {
       return failed;
     }
-  }, [forgetCheckoutReturn]);
+  }, [forgetCheckoutReturn, sessionUserId]);
 
   // Open the Stripe Customer Portal (change plan / card / cancel).
   const manageBilling = useCallback(async () => {
@@ -333,8 +370,13 @@ function AppGates({ children }) {
     try {
       if (localStorage.getItem(skipKey(uid))) { setProfileStep("ok"); return; }
     } catch { /* storage unavailable -- fall through to the query */ }
+    // Filled in before, as the server confirmed on this device: straight in.
+    const known = recallGate(uid, "profile") === true;
+    if (known) setProfileStep("ok");
     hasCompanyProfile().then(has => {
-      if (active) setProfileStep(has ? "ok" : "needed");
+      if (!active) return;
+      if (has) rememberGate(uid, "profile", true);
+      if (!known) setProfileStep(has ? "ok" : "needed");
     });
     return () => { active = false; };
   }, [session]);

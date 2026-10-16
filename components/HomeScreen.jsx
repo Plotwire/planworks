@@ -2,8 +2,10 @@
 
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Trash2 } from "lucide-react";
-import { listProjects, localProjectsPending, migrateLocalProjects, deleteProjectRow, verifyPassword } from "@/lib/db";
-import { signPlanImages } from "@/lib/planImages";
+import { listProjects, localProjectsPending, migrateLocalProjects, deleteProjectRow, verifyPassword, buildPreview } from "@/lib/db";
+import { planLinks, cachedPlanLinks } from "@/lib/device/planCache";
+import { cachedList, rememberList, forgetDrawing } from "@/lib/device/drawings";
+import { pendingSaves, subscribeOutbox, forgetSaves, syncNow } from "@/lib/device/outbox";
 import { useApp } from "@/components/AppShell";
 import { LEGAL_LINKS } from "@/lib/legal";
 import { TryPill } from "@/components/TryMode";
@@ -126,45 +128,132 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
   const [query, setQuery] = useState("");
   const [migrating, setMigrating] = useState(false);
 
+  // Saves made on this device that haven't reached the server yet
+  // (lib/device/outbox): their cards show the work as saved here, and a new
+  // drawing saved without signal gets a card before it has a row.
+  const [waiting, setWaiting] = useState([]);
+  // The list shown is this device's last copy: the server didn't answer.
+  const [fromDevice, setFromDevice] = useState(false);
+  const uid = user?.id || null;
+  const rowsRef = useRef(null);
+
+  // Cards from list rows, plan thumbnails from `links` (path -> link).
+  const toCards = (rows, links, waitingSaves) => {
+    const byId = new Map((waitingSaves || []).map(e => [e.id, e]));
+    const make = (r, entry) => {
+      const pv = (entry ? buildPreview(entry.data) : r.preview) || {};
+      const path = pv.bg?.path || null;
+      const bg = pv.bg
+        ? { ...pv.bg, src: pv.bg.src || (path && links.get(path)) || null }
+        : null;
+      // Minimal project shape the thumbnail understands (first sheet only).
+      const slimProject = {
+        meta: { plot: pv.plot || "", drawingNumber: pv.drawingNumber || "" },
+        sheets: [{ bgImage: bg, placed: pv.dots || [] }],
+      };
+      return {
+        id: r.id,
+        name: (entry && entry.name) || r.name || "Untitled drawing",
+        addr: pv.plot || "",
+        reg: pv.drawingNumber || "",
+        floors: pv.floors || 1,
+        updatedAt: entry ? new Date(entry.queuedAt).toISOString() : r.updatedAt,
+        count: pv.count || 0,
+        project: slimProject,
+        planPath: path,
+        // Saved on this device, not yet on the server.
+        waiting: Boolean(entry),
+        // Searched, not shown: the client (drawing details and quote) and
+        // the quote reference.
+        client: r.clientName || "",
+        quoteClient: r.quoteClient || "",
+        quoteRef: r.quoteRef || "",
+      };
+    };
+    const listed = new Set(rows.map(r => r.id));
+    // New drawings saved only on this device so far: first, newest first.
+    const fresh = (waitingSaves || []).filter(e => e.kind === "insert" && !listed.has(e.id))
+      .sort((a, b) => b.queuedAt - a.queuedAt)
+      .map(e => make({ id: e.id, name: e.name }, e));
+    return [...fresh, ...rows.map(r => make(r, byId.get(r.id)))];
+  };
+
+  // Plan thumbnails: from this device's copies at once, the rest downloaded
+  // once each in the background (lib/device/planCache), shown as they come.
+  const fillThumbnails = (cardsNow) => {
+    const paths = (cardsNow || []).map(c => c.planPath).filter(Boolean);
+    if (!paths.length) return;
+    planLinks(paths, {
+      onEach: (path, link) => setCards(cs => cs && cs.map(c => (
+        c.planPath === path && c.project.sheets[0].bgImage && !c.project.sheets[0].bgImage.src
+          ? { ...c, project: { ...c.project, sheets: [{ ...c.project.sheets[0], bgImage: { ...c.project.sheets[0].bgImage, src: link } }] } }
+          : c
+      ))),
+    }).catch(() => {});
+  };
+
+  const show = async (rows) => {
+    rowsRef.current = rows;
+    const waits = await pendingSaves(uid);
+    setWaiting(waits);
+    const links = await cachedPlanLinks(rows.map(r => r.preview?.bg?.path).filter(Boolean));
+    const next = toCards(rows, links, waits);
+    setCards(next);
+    return next;
+  };
+
   const load = async () => {
     setLoadError(false);
+    // This device's last list, at once: the dashboard never waits on a weak
+    // signal for drawings it already knows about.
+    let shownFromDevice = false;
+    if (!rowsRef.current) {
+      const kept = await cachedList(uid);
+      if (kept && !rowsRef.current) { await show(kept.rows); shownFromDevice = true; }
+    }
     try {
-      const rows = await listProjects();
-      // Sign only the small first-sheet plan image referenced by each preview.
-      const urls = await signPlanImages(rows.map(r => r.preview?.bg?.path).filter(Boolean));
-      const full = rows.map((r) => {
-        const pv = r.preview || {};
-        const bg = pv.bg
-          ? { ...pv.bg, src: pv.bg.src || (pv.bg.path && urls.get(pv.bg.path)) || null }
-          : null;
-        // Minimal project shape the thumbnail understands (first sheet only).
-        const slimProject = {
-          meta: { plot: pv.plot || "", drawingNumber: pv.drawingNumber || "" },
-          sheets: [{ bgImage: bg, placed: pv.dots || [] }],
-        };
-        return {
-          id: r.id,
-          name: r.name || "Untitled drawing",
-          addr: pv.plot || "",
-          reg: pv.drawingNumber || "",
-          floors: pv.floors || 1,
-          updatedAt: r.updatedAt,
-          count: pv.count || 0,
-          project: slimProject,
-          // Searched, not shown: the client (drawing details and quote) and
-          // the quote reference.
-          client: r.clientName || "",
-          quoteClient: r.quoteClient || "",
-          quoteRef: r.quoteRef || "",
-        };
-      });
-      setCards(full);
+      const rows = await listProjects({ timeoutMs: 45000 });
+      rememberList(uid, rows);
+      setFromDevice(false);
+      fillThumbnails(await show(rows));
     } catch (err) {
       console.error(err);
+      if (shownFromDevice || rowsRef.current) {
+        setFromDevice(true);
+        return;
+      }
       setCards(null);
       setLoadError(true);
     }
   };
+
+  // Saves reaching the server: the list catches up. A save that had to be
+  // kept as a copy (the drawing changed somewhere else) says so here too.
+  useEffect(() => {
+    let t = null;
+    const off = subscribeOutbox((ev) => {
+      if (ev.type === "status") {
+        pendingSaves().then((w) => { setWaiting(w); if (rowsRef.current) show(rowsRef.current); });
+        return;
+      }
+      if (ev.type === "copied") setToast(`"${ev.name}" was saved as a new drawing: the original was changed somewhere else.`);
+      clearTimeout(t);
+      t = setTimeout(() => load(), 800);
+    });
+    return () => { off(); clearTimeout(t); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- load/show read refs
+
+  // The editor's code, fetched while the dashboard sits idle, so the first
+  // drawing opens without waiting for it (and opens with no signal later).
+  useEffect(() => {
+    if (typeof navigator !== "undefined" && navigator.connection?.saveData) return;
+    const warm = () => { import("@/components/ElectricalPlanTool").catch(() => {}); };
+    const t = setTimeout(() => {
+      if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(warm, { timeout: 8000 });
+      else warm();
+    }, 2500);
+    return () => clearTimeout(t);
+  }, []);
 
   // "All drawings" in the rail: every saved drawing is in the list below,
   // newest first. Clears a search and scrolls to it.
@@ -193,6 +282,11 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
   // stale fetch can't resurrect it.
   const onDeleted = (card) => {
     setCards(cs => (cs || []).filter(c => c.id !== card.id));
+    if (rowsRef.current) rowsRef.current = rowsRef.current.filter(r => r.id !== card.id);
+    // Nor kept on this device, nor any save of it still waiting.
+    forgetDrawing(uid, card.id);
+    forgetSaves(card.id);
+    if (rowsRef.current) rememberList(uid, rowsRef.current);
     setPendingDelete(null);
     setToast(`Deleted "${card.name}"`);
   };
@@ -393,6 +487,26 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
               {cards && cards.length > 0 && <span className="muted-count">{cards.length} saved · newest first</span>}
             </div>
 
+            {(waiting.length > 0 || fromDevice) && (
+              <div className="access-banner sync-banner" role="status">
+                <div>
+                  {waiting.length > 0 && (
+                    <>
+                      <strong>{waiting.length === 1 ? "1 save is" : `${waiting.length} saves are`} waiting for signal.</strong>
+                      <span> {waiting.length === 1 ? "It's" : "They're"} safe on this device and will upload by {waiting.length === 1 ? "itself" : "themselves"} when there&rsquo;s signal.</span>
+                    </>
+                  )}
+                  {waiting.length === 0 && fromDevice && (
+                    <>
+                      <strong>No signal.</strong>
+                      <span> These are your drawings as this device last saw them. The list updates when there&rsquo;s signal.</span>
+                    </>
+                  )}
+                </div>
+                <button className="mg-primary" onClick={() => { syncNow(); load(); }}>Try now</button>
+              </div>
+            )}
+
             {loadError ? (
               <div className="empty load-error" role="alert">
                 <strong>Your drawings couldn&rsquo;t be loaded.</strong>
@@ -412,6 +526,7 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
                     <div className="thumb">
                       <span className="badge">{c.reg || "A3"}</span>
                       {c.floors > 1 && <span className="badge badge-floors">{c.floors} floors</span>}
+                      {c.waiting && <span className="badge badge-waiting" title="Saved on this device. It uploads when there's signal.">Waiting for signal</span>}
                       <PlanThumb project={c.project} />
                       <button
                         type="button"
@@ -713,6 +828,10 @@ html.dark .pw-home .access-banner.is-lapsed{background:#2a2114; border-color:#6b
 
 /* Post-delete confirmation */
 .pw-home .badge-floors{left:auto; right:11px; background:rgba(63,183,201,.92); color:#08313a; font-weight:600}
+/* Saved on this device, not yet uploaded (lib/device/outbox) */
+.pw-home .badge-waiting{top:auto; bottom:11px; background:#F6C453; color:#3B2A05; font-weight:600}
+.pw-home .sync-banner{background:linear-gradient(120deg,#FFF6E0,#FFFBEF); border-color:#F1D48A}
+html.dark .pw-home .sync-banner{background:linear-gradient(120deg,#33290f,#2a2412); border-color:#6b5520}
 .pw-home .card-body{padding:14px 16px 15px; transition:background .2s cubic-bezier(.2,.7,.3,1)}
 .pw-home .card-title{font-size:14.5px; font-weight:600; letter-spacing:-.01em; margin-bottom:3px; transition:color .2s cubic-bezier(.2,.7,.3,1); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .pw-home .card-addr{font-size:12.5px; color:var(--muted); transition:color .2s cubic-bezier(.2,.7,.3,1); display:flex; align-items:center; gap:5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}

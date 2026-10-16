@@ -7,9 +7,9 @@ import {
   Palette, Ruler, Hand, Sparkles, Type, Printer, Settings,
   ChevronRight, X, FileText, Eye, EyeOff, Layers,
 } from "lucide-react";
-import { listProjects, getProjectData, getProjectRecord, insertProjectRecord, updateProjectRow, deleteProjectRow, unreferencedPlanPaths } from "@/lib/db";
+import { listProjects, getProjectData, getProjectRecord, deleteProjectRow, unreferencedPlanPaths } from "@/lib/db";
 import { defaultDrawingName } from "@/lib/drawingName";
-import { uploadPlanImage, signPlanImages, deletePlanImages, dataUrlToBlob, blobToDataUrl } from "@/lib/planImages";
+import { uploadPlanImage, signPlanImages, deletePlanImages, blobToDataUrl } from "@/lib/planImages";
 import { ensurePdfjs } from "@/lib/pdfjs";
 import {
   SYMBOLS, SYMBOL_META, CATEGORY_COLOURS, VIEWBOX,
@@ -33,6 +33,11 @@ import { ShortcutsCard, StatusHint, TOUCH } from "@/components/Shortcuts";
 import dynamic from "next/dynamic";
 const CadSketchPanel = dynamic(() => import("@/components/cad/CadSketch"), { ssr: false });
 import { useEditor } from "@/store/editorStore";
+import { toDeviceForm, fromDeviceForm, deviceDrawing, rememberDrawing, forgetDrawing } from "@/lib/device/drawings";
+import { planLinks, cachedPlanLinks, rememberUploadedPlan } from "@/lib/device/planCache";
+import { queueSave, subscribeOutbox, outboxStatus, holdSync, releaseSync, discardSave, forgetSaves, pendingSaves, newDrawingId, syncNow } from "@/lib/device/outbox";
+import { registerPlanUpload } from "@/lib/device/uploads";
+import { SyncStatus } from "@/components/SheetParts";
 
 /* ============================================================================
  * PLOTWIRE — Drawing production tool
@@ -186,23 +191,51 @@ function stripTransientImages(p) {
   };
 }
 
-// Mint signed URLs for every stored image and attach them as `src` for render.
+// Attach links (path -> url) as `src` / `pdfSrc` to the plans that don't have
+// one yet. Plan images come from the copies kept on this device
+// (lib/device/planCache), downloaded once per device; see linkPlansLater in
+// the editor.
+function linkPlans(p, links) {
+  if (!p || !links || !links.size) return p;
+  let changed = false;
+  const sheets = (p.sheets || []).map(s => {
+    const bg = s.bgImage;
+    if (!bg) return s;
+    let nbg = bg;
+    if (bg.path && !bg.src && links.get(bg.path)) nbg = { ...nbg, src: links.get(bg.path) };
+    if (bg.pdfPath && !bg.pdfSrc && links.get(bg.pdfPath)) nbg = { ...nbg, pdfSrc: links.get(bg.pdfPath) };
+    if (nbg === bg) return s;
+    changed = true;
+    return { ...s, bgImage: nbg };
+  });
+  return changed ? { ...p, sheets } : p;
+}
+
+// The status bar's sync label for a saved drawing: its waiting save's state,
+// or "synced" when nothing of it is waiting (lib/device/outbox). None for a
+// drawing that was never saved.
+const syncLabel = (id) => outboxStatus(id) || (id ? "synced" : null);
+
+// Plans already on this device get their links now; the rest follow in the
+// background (the editor's linkPlansLater).
 async function hydrateImages(p) {
-  const paths = collectImagePaths(p);
-  if (!paths.length) return p;
-  let urls;
-  try { urls = await signPlanImages(paths); } catch { return p; }
-  return {
-    ...p,
-    sheets: (p.sheets || []).map(s => {
-      const bg = s.bgImage;
-      if (!bg) return s;
-      let nbg = bg;
-      if (bg.path && urls.get(bg.path)) nbg = { ...nbg, src: urls.get(bg.path) };
-      if (bg.pdfPath && urls.get(bg.pdfPath)) nbg = { ...nbg, pdfSrc: urls.get(bg.pdfPath) };
-      return nbg === bg ? s : { ...s, bgImage: nbg };
-    }),
-  };
+  try { return linkPlans(p, await cachedPlanLinks(collectImagePaths(p))); } catch { return p; }
+}
+
+// What the user has drawn, for "has anything changed since it was shown?":
+// the project without the short-lived image links, the active tab or its row.
+function editSignature(p) {
+  try {
+    return JSON.stringify({
+      ...p, _recordId: null, activeSheetId: null,
+      sheets: (p?.sheets || []).map(s => {
+        const bg = s.bgImage;
+        if (!bg) return s;
+        const { src, pdfSrc, ...rest } = bg;
+        return { ...s, bgImage: { ...rest, inline: !rest.path && typeof src === "string" ? src.slice(0, 120) : null } };
+      }),
+    });
+  } catch { return String(Math.random()); }
 }
 
 const isBlobUrl = (url) => typeof url === "string" && url.startsWith("blob:");
@@ -249,52 +282,10 @@ async function storeTabOnlyPdf(pdfSrc) {
   }
 }
 
-// Make a project safe to persist: migrate any legacy base64 image into Storage,
-// then drop transient src. Returns the persist-ready project.
-async function prepareProjectForSave(p) {
-  const sheets = await Promise.all((p?.sheets || []).map(async (s) => {
-    const bg = s.bgImage;
-    if (!bg) return s;
-    // An original PDF held only in this tab is not stored here: that happens in
-    // the background (storeOriginalPdf) so a save never waits on a large file,
-    // and the path is persisted by the next save.
-    if (bg.path) { const { src, pdfSrc, ...rest } = bg; return { ...s, bgImage: rest }; }
-    if (typeof bg.src === "string" && bg.src.startsWith("data:")) {
-      try {
-        const { path } = await uploadPlanImage(dataUrlToBlob(bg.src));
-        return { ...s, bgImage: { path, w: bg.w, h: bg.h } };
-      } catch (err) {
-        console.warn("image migrate-on-save failed; keeping inline:", err?.message);
-        // Keep the base64 rather than lose the plan -- but not a blob: pdfSrc,
-        // which dies with the tab and on reopen would be tried instead of the
-        // inline image, leaving the plan blank.
-        const { pdfSrc, ...keep } = bg;
-        return { ...s, bgImage: isBlobUrl(pdfSrc) ? keep : bg };
-      }
-    }
-    // A blob: URL with no path means the background upload never succeeded (the
-    // caller has already waited for it). The blob is still readable in this
-    // tab, so store it now. If even that fails, refuse the save: storing the
-    // drawing without its plan would lose the plan for good on reopen.
-    if (typeof bg.src === "string" && bg.src.startsWith("blob:")) {
-      try {
-        const blob = await (await fetch(bg.src)).blob();
-        const { path } = await uploadPlanImage(blob);
-        return { ...s, bgImage: { path, w: bg.w, h: bg.h } };
-      } catch (err) {
-        console.warn("plan upload on save failed:", err?.message);
-        throw new Error("The plan image couldn't be stored, so the drawing wasn't saved. Check your connection and try again.");
-      }
-    }
-    return s;
-  }));
-  const { _recordId, ...rest } = p; // which row it came from: the editor's own note, never stored
-  return { ...rest, sheets };
-}
-
 // After a save, copy any newly-minted paths back onto in-memory sheets while
 // keeping their working display `src`, so subsequent saves/drafts stay tiny.
 function mergeSavedPaths(current, safe) {
+  if (!safe) return current;
   const byId = new Map((safe?.sheets || []).map(s => [s.id, s.bgImage]));
   return {
     ...current,
@@ -457,7 +448,10 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   activeSheetIdRef.current = project.activeSheetId;
 
   // Title block: per-project, falling back to the account default for new jobs.
-  const { titleBlock: accountTitleBlock, saveTitleBlock, access = {} } = useApp();
+  const { titleBlock: accountTitleBlock, saveTitleBlock, access = {}, user } = useApp();
+  // The signed-in account: this device's copies are kept under it (lib/device).
+  const uidRef = useRef(user?.id || null);
+  uidRef.current = user?.id || null;
   const effectiveTitleBlock = project.titleBlock || accountTitleBlock || DEFAULT_TITLEBLOCK;
 
   // Drawing-level fields live on the active sheet; everything else on the project.
@@ -493,7 +487,6 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   // import still carries its plan's stored path instead of a blob: link that
   // dies with the tab.
   const planUploadsRef = useRef(new Map());
-  const [finishingUpload, setFinishingUpload] = useState(false);
 
   // Store a sheet's original PDF (held only as a blob: link in this tab) in
   // the background, and attach its path to the sheet once stored. Saves never
@@ -512,42 +505,17 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     });
   }, []);
 
-  // The single way a project is made ready to persist.
-  const readyToSave = useCallback(async (p) => {
-    // Retry, in the background, any original PDF whose upload failed earlier.
-    // Not for a sheet whose raster is still uploading: the import starts the
-    // PDF itself once the raster is stored, and starting it now would only
-    // slow down the raster this save is about to wait for.
+  // Each save retries, in the background, any original PDF whose upload failed
+  // earlier. Not for a sheet whose raster is still uploading: the import starts
+  // the PDF itself once the raster is stored.
+  const retryOriginalPdfs = (p) => {
     (p?.sheets || []).forEach(s => {
       const bg = s.bgImage;
       if (bg && !bg.pdfPath && isBlobUrl(bg.pdfSrc) && !planUploadsRef.current.has(s.id)) {
         storeOriginalPdf(s.id, bg.pdfSrc);
       }
     });
-    const pending = [...planUploadsRef.current.entries()];
-    if (pending.length) {
-      setFinishingUpload(true);
-      try {
-        const settled = new Map(await Promise.all(
-          pending.map(async ([sheetId, upload]) => [sheetId, { upload, bg: await upload.done }])
-        ));
-        p = {
-          ...p,
-          sheets: (p.sheets || []).map(s => {
-            const r = settled.get(s.id);
-            // Only where this snapshot still shows the plan that was uploading.
-            if (r && r.bg && s.bgImage && s.bgImage.src === r.upload.displayUrl) {
-              return { ...s, bgImage: r.bg };
-            }
-            return s;
-          }),
-        };
-      } finally {
-        setFinishingUpload(false);
-      }
-    }
-    return prepareProjectForSave(p);
-  }, []);
+  };
   const updateBoq = useCallback((boq) => {
     setProject(p => ({ ...p, boq }));
   }, []);
@@ -615,6 +583,11 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const [showProjects, setShowProjects] = useState(false); // project manager modal
   const [projectList, setProjectList] = useState([]);   // saved projects index
   const [currentProjectId, setCurrentProjectId] = useState(null);
+  // This drawing's save status on this device (lib/device/outbox): "local",
+  // "syncing", "synced", "waiting" or "stuck"; null before its first save here.
+  const [syncState, setSyncState] = useState(null);
+  // A short message about this drawing (a newer version arrived, ...).
+  const [openNote, setOpenNote] = useState("");
   // Opening a saved drawing: "opening" until it arrives, then "ready";
   // "failed" (couldn't be fetched) or "missing" (no such drawing) if it
   // doesn't. Nothing can be edited or saved until "ready" (openProjectById).
@@ -630,6 +603,20 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   // The version (updated_at) of each row this editor has loaded or saved, by
   // id: a save only writes over the version it was based on (writeRecord).
   const versionsRef = useRef(new Map());
+  // The waiting saves this editor's work follows on from (lib/device/outbox):
+  // the tag of its own last save of the drawing on screen, or of the save it
+  // opened from (lastTagRef), and every tag it has written or opened from
+  // (myTagsRef). A save only joins a waiting save it had seen, and only a
+  // save of its own moves this editor on (the outbox listener): the same
+  // drawing open in another tab can't write over this tab's work, or this
+  // tab over that one's.
+  const lastTagRef = useRef(null);
+  const myTagsRef = useRef(new Set());
+  const noteTag = (tag, current = true) => {
+    if (!tag) return;
+    myTagsRef.current.add(tag);
+    if (current) lastTagRef.current = tag;
+  };
   // Which unsaved new drawing this is, for its crash-recovery draft
   // (NEW_DRAFT_KEY); null once it has a row.
   const newKeyRef = useRef(null);
@@ -801,14 +788,15 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     patchSheetById(targetId, { bgImage: { src: displayUrl, w, h, ...pdfNow }, sketchId: null });
     setTimeout(fitToScreen, 60);
     // Registered BEFORE the upload starts, so a save that follows immediately
-    // always finds it and waits (see readyToSave).
+    // always finds it: the outbox waits for this upload rather than sending the
+    // plan twice (registerPlanUpload below, lib/device/uploads).
     const upload = { displayUrl, done: null };
     planUploadsRef.current.set(targetId, upload);
     // A slow upload must never put an older plan back. Its result lands only
     // while it is the sheet's newest import AND the sheet still shows it (it
     // may since have been replaced by a Floor Plan, say). A superseded upload
     // changes nothing, but `done` still resolves with its bgImage for a save
-    // whose snapshot shows this plan (see readyToSave).
+    // whose snapshot shows this plan.
     const isNewest = () => planUploadsRef.current.get(targetId) === upload;
     const applyToSheet = (bg) => setProject(p => ({
       ...p,
@@ -819,6 +807,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     upload.done = (async () => {
       try {
         const { path } = await uploadPlanImage(blob);
+        // Kept on this device under its stored path: never downloaded again here.
+        rememberUploadedPlan(path, blob);
         const storedBg = { src: displayUrl, w, h, path, ...pdfNow };
         if (isNewest()) {
           applyToSheet(storedBg);
@@ -840,6 +830,9 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         if (planUploadsRef.current.get(targetId) === upload) planUploadsRef.current.delete(targetId);
       }
     })();
+    // A save made before this finishes keeps the plan on the device, and its
+    // upload (lib/device/outbox) waits for this one rather than sending it again.
+    registerPlanUpload(displayUrl, upload.done.then(bg => bg?.path || null));
   };
 
   const handleFile = async (file) => {
@@ -1673,8 +1666,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     }
   }, []);
 
-  // Load the project list once on mount
-  useEffect(() => { refreshProjectList(); }, [refreshProjectList]);
+  // The list is only needed by the Projects window, which loads it when it
+  // opens (onShowProjects): not fetched on every open of a drawing.
 
   // Let the route layer know the current project id (for linkable URLs).
   useEffect(() => {
@@ -1724,9 +1717,10 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     while (queuedSavesRef.current > 0) await saveQueueRef.current;
   };
 
+  // The save is on this device (lib/device/outbox uploads it). The Projects
+  // list and Try totals are refreshed when it reaches the server (the outbox
+  // listener below).
   const confirmSaved = () => {
-    refreshProjectList(); // not awaited: the list isn't part of the save
-    tryUsageRef.current.refresh(); // Try mode: the saved totals just changed
     setSavedFlash(true);
     setTimeout(() => setSavedFlash(false), 1500);
   };
@@ -1743,17 +1737,29 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   //     sitting on an older copy can't overwrite a newer save made elsewhere.
   // Either check failing writes nothing: saveProject keeps the work as a new
   // drawing instead (keepAsNewDrawing).
+  //
+  // Saves go to this device first (lib/device/outbox): writeRecord puts the
+  // work on the device and returns at once; the outbox uploads it in the
+  // background, retrying until there is signal, and only over the version it
+  // was based on. If that version has changed or gone by then, the outbox
+  // keeps the work as "<name> (copy)" and the listener below moves the editor
+  // onto the copy and says so, as keepAsNewDrawing does.
   const belongsTo = (p, id) => Boolean(id && p && p._recordId === id && versionsRef.current.has(id));
-  // Resolves to { ok: true, safe } once written, or { ok: false, reason } --
-  // "other" (not this row's work) or "changed" (changed or gone since) -- with
-  // nothing written. Throws if the save itself failed.
+  // Resolves to { ok: true, queued: true } once the work is on this device,
+  // or { ok: false, reason } with nothing saved: "other" (not this row's
+  // work) or "changed" (another tab's save of it is waiting). Throws only if
+  // the device couldn't take it.
   const writeRecord = async (p, id, name) => {
     if (!belongsTo(p, id)) return { ok: false, reason: "other" };
-    const safe = await readyToSave(p);
-    const r = await updateProjectRow(id, name, safe, { expectedVersion: versionsRef.current.get(id) });
-    if (!r.ok) return { ok: false, reason: "changed" };
-    versionsRef.current.set(id, r.version);
-    return { ok: true, safe };
+    retryOriginalPdfs(p);
+    const data = await toDeviceForm(p);
+    const r = await queueSave({ id, name, data, base: versionsRef.current.get(id), expect: lastTagRef.current });
+    // Another tab's save of this drawing is waiting, made after this one
+    // last looked: kept as a copy (saveProject), never merged over it.
+    if (r.conflict) return { ok: false, reason: "changed" };
+    noteTag(r.tag);
+    setSyncState(syncLabel(id));
+    return { ok: true, queued: true };
   };
   // The name a save gives the row: the project name (a new drawing starts
   // with one, freshProject), else what unnamed drawings have always been.
@@ -1870,11 +1876,18 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   // save keeps its work as a new drawing (rename: true -- the editor takes the
   // new name), and by the first Save of a new drawing (rename: false -- a name
   // typed while it waited is kept).
+  // Saved to this device at once with the id the new row will have, and
+  // uploaded by the outbox (lib/device/outbox). Until it is, the version is
+  // unknown (undefined): later saves of it join the waiting upload.
   const insertAsNewProject = async (p, name, { stillLoaded, rename }) => {
     try {
-      const safe = await readyToSave({ ...p, meta: { ...p.meta, projectName: name } });
-      const { id, version } = await insertProjectRecord(name, safe);
-      versionsRef.current.set(id, version);
+      const id = newDrawingId();
+      retryOriginalPdfs(p);
+      const data = await toDeviceForm({ ...p, meta: { ...p.meta, projectName: name } });
+      const { tag } = await queueSave({ id, name, data, kind: "insert" });
+      noteTag(tag, false);
+      versionsRef.current.set(id, undefined);
+      const safe = null;
       // A new drawing's crash-recovery backup is saved work from now on.
       if (newKeyRef.current && readDraft(NEW_DRAFT_KEY)?.sessionKey === newKeyRef.current) {
         removeDraft(NEW_DRAFT_KEY);
@@ -1886,7 +1899,9 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         // guard, writeRecord).
         currentProjectIdRef.current = id;
         newKeyRef.current = null;
+        lastTagRef.current = tag;
         setCurrentProjectId(id);
+        setSyncState(syncLabel(id));
         // Merged into the live project, so edits made while this save waited
         // on an upload survive.
         setProject(prev => ({
@@ -1913,27 +1928,68 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   // initial: the open this editor was started for. It may offer the
   // crash-recovery backup, and if it fails it offers Retry or Back instead of
   // leaving a blank sheet that looks like the drawing.
+  //
+  // A drawing kept on this device (lib/device/drawings) opens at once from
+  // that copy, editable straight away, and the server's version is checked in
+  // the background (checkLatest). One that isn't is fetched as before, behind
+  // "Opening drawing…". Plan images never hold up the open: they are shown
+  // from this device's copies, or arrive in the background (linkPlansLater).
   const openSeqRef = useRef(0);
   const openProjectById = async (id, { initial = false } = {}) => {
     const seq = ++openSeqRef.current;
     const live = () => aliveRef.current && openSeqRef.current === seq;
+    const uid = uidRef.current;
+
+    // ---- This device's copy, if it has one ----
+    let local = null, waiting = null;
+    try {
+      local = uid ? await deviceDrawing(uid, id) : null;
+      waiting = uid ? (await pendingSaves(uid)).find(e => e.id === id) || null : null;
+    } catch { local = null; waiting = null; }
+    if (!live()) return;
+    // A save of it still waiting is the newest work on this device.
+    const kept = waiting && waiting.data ? waiting.data : local && local.data;
+    if (kept) {
+      // Nothing of this drawing goes up while its latest version is checked.
+      holdSync(id);
+      let shown = null;
+      try {
+        const np = normaliseProject(await fromDeviceForm(kept));
+        const links = await cachedPlanLinks(collectImagePaths(np));
+        shown = { ...linkPlans(np, links), activeSheetId: np.sheets[0].id, _recordId: id };
+      } catch (err) {
+        console.warn("device copy unreadable:", err?.message || err);
+      }
+      if (!live()) { releaseSync(id); return; }
+      if (shown) {
+        // Based on the version its waiting save was (if it has one), else the
+        // version this copy is.
+        const version = waiting ? waiting.base : local.version;
+        showOpened(id, shown, version, initial, waiting ? waiting.tag : null);
+        checkLatest(id, seq, shown, version, Boolean(waiting));
+        return;
+      }
+      releaseSync(id);
+    }
+
+    // ---- Not on this device: fetched, as before ----
     setOpenState("opening");
     let loaded = null, version = null, missing = false;
     try {
-      const rec = await getProjectRecord(id);
+      const rec = await getProjectRecord(id, { timeoutMs: 60000 });
       if (!live()) return;
       if (!rec || !rec.data) {
         missing = true;
       } else {
         const np = normaliseProject(rec.data);
-        // Mint signed URLs for any Storage-backed plan images before showing.
-        const hydrated = await hydrateImages(np);
+        const links = await cachedPlanLinks(collectImagePaths(np));
         if (!live()) return;
         // Always open on the first drawing (ground floor), regardless of which
         // sheet was active when the project was last saved. Stamped with its
         // row: only this work may be saved over it (writeRecord).
-        loaded = { ...hydrated, activeSheetId: hydrated.sheets[0].id, _recordId: id };
+        loaded = { ...linkPlans(np, links), activeSheetId: np.sheets[0].id, _recordId: id };
         version = rec.version;
+        if (uid) rememberDrawing(uid, id, { name: rec.data?.meta?.projectName || "", data: rec.data, version });
       }
     } catch (err) {
       console.warn("Open failed:", err?.message || err);
@@ -1945,7 +2001,14 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       alert(missing ? "Could not find that project." : "Open failed.");
       return;
     }
+    showOpened(id, loaded, version, initial);
+  };
+
+  // Put an opened drawing on screen (either path above).
+  const showOpened = (id, loaded, version, initial, tag = null) => {
     versionsRef.current.set(id, version);
+    lastTagRef.current = null;
+    noteTag(tag);
     // Read now, before this drawing's own backup is written over the draft.
     const offer = initial ? draftOfferOnOpen(id, version, loaded) : null;
     // Bumped only when the project actually arrives: a save asked for before
@@ -1955,12 +2018,147 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     setProject(loaded);
     currentProjectIdRef.current = id;
     setCurrentProjectId(id);
+    setSyncState(syncLabel(id));
+    setOpenNote("");
     setOpenState("ready");
     setShowProjects(false);
     setHistory([]); setFuture([]);
     setRecovery(offer);
     setTimeout(fitToScreen, 50);
+    linkPlansLater();
   };
+
+  // The server's version of a drawing opened from this device's copy. If it
+  // is newer and nothing has been changed here since it was shown, the newer
+  // version replaces it on screen. If something has (or this device had a
+  // save of its own waiting), the work here is kept: when it goes up, the
+  // outbox finds the newer version and saves it as "(copy)" -- the drawing
+  // safety rule. With no signal, the device copy simply carries on.
+  const checkLatest = async (id, seq, shown, version, hadWaiting) => {
+    const live = () => aliveRef.current && openSeqRef.current === seq;
+    const sigShown = editSignature(shown);
+    try {
+      const rec = await getProjectRecord(id, { timeoutMs: 60000 });
+      if (!live()) return;
+      if (!rec || !rec.data) {
+        setOpenNote("This drawing has been deleted somewhere else. Saving keeps your work as a new drawing.");
+        return;
+      }
+      if (rec.version === version) return; // this device's copy is the latest
+      const edited = editSignature(useEditor.getState().project) !== sigShown;
+      if (hadWaiting || edited) {
+        setOpenNote("A newer version of this drawing was saved on another device. Your changes here will be saved as a copy.");
+        return;
+      }
+      // Nothing changed here: a save asked for since holds nothing new.
+      if (await discardSave(id, lastTagRef.current)) lastTagRef.current = null;
+      const np = normaliseProject(rec.data);
+      const links = await cachedPlanLinks(collectImagePaths(np));
+      if (!live() || editSignature(useEditor.getState().project) !== sigShown) return;
+      versionsRef.current.set(id, rec.version);
+      setProject(prev => ({
+        ...linkPlans(np, links),
+        activeSheetId: np.sheets.some(s => s.id === prev.activeSheetId) ? prev.activeSheetId : np.sheets[0].id,
+        _recordId: id,
+      }));
+      setHistory([]); setFuture([]);
+      setSyncState(syncLabel(id));
+      const uid = uidRef.current;
+      if (uid) rememberDrawing(uid, id, { name: rec.data?.meta?.projectName || "", data: rec.data, version: rec.version });
+      setOpenNote("Updated to the latest version from the server.");
+      setTimeout(() => setOpenNote(n => (n.startsWith("Updated to the latest") ? "" : n)), 4000);
+      linkPlansLater();
+    } catch (err) {
+      // No signal: carry on with this device's copy.
+      console.warn("latest version check failed:", err?.message || err);
+    } finally {
+      releaseSync(id);
+    }
+  };
+
+  // Plans without a link yet: images from this device's copies or downloaded
+  // once (planCache), each shown as it arrives; original PDFs from the kept
+  // copy if any, else a signed link as before, kept for next time in the
+  // background. Never holds anything up; tried again when signal returns.
+  const linkPlansLater = () => {
+    const gen = loadGenRef.current;
+    const ok = () => aliveRef.current && loadGenRef.current === gen;
+    const p = useEditor.getState().project;
+    const sheets = p?.sheets || [];
+    const images = sheets.map(s => s.bgImage).filter(bg => bg && bg.path && !bg.src).map(bg => bg.path);
+    const pdfs = sheets.map(s => s.bgImage).filter(bg => bg && bg.pdfPath && !bg.pdfSrc).map(bg => bg.pdfPath);
+    if (images.length) {
+      planLinks(images, { onEach: (path, link) => { if (ok()) setProject(prev => linkPlans(prev, new Map([[path, link]]))); } })
+        .catch(() => {});
+    }
+    if (pdfs.length) {
+      (async () => {
+        const kept = await cachedPlanLinks(pdfs);
+        const missing = pdfs.filter(x => !kept.has(x));
+        const signed = missing.length ? await signPlanImages(missing) : new Map();
+        if (ok()) setProject(prev => linkPlans(prev, new Map([...signed, ...kept])));
+        if (missing.length) planLinks(missing).catch(() => {});
+      })().catch(() => {});
+    }
+  };
+  useEffect(() => {
+    const again = () => linkPlansLater();
+    window.addEventListener("online", again);
+    return () => window.removeEventListener("online", again);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- reads the store, not props
+
+  // Once the drawing is up and nothing is happening, fetch the code the PDF
+  // downloads and the sketch tool use, so they work later without signal
+  // (the service worker keeps it). Not on a data-saver connection.
+  useEffect(() => {
+    if (openState !== "ready") return;
+    if (typeof navigator !== "undefined" && navigator.connection?.saveData) return;
+    const warm = () => {
+      import("jspdf").catch(() => {});
+      import("html2canvas").catch(() => {});
+      import("pdf-lib").catch(() => {});
+      import("@/components/cad/CadSketch").catch(() => {});
+    };
+    const t = setTimeout(() => {
+      if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(warm, { timeout: 10000 });
+      else warm();
+    }, 5000);
+    return () => clearTimeout(t);
+  }, [openState]);
+
+  // Saves reaching the server (lib/device/outbox): the editor catches up.
+  useEffect(() => subscribeOutbox((ev) => {
+    const cur = currentProjectIdRef.current;
+    if (ev.type === "status") {
+      if (!ev.id || ev.id === cur) setSyncState(syncLabel(cur));
+      return;
+    }
+    if (ev.previousId !== cur && ev.id !== cur) return; // another drawing
+    // Not this editor's work (the same drawing saved in another tab): this
+    // editor stays on the version it had, so its next save can't write over
+    // that one (it becomes a copy).
+    if (!ev.tag || !myTagsRef.current.has(ev.tag)) return;
+    versionsRef.current.set(ev.id, ev.version);
+    if (ev.id !== ev.previousId) {
+      // Now a different row: the copy, or the id the database chose.
+      versionsRef.current.delete(ev.previousId);
+      currentProjectIdRef.current = ev.id;
+      setCurrentProjectId(ev.id);
+    }
+    setProject(prev => {
+      if (prev._recordId !== ev.previousId && prev._recordId !== ev.id) return prev;
+      const next = { ...mergeSavedPaths(prev, ev.safe), _recordId: ev.id };
+      return ev.type === "copied" ? { ...next, meta: { ...next.meta, projectName: ev.name } } : next;
+    });
+    setSyncState(syncLabel(ev.id));
+    tryUsageRef.current.refresh(); // Try mode: the saved totals just changed
+    if (ev.type === "copied") {
+      const why = ev.reason === "deleted"
+        ? "This drawing was deleted somewhere else after it was opened here, so your version can't go back into it."
+        : "This drawing was changed somewhere else (another tab or device) after it was opened here, so your version can't replace it.";
+      setTimeout(() => window.alert(`${why}\n\nYour work has been saved as a new drawing, "${ev.name}". The other drawing hasn't been changed.`), 0);
+    }
+  }), []); // eslint-disable-line react-hooks/exhaustive-deps -- refs and stable setters only
   // "Retry" after a failed first open.
   const retryOpen = () => {
     if (initialTarget?.projectId) openProjectById(initialTarget.projectId, { initial: true });
@@ -1975,17 +2173,21 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         if (data) paths = collectImagePaths(normaliseProject(data));
       } catch { /* still delete the row even if we can't read it */ }
       await deleteProjectRow(id);
+      // Nor kept on this device any more, nor any save of it still waiting.
+      forgetDrawing(uidRef.current, id);
+      forgetSaves(id);
       // Then, in the background, remove only the files nothing still uses.
       // Checked once this tab's saves have settled: a Save As still waiting on
       // an upload is about to insert a row that shares these files. Kept: any
       // file a remaining row refers to (a Save As copy shares its source's
-      // files) or the canvas shows (a deleted open drawing stays on screen and
-      // can be saved again).
+      // files), the canvas shows (a deleted open drawing stays on screen and
+      // can be saved again), or a save waiting on this device will refer to.
       if (paths.length) {
         whenSavesSettled()
-          .then(() => {
+          .then(async () => {
             const onCanvas = new Set(collectImagePaths(projectRef.current));
-            return unreferencedPlanPaths(paths.filter(path => !onCanvas.has(path)));
+            const waiting = new Set((await pendingSaves(uidRef.current)).flatMap(e => collectImagePaths(e.data)));
+            return unreferencedPlanPaths(paths.filter(path => !onCanvas.has(path) && !waiting.has(path)));
           })
           .then(deletePlanImages);
       }
@@ -2129,6 +2331,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     setHistory([]); setFuture([]);
     setRecovery(null);
     setTimeout(fitToScreen, 60);
+    linkPlansLater();
   };
   const dismissDraft = () => setRecovery(null);
 
@@ -2168,6 +2371,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     if (sessionKey) newKeyRef.current = sessionKey;
     setHistory([]); setFuture([]);
     setTimeout(fitToScreen, 60);
+    linkPlansLater();
   };
 
   // Try mode's Subscribe: save the drawing first (when the save is allowed) so
@@ -2489,19 +2693,6 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
             </div>
           )}
 
-          {/* A save waiting on a plan upload (see readyToSave) */}
-          {finishingUpload && (
-            // Swallows file drops too: it sits over the drawing area's own drop
-            // handler, and an unhandled drop makes the browser open the file.
-            <div className="absolute inset-0 z-30 bg-slate-900/30 backdrop-blur-sm flex items-center justify-center"
-                 onDragOver={e => e.preventDefault()} onDrop={e => e.preventDefault()}>
-              <div className="bg-white px-8 py-5 rounded-xl ring-1 ring-slate-300 flex items-center gap-3">
-                <Sparkles size={16} className="text-[#22808F] animate-pulse"/>
-                <span className="text-xs tracking-[0.2em] uppercase text-slate-800">Finishing plan upload</span>
-              </div>
-            </div>
-          )}
-
           {/* External file drop overlay */}
           {draggingFile && (
             <div className="absolute inset-4 z-30 rounded-2xl border-2 border-dashed border-[#3FB7C9]/60 bg-[#ECF8FA] flex items-center justify-center pointer-events-none">
@@ -2510,7 +2701,16 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
           )}
 
           {/* Status bar */}
-          <StatusBar right={<>SHEET A3 · {meta.scale}</>}>
+          {openNote && (
+            <div role="status" className="absolute top-3 left-1/2 -translate-x-1/2 z-20 max-w-[560px] w-[calc(100%-2rem)] flex items-start gap-3 px-4 py-2.5 rounded-xl bg-white dark:bg-[#16202B] ring-1 ring-slate-200 dark:ring-[#263441] shadow-[0_10px_30px_-10px_rgba(16,28,40,0.3)] text-[12.5px] leading-snug text-slate-700 dark:text-slate-200">
+              <span className="flex-1">{openNote}</span>
+              <button type="button" onClick={() => setOpenNote("")} aria-label="Dismiss" title="Dismiss"
+                className="shrink-0 w-6 h-6 -mr-1 rounded-md flex items-center justify-center bg-[var(--action)] hover:bg-[var(--action-hover)] text-[color:var(--action-ink)]">
+                <X size={13} />
+              </button>
+            </div>
+          )}
+          <StatusBar right={<><SyncStatus state={syncState} onRetry={syncNow} />SHEET A3 · {meta.scale}</>}>
             {/* The counts always show; the hint after them truncates. */}
             <StatusCount label="SYMBOLS" value={placed.length} />
             <StatusCount label="WIRES" value={wires.length} />

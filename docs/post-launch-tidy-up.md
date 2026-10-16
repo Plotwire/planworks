@@ -257,3 +257,31 @@ anyone's picker. The badge doesn't expire by itself. After a few weeks live,
 set `isNew: false` on that batch in `lib/symbolDrafts/index.js` and run
 `node scripts/symbol-library/check.cjs`. (The folder name `symbolDrafts` is
 historical: approved batches live there too.)
+
+## Weak-signal saves: loose ends
+
+*Deferred 16 Oct 2026 (branch site-speed; tests in docs/site-speed-test.md).*
+
+None of these lose work. Each was left to keep the branch small.
+
+- **Orphaned-file report and waiting saves.** A plan uploaded on import is
+  only referred to by a drawing once its save reaches the database. A device
+  left offline for more than 7 days with a save waiting (an iPad in a van)
+  holds such a plan, and `supabase/plan-images-orphans.sql` lists it without
+  the `recent` flag. The report deletes nothing, but before acting on it,
+  widen `recent` to 30 days.
+- **`components/PlanWorksApp.jsx` is unused** and has its own sign-out, which
+  doesn't clear what the device keeps (`clearDevice` in `lib/device/session.js`).
+  Nothing renders it today. Delete the file.
+- **Holding a drawing's upload while the editor checks the server is per tab**
+  (`holdSync` in `lib/device/outbox.js`). With the same drawing open in two
+  tabs, the other tab can upload a do-nothing save during that check, and it
+  becomes an unneeded "(copy)". It's rare and safe. To fix, share holds
+  between tabs over the existing BroadcastChannel.
+- **Uploaded local-plan records** (`markLocalImageUploaded` in
+  `lib/device/planCache.js`) are a few bytes each and stay until sign-out.
+  To fix, trim those older than 30 days in `trim()`.
+- **The service worker's code cache** (`plotwire-static-v1` in `public/sw.js`)
+  is trimmed to 400 files, not cleared per deploy. That's on purpose, so a
+  page from the last deploy can still load its code without signal. If it
+  ever needs clearing, bump the `v1`.
