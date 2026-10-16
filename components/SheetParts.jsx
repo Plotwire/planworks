@@ -26,6 +26,7 @@ import { useEditor } from "@/store/editorStore";
 import { Masthead } from "@/components/TitleBlockMasthead";
 import { isTouchDevice, supersampleFactor } from "@/lib/touch";
 import { dataUrlToBlob, signPlanImage, signPlanImages } from "@/lib/planImages";
+import { cachedPlanLinks } from "@/lib/device/planCache";
 import { BOQ_ESTIMATE_NOTICE } from "@/lib/legal";
 import { TrialSheetMark, TryPrompt, useTryPrompt, LOCKED } from "@/components/TryMode";
 import { addDaysIso, QUOTE_VALID_DAYS, shownOnQuote, lineTotal as boqLineTotal, sectionTotal, boqTotals, outputSettings, materialsDoc, quoteDoc, docToCsv, QUOTE_DETAILS, QUOTE_SHOW, PRESET_SHOW, presetFor, hasQty, badNumberLines, parseNum, expiredValidUntil, fmtDate } from "@/lib/boqOutputs";
@@ -1246,7 +1247,11 @@ function PlanBackground({ bgImage, imageDisplay, viewportRef }) {
   // Load whichever source this sheet has, once per source. A PDF wins when both
   // are present: the raster stored alongside it is only the preview rasterised
   // at import time, and the vector redraws sharper at any zoom.
-  const pdfSrc = bgImage?.pdfSrc || null;
+  // A PDF that can't be shown (no pdf.js, or no PDF file, with no signal)
+  // gives way to the plan image stored with it rather than leave the sheet
+  // blank. Tried again next time the sheet is shown.
+  const [brokenPdf, setBrokenPdf] = useState(null);
+  const pdfSrc = bgImage?.pdfSrc && bgImage.pdfSrc !== brokenPdf ? bgImage.pdfSrc : null;
   const imgSrc = pdfSrc ? null : (bgImage?.src || null);
   const pdfPage = bgImage?.pdfPage || 1;
   useEffect(() => {
@@ -1291,7 +1296,10 @@ function PlanBackground({ bgImage, imageDisplay, viewportRef }) {
           srcRef.current = bitmapSource(img);
         }
         setLoaded(n => n + 1);
-      } catch (e) { console.warn("PlanBackground load failed:", e?.message); }
+      } catch (e) {
+        console.warn("PlanBackground load failed:", e?.message);
+        if (pdfSrc && !dead) setBrokenPdf(pdfSrc);
+      }
     })();
     return () => { dead = true; };
   }, [pdfSrc, imgSrc, pdfPage]);
@@ -3288,9 +3296,15 @@ const EXPORT_PLAN_MAX_AREA_TOUCH = 9_000_000;
 // already has -- a local blob: link from this session, or a signed link that
 // may have expired -- and `path` is its stored copy. The existing link is used
 // first, so nothing local or still valid is downloaded again; if it is missing
-// or fails, a fresh signed link is minted from `path` and tried once.
+// or fails, the copy kept on this device (lib/device/planCache) is used, so a
+// PDF can be made with no signal; failing that, a fresh signed link is minted
+// from `path` and tried once.
 async function fetchPlanFile(url, path) {
   let res = url ? await fetch(url).catch(() => null) : null;
+  if ((!res || !res.ok) && path) {
+    const kept = (await cachedPlanLinks([path]).catch(() => new Map())).get(path);
+    if (kept && kept !== url) res = await fetch(kept).catch(() => null);
+  }
   if ((!res || !res.ok) && path) {
     const fresh = await signPlanImage(path);
     if (fresh) res = await fetch(fresh);

@@ -11,9 +11,18 @@
  *                        is built once and has no account data in it).
  *   - other files of this site's (icons, logos): the cached copy at once,
  *                        refreshed in the background.
+ *   - pdf.js, the one other site's file the app needs (PDF plans and PDF
+ *                        import): that exact version only (LIBS), kept once
+ *                        fetched; the page checks its integrity hash.
  * Never: any other site (Supabase: drawings, sign-in, plan images, so no
  * tokens and no account data are ever stored here), /api (billing), /auth
  * (sign-in links), /monitoring (Sentry), or anything that isn't a GET.
+ *
+ * Installing keeps every code file of the build, not only each page's own:
+ * the editor, the sketch tool and the PDF makers are loaded later by the
+ * page, through files the build's webpack runtime names (allCodeFiles), and a
+ * day without signal needs all of them. Only files not kept already are
+ * fetched (their names change with their contents).
  *
  * Registered by components/AppShell.jsx as /sw.js?build=<id>; a new build
  * installs a new worker, which drops the old build's pages.
@@ -30,11 +39,18 @@ const FILES_CACHE = "plotwire-files-v1";
 const PAGES = ["/", "/drawing", "/new", "/sketch", "/planner", "/business", "/symbols"];
 const NETWORK_WAIT_MS = 3000;
 const MAX_STATIC = 400;
+const EXTRA_STATIC = 150;      // older builds' files kept beside the current build's
+const FETCH_AT_ONCE = 4;
+const BUILD_FILES = "/__build-files"; // the current build's code files (pages cache)
+// Other sites' files kept like the app's own code: exact versions only, so a
+// kept copy is always right (lib/pdfjs.js checks each against its hash).
+const LIBS = ["https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
     const pages = await caches.open(PAGES_CACHE);
     const statics = await caches.open(STATIC_CACHE);
+    const files = new Set();
     for (const path of PAGES) {
       try {
         const res = await fetch(path, { cache: "reload", credentials: "same-origin" });
@@ -42,16 +58,52 @@ self.addEventListener("install", (event) => {
         await pages.put(path, res.clone());
         // The code each page names in its HTML, so it opens with no signal.
         const html = await res.text();
-        const files = new Set((html.match(/\/_next\/static\/[^"'\s)]+/g) || []).map((u) => u.replace(/&amp;/g, "&")));
-        await Promise.all([...files].map(async (u) => {
-          if (await statics.match(u)) return;
-          try { const r = await fetch(u); if (r.ok) await statics.put(u, r); } catch { /* next time */ }
-        }));
+        for (const u of html.match(/\/_next\/static\/[^"'\s)]+/g) || []) files.add(u.replace(/&amp;/g, "&"));
       } catch { /* offline while installing: pages are cached as they're visited */ }
     }
+    for (const u of await allCodeFiles(files)) files.add(u);
+    await keepAll(statics, [...files]);
+    try { await pages.put(BUILD_FILES, new Response(JSON.stringify([...files]))); } catch { /* not fatal */ }
     await self.skipWaiting();
   })());
 });
+
+// Every code file the build's webpack runtime can load: those it names
+// outright, and those it names by chunk id and content hash. A runtime this
+// doesn't understand gives only the outright ones (the pages' own files and
+// lib/device/warmUp.js still cover the common ones).
+async function allCodeFiles(pageFiles) {
+  const runtime = [...pageFiles].find((u) => /^\/_next\/static\/chunks\/webpack-[^/]+\.js$/.test(u));
+  if (!runtime) return [];
+  let code = "";
+  try { const r = await fetch(runtime); if (!r.ok) return []; code = await r.text(); } catch { return []; }
+  const out = new Set();
+  for (const m of code.matchAll(/"(static\/(?:chunks|css)\/[^"]+\.(?:js|css))"/g)) out.add("/_next/" + m[1]);
+  const byHash = /"static\/chunks\/"\+\(\(\{([^}]*)\}\)\[\w+\]\|\|\w+\)\+"\."\+\(\{([^}]*)\}\)\[\w+\]\+"\.js"/.exec(code);
+  if (byHash) {
+    const names = {};
+    for (const [, id, name] of byHash[1].matchAll(/(\d+):"([^"]+)"/g)) names[id] = name;
+    for (const [, id, hash] of byHash[2].matchAll(/(\d+):"([^"]+)"/g)) out.add(`/_next/static/chunks/${names[id] || id}.${hash}.js`);
+  }
+  return [...out];
+}
+
+// Fetch and keep each file not kept yet, a few at a time. A file that can't
+// be fetched now is fetched when it's first used.
+async function keepAll(cache, urls) {
+  let next = 0;
+  const worker = async () => {
+    while (next < urls.length) {
+      const u = urls[next++];
+      try {
+        if (await cache.match(u)) continue;
+        const r = await fetch(u);
+        if (r.ok) await cache.put(u, r);
+      } catch { /* next time */ }
+    }
+  };
+  await Promise.all(Array.from({ length: FETCH_AT_ONCE }, worker));
+}
 
 self.addEventListener("activate", (event) => {
   event.waitUntil((async () => {
@@ -63,12 +115,27 @@ self.addEventListener("activate", (event) => {
   })());
 });
 
+// The current build's code files and pdf.js are always kept; of the rest
+// (older builds', for a page still open from one), the newest EXTRA_STATIC.
 async function trimStatic() {
   try {
     const cache = await caches.open(STATIC_CACHE);
     const keys = await cache.keys();
-    // Oldest first (insertion order): an old build's files go before the new.
-    for (const k of keys.slice(0, Math.max(0, keys.length - MAX_STATIC))) await cache.delete(k);
+    let current = null;
+    try {
+      const listed = await (await caches.open(PAGES_CACHE)).match(BUILD_FILES);
+      if (listed) current = new Set(await listed.json());
+    } catch { /* no list: by age alone */ }
+    if (!current) {
+      for (const k of keys.slice(0, Math.max(0, keys.length - MAX_STATIC))) await cache.delete(k);
+      return;
+    }
+    const others = keys.filter((k) => {
+      const u = new URL(k.url);
+      return u.origin === self.location.origin && !current.has(u.pathname + u.search);
+    });
+    // Oldest first (insertion order).
+    for (const k of others.slice(0, Math.max(0, others.length - EXTRA_STATIC))) await cache.delete(k);
   } catch { /* not fatal */ }
 }
 
@@ -76,7 +143,7 @@ const offline = () => self.navigator && self.navigator.onLine === false;
 
 function skip(url, request) {
   if (request.method !== "GET") return true;
-  if (url.origin !== self.location.origin) return true;
+  if (url.origin !== self.location.origin) return !LIBS.some((prefix) => url.href.startsWith(prefix));
   const p = url.pathname;
   return p.startsWith("/api/") || p.startsWith("/auth/") || p.startsWith("/monitoring") || p === "/sw.js";
 }
@@ -86,7 +153,7 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (skip(url, request)) return;
 
-  if (url.pathname.startsWith("/_next/static/")) {
+  if (url.pathname.startsWith("/_next/static/") || url.origin !== self.location.origin) {
     event.respondWith(cacheFirst(request));
     return;
   }
@@ -109,7 +176,7 @@ async function cacheFirst(request) {
   const hit = await cache.match(request, { ignoreSearch: false });
   if (hit) return hit;
   const res = await fetch(request);
-  if (res.ok && res.type === "basic") cache.put(request, res.clone());
+  if (res.ok && (res.type === "basic" || res.type === "cors")) cache.put(request, res.clone());
   return res;
 }
 

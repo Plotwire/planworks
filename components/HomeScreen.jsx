@@ -6,6 +6,8 @@ import { listProjects, localProjectsPending, migrateLocalProjects, deleteProject
 import { planLinks, cachedPlanLinks } from "@/lib/device/planCache";
 import { cachedList, rememberList, forgetDrawing } from "@/lib/device/drawings";
 import { pendingSaves, subscribeOutbox, forgetSaves, syncNow } from "@/lib/device/outbox";
+import { warmUpOffline } from "@/lib/device/warmUp";
+import OfflinePanel, { HomeScreenTip } from "@/components/OfflinePanel";
 import { useApp } from "@/components/AppShell";
 import { LEGAL_LINKS } from "@/lib/legal";
 import { TryPill } from "@/components/TryMode";
@@ -243,17 +245,11 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
     return () => { off(); clearTimeout(t); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- load/show read refs
 
-  // The editor's code, fetched while the dashboard sits idle, so the first
-  // drawing opens without waiting for it (and opens with no signal later).
-  useEffect(() => {
-    if (typeof navigator !== "undefined" && navigator.connection?.saveData) return;
-    const warm = () => { import("@/components/ElectricalPlanTool").catch(() => {}); };
-    const t = setTimeout(() => {
-      if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(warm, { timeout: 8000 });
-      else warm();
-    }, 2500);
-    return () => clearTimeout(t);
-  }, []);
+  // The editor's code and everything else a day without signal needs,
+  // fetched while the dashboard sits idle (lib/device/warmUp.js), so the
+  // first drawing opens without waiting for it, and all of it opens with no
+  // signal later.
+  useEffect(() => warmUpOffline({ delayMs: 2500 }), []);
 
   // "All drawings" in the rail: every saved drawing is in the list below,
   // newest first. Clears a search and scrolls to it.
@@ -449,6 +445,7 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
                 </div>
               </div>
             )}
+            <HomeScreenTip />
             <section className="hero">
               <div className="hero-glow"></div>
               <div className="hero-inner">
@@ -506,6 +503,8 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
                 <button className="mg-primary" onClick={() => { syncNow(); load(); }}>Try now</button>
               </div>
             )}
+
+            <OfflinePanel />
 
             {loadError ? (
               <div className="empty load-error" role="alert">
@@ -830,6 +829,19 @@ html.dark .pw-home .access-banner.is-lapsed{background:#2a2114; border-color:#6b
 .pw-home .badge-floors{left:auto; right:11px; background:rgba(63,183,201,.92); color:#08313a; font-weight:600}
 /* Saved on this device, not yet uploaded (lib/device/outbox) */
 .pw-home .badge-waiting{top:auto; bottom:11px; background:#F6C453; color:#3B2A05; font-weight:600}
+.pw-home .offline-strip{border:1px solid var(--line); background:var(--surface); border-radius:14px; padding:10px 14px; margin-bottom:18px}
+.pw-home .offline-row{display:flex; align-items:center; gap:12px; flex-wrap:wrap}
+.pw-home .offline-line{flex:1; min-width:200px; font-size:13.5px; color:var(--ink-2)}
+.pw-home .offline-dot{width:9px; height:9px; border-radius:50%; background:#9AA9B5; flex:none}
+.pw-home .offline-dot.is-ready{background:var(--teal-600)}
+.pw-home .offline-dot.is-busy{background:var(--teal); animation:pw-pulse 1.2s ease-in-out infinite}
+@keyframes pw-pulse{50%{opacity:.35}}
+.pw-home .offline-details{margin-top:12px; padding-top:12px; border-top:1px solid var(--line)}
+.pw-home .offline-details dl{display:grid; grid-template-columns:minmax(150px,auto) 1fr; gap:6px 16px; margin:0 0 10px; font-size:13px}
+.pw-home .offline-details dt{color:var(--ink-2)}
+.pw-home .offline-details dd{margin:0; color:var(--ink)}
+.pw-home .offline-note{font-size:12.5px; color:var(--ink-2); margin:0 0 10px}
+@media (max-width:560px){.pw-home .offline-details dl{grid-template-columns:1fr}.pw-home .offline-details dd{margin-bottom:6px}}
 .pw-home .sync-banner{background:linear-gradient(120deg,#FFF6E0,#FFFBEF); border-color:#F1D48A}
 html.dark .pw-home .sync-banner{background:linear-gradient(120deg,#33290f,#2a2412); border-color:#6b5520}
 .pw-home .card-body{padding:14px 16px 15px; transition:background .2s cubic-bezier(.2,.7,.3,1)}

@@ -5,6 +5,16 @@ import { Inter, Space_Grotesk, JetBrains_Mono, Barlow, Barlow_Condensed, Barlow_
 export const metadata = {
   title: "Plotwire — Electrical Layout Tool",
   description: "Drag-and-drop electrical symbols onto architectural drawings",
+  // Added to an iPad's Home Screen it opens full screen, named Plotwire, with
+  // its own icon (app/manifest.js, public/icons).
+  appleWebApp: { capable: true, title: "Plotwire", statusBarStyle: "default" },
+  icons: { icon: "/icons/favicon-64.png", apple: "/icons/apple-touch-icon.png" },
+};
+
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
+  themeColor: "#2C97A8",
 };
 
 // Fonts are self-hosted: next/font downloads them at build time and serves

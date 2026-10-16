@@ -285,3 +285,31 @@ None of these lose work. Each was left to keep the branch small.
   is trimmed to 400 files, not cleared per deploy. That's on purpose, so a
   page from the last deploy can still load its code without signal. If it
   ever needs clearing, bump the `v1`.
+
+## Full offline: loose ends
+
+*Deferred 17 Oct 2026 (branch offline; tests in docs/offline-test.md).*
+
+None of these lose work.
+
+- **Original PDFs imported with no signal.** The plan's image is saved with
+  the drawing and uploads later. The original PDF (used only for the sharpest
+  export) is held in the open tab and uploads with the next save once there's
+  signal. If Plotwire is closed first, that drawing exports from the image
+  (slightly softer). To fix, keep the original's bytes on the device like an
+  unsent plan image (`toDeviceForm` in `lib/device/drawings.js`), and let the
+  outbox upload it once (`prepare` in `lib/device/outbox.js`). Make sure the
+  editor's own background upload (`storeTabOnlyPdf`) doesn't send it as well.
+- **Sketches are last-writer-wins**, as before this branch. A sketch edited
+  on two devices keeps the later save. The drawing it was sent to keeps its
+  plan either way. Adding a version check would mirror the drawings outbox.
+- **The work planner isn't offline.** With no signal it shows no jobs.
+- **Business information can't be changed offline.** The saved details
+  are used; saving changes needs signal.
+- **The Try-mode count isn't checked offline.** The database enforces the
+  limit when saves upload. A save over the limit then shows "Couldn't sync".
+- **Home Screen app and Stripe Checkout.** Subscribing from the Home Screen
+  app (standalone) hasn't been tried. Check that Checkout returns to the app.
+- **App icons are static PNGs** in `public/icons` (drawn by a script from the
+  dashboard's brandmark). Next's icon generator (`next/og`) fails to build
+  on Windows with Node 24 ("Invalid URL"), so it isn't used.

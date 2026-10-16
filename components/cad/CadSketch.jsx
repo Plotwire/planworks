@@ -20,8 +20,11 @@ import { angled, placeOpeningClear, openingAxes, openingHost, slideOpening, plan
 import { startRun, runEnd, retraces, afterWall } from "@/lib/cad/chain";
 import { isAuto, roomSpaces, areaAt, roomAt, onWall, spacesOf, spaceBoxAt } from "@/lib/cad/rooms";
 import { wallSnap } from "@/lib/cad/snap";
-import { listSketches, getSketchData, insertSketch, updateSketch, deleteSketch } from "@/lib/cad/sketchStore";
-import { insertProject, getProjectData, updateProjectRow } from "@/lib/db";
+// Sketches and the drawings they're sent to go through this device first, so
+// the sketch tool works with no signal (lib/device/sketches.js,
+// lib/device/sketchToDrawing.js).
+import { sketchList, openSketch, saveSketch, removeSketch } from "@/lib/device/sketches";
+import { updateDrawingFrom, newDrawingFrom } from "@/lib/device/sketchToDrawing";
 import { defaultDrawingName } from "@/lib/drawingName";
 import { uploadPlanImage, dataUrlToBlob } from "@/lib/planImages";
 import { renderModelToPng } from "@/lib/cad/sketchToImage";
@@ -1143,8 +1146,9 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const persistSketch = async (link, knownId = sketchId) => {
     const lk = link === undefined ? currentLink() : link;
     const data = { ...model, _link: lk };
-    if (knownId) { await updateSketch(knownId, sketchName, data); return knownId; }
-    const id = await insertSketch(sketchName, data); setSketchId(id); return id;
+    const id = await saveSketch({ id: knownId || null, name: sketchName, data });
+    if (!knownId) setSketchId(id);
+    return id;
   };
   const doSave = async () => {
     setSaveState("saving");
@@ -1155,7 +1159,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     catch (e) { console.error(e); setSaveState("error"); window.alert("Couldn't save: " + (e.message || e)); }
   };
   doSaveRef.current = doSave;
-  const refreshList = async () => { try { setSketches(await listSketches()); } catch (e) { console.warn(e); } };
+  const refreshList = async () => { try { setSketches(await sketchList()); } catch (e) { console.warn(e); } };
   const doNew = () => {
     skipDirty.current = true;
     setModel(blankModel()); resetHistory();
@@ -1167,9 +1171,11 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   };
   const doLoad = async (id) => {
     try {
-      const data = await getSketchData(id);
+      const opened = await openSketch(id);
+      const data = opened && opened.data;
       if (!data) return;
-      const meta = sketches.find((sk) => sk.id === id);
+      id = opened.id;
+      const meta = { name: opened.name || sketches.find((sk) => sk.id === id)?.name };
       const { _link, ...geo } = data;
       skipDirty.current = true;
       setModel(withOrigin({ ...blankModel(), wallStyle: "light", ...geo }, geo, _link)); resetHistory();
@@ -1186,7 +1192,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     e.stopPropagation();
     if (!window.confirm("Delete this sketch? This can't be undone.")) return;
     try {
-      await deleteSketch(id);
+      await removeSketch(id);
       if (id === sketchId) doNew();
       refreshList();
     } catch (err) { console.error(err); window.alert("Couldn't delete: " + (err.message || err)); }
@@ -1194,22 +1200,25 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
 
   // A new drawing with this plan. ps: where it goes on the sheet and at what
   // scale (planSheetFrame), which the title block's Scale says.
-  const createDrawing = async (path, w, h, ps) => {
+  // plan: { path, src } -- the stored plan's path, or with no signal the
+  // image itself (src), which the drawing's save uploads when it can.
+  // Saved on this device and uploaded by the outbox like any new drawing.
+  const createDrawing = async ({ path, src }, w, h, ps) => {
     setPlanBusy("Creating drawing");
     const sheetId = "s_" + Math.random().toString(36).slice(2, 9);
     const today = new Date().toISOString().slice(0, 10);
     const name = sketchName || defaultDrawingName();
-    const data = {
-      meta: { projectName: name, drawingNumber: "", date: today, revision: "A", revNote: "First Issue", company: "", clientName: "", clientEmail: "", scale: scaleLabel(ps.scale) },
-      boq: null, titleBlock: null, colourMode: "red",
-      notes: "", // blank Installation Notes, like any new drawing
-      sheets: [{ id: sheetId, name, drawingNumber: "", bgImage: { path, w, h, planFrame: ps.frame, planScale: ps.scale, ...stairsField(ps.frame, planStairs(model)) }, placed: [], furniture: [], walls: [], wires: [], annotations: [], notes: "", symbolScale: 1 }],
-      activeSheetId: sheetId,
-    };
-    const newId = await insertProject(name, data);
-    setLinkProjectId(newId); setLinkSheetId(sheetId); setFrame(ps.frame); setLinkScale(ps.scale);
-    const skId = await persistSketch({ projectId: newId, sheetId, frame: ps.frame, scale: ps.scale, ...keptLegacy() });
-    try { await updateProjectRow(newId, name, { ...data, sheets: data.sheets.map((s) => s.id === sheetId ? { ...s, sketchId: skId } : s) }); } catch (e) { console.warn(e); }
+    const newId = await newDrawingFrom(name, async (id) => {
+      setLinkProjectId(id); setLinkSheetId(sheetId); setFrame(ps.frame); setLinkScale(ps.scale);
+      const skId = await persistSketch({ projectId: id, sheetId, frame: ps.frame, scale: ps.scale, ...keptLegacy() });
+      return {
+        meta: { projectName: name, drawingNumber: "", date: today, revision: "A", revNote: "First Issue", company: "", clientName: "", clientEmail: "", scale: scaleLabel(ps.scale) },
+        boq: null, titleBlock: null, colourMode: "red",
+        notes: "", // blank Installation Notes, like any new drawing
+        sheets: [{ id: sheetId, name, drawingNumber: "", sketchId: skId, bgImage: { ...(path ? { path } : { src }), w, h, planFrame: ps.frame, planScale: ps.scale, ...stairsField(ps.frame, planStairs(model)) }, placed: [], furniture: [], walls: [], wires: [], annotations: [], notes: "", symbolScale: 1 }],
+        activeSheetId: sheetId,
+      };
+    });
     setPlanBusy(null);
     router.push("/drawing?id=" + newId);
   };
@@ -1230,7 +1239,16 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     try {
       const png = await renderModelToPng(model, ps.frame, PLAN_PX, { scale: ps.scale });
       setPlanBusy("Uploading plan");
-      const { path } = await uploadPlanImage(dataUrlToBlob(png.dataUrl));
+      // No signal: the plan goes into the drawing as it is, and the drawing's
+      // save uploads it when there is signal (lib/device/outbox).
+      let path = null;
+      try {
+        path = (await uploadPlanImage(dataUrlToBlob(png.dataUrl))).path;
+      } catch (err) {
+        const noSignal = (typeof navigator !== "undefined" && navigator.onLine === false) || err?.status === 0 || err?.noSignal ||
+          /abort|failed to fetch|fetch failed|networkerror|load failed|timed? ?out/i.test(String(err?.message || ""));
+        if (!noSignal) throw err;
+      }
       const lk = { projectId: linkProjectId, sheetId: linkSheetId, frame: ps.frame, scale: ps.scale, ...keptLegacy() };
       // Sending to a drawing it updates: the sketch is saved first with the
       // link it has, so its edits are safe whatever happens next, and its
@@ -1250,24 +1268,33 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       }
       if (mode === "update" && linkProjectId) {
         setPlanBusy("Updating drawing");
-        let proj = null;
-        try { proj = await getProjectData(linkProjectId); } catch { proj = null; }
-        if (!proj) { await createDrawing(path, png.w, png.h, ps); return; }
         const skId = await persistSketch(currentLink());
-        // The linked sheet; if it has gone, the drawing's active (else first) one.
-        const sheets = proj.sheets || [];
-        const tid = sheets.some((s) => s.id === linkSheetId) ? linkSheetId
-          : !sheets.length ? null : proj.activeSheetId && sheets.some((s) => s.id === proj.activeSheetId) ? proj.activeSheetId : sheets[0].id;
-        const plan = { path, w: png.w, h: png.h, sketchId: skId, frame: ps.frame, scale: ps.scale, oldFrame: ps.remap && ps.remap.oldFrame, legacyFrame, linked: tid === linkSheetId, stairs: planStairs(model) };
-        let outside = 0;
-        const newSheets = sheets.map((s) => {
-          if (s.id !== tid) return s;
-          const r = applyPlanToSheet(s, plan);
-          outside = r.outside;
-          return r.sheet;
-        });
-        const meta = tid ? { meta: { ...(proj.meta || {}), scale: scaleLabel(ps.scale) } } : {};
-        await updateProjectRow(linkProjectId, proj.meta?.projectName || sketchName, { ...proj, ...meta, sheets: newSheets });
+        // Laid over the newest work this device has for the drawing, and
+        // saved through the outbox (lib/device/sketchToDrawing.js): no signal
+        // needed, and only over the version that work was based on.
+        let upd;
+        try {
+          upd = await updateDrawingFrom(linkProjectId, (proj) => {
+            // The linked sheet; if it has gone, the drawing's active (else first) one.
+            const sheets = proj.sheets || [];
+            const tid = sheets.some((s) => s.id === linkSheetId) ? linkSheetId
+              : !sheets.length ? null : proj.activeSheetId && sheets.some((s) => s.id === proj.activeSheetId) ? proj.activeSheetId : sheets[0].id;
+            const plan = { path, src: path ? null : png.dataUrl, w: png.w, h: png.h, sketchId: skId, frame: ps.frame, scale: ps.scale, oldFrame: ps.remap && ps.remap.oldFrame, legacyFrame, linked: tid === linkSheetId, stairs: planStairs(model) };
+            let outside = 0;
+            const newSheets = sheets.map((s) => {
+              if (s.id !== tid) return s;
+              const r = applyPlanToSheet(s, plan);
+              outside = r.outside;
+              return r.sheet;
+            });
+            const meta = tid ? { meta: { ...(proj.meta || {}), scale: scaleLabel(ps.scale) } } : {};
+            return { data: { ...proj, ...meta, sheets: newSheets }, outside };
+          });
+        } catch (err) {
+          throw new Error(`the drawing couldn't be opened to update (${err?.message || err}). Your sketch is saved.`);
+        }
+        if (!upd.ok) { await createDrawing({ path, src: png.dataUrl }, png.w, png.h, ps); return; }
+        const outside = upd.result.outside;
         // The drawing has it now. Should this last write fail, the sketch's
         // edits are already saved and the sheet's own planFrame says where
         // its plan is, which the next send goes by.
@@ -1277,7 +1304,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
         router.push("/drawing?id=" + linkProjectId);
         return;
       }
-      await createDrawing(path, png.w, png.h, ps);
+      await createDrawing({ path, src: png.dataUrl }, png.w, png.h, ps);
     } catch (e) {
       console.error(e); setPlanBusy(null);
       window.alert("Couldn't send the plan to the editor: " + (e.message || e));
@@ -1313,7 +1340,9 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
   const openLinkedSketch = async (id) => {
     setPlanBusy("Opening floor plan");
     try {
-      const data = await getSketchData(id);
+      const opened = await openSketch(id);
+      const data = opened && opened.data;
+      if (opened) id = opened.id;
       if (!data) { setNameGate(false); setSaveState("idle"); setPlanBusy(null); return; }
       const { _link, ...geo } = data;
       skipDirty.current = true;

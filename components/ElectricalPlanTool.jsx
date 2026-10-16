@@ -23,7 +23,7 @@ import {
   ProjectTitleBlockContext,
 } from "@/components/SheetParts";
 import { useApp } from "@/components/AppShell";
-import { getSketchData } from "@/lib/cad/sketchStore";
+import { openSketch } from "@/lib/device/sketches";
 import { SHEET, DRAW } from "@/lib/cad/sheet";
 import { applyPlanToSheet, scaleLabel, outsideNote } from "@/lib/cad/planScale";
 import { DEFAULT_TITLEBLOCK } from "@/lib/titleBlock";
@@ -36,6 +36,7 @@ import { useEditor } from "@/store/editorStore";
 import { toDeviceForm, fromDeviceForm, deviceDrawing, rememberDrawing, forgetDrawing } from "@/lib/device/drawings";
 import { planLinks, cachedPlanLinks, rememberUploadedPlan } from "@/lib/device/planCache";
 import { queueSave, subscribeOutbox, outboxStatus, holdSync, releaseSync, discardSave, forgetSaves, pendingSaves, newDrawingId, syncNow } from "@/lib/device/outbox";
+import { warmUpOffline } from "@/lib/device/warmUp";
 import { registerPlanUpload } from "@/lib/device/uploads";
 import { SyncStatus } from "@/components/SheetParts";
 
@@ -1966,7 +1967,9 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         // version this copy is.
         const version = waiting ? waiting.base : local.version;
         showOpened(id, shown, version, initial, waiting ? waiting.tag : null);
-        checkLatest(id, seq, shown, version, Boolean(waiting));
+        // A new drawing still waiting to upload has no server copy yet.
+        if (waiting && waiting.kind === "insert") releaseSync(id);
+        else checkLatest(id, seq, shown, version, Boolean(waiting));
         return;
       }
       releaseSync(id);
@@ -2108,22 +2111,11 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- reads the store, not props
 
   // Once the drawing is up and nothing is happening, fetch the code the PDF
-  // downloads and the sketch tool use, so they work later without signal
-  // (the service worker keeps it). Not on a data-saver connection.
+  // downloads, the quote, the sketch tool and PDF plans use, so they work
+  // later without signal (lib/device/warmUp.js).
   useEffect(() => {
     if (openState !== "ready") return;
-    if (typeof navigator !== "undefined" && navigator.connection?.saveData) return;
-    const warm = () => {
-      import("jspdf").catch(() => {});
-      import("html2canvas").catch(() => {});
-      import("pdf-lib").catch(() => {});
-      import("@/components/cad/CadSketch").catch(() => {});
-    };
-    const t = setTimeout(() => {
-      if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(warm, { timeout: 10000 });
-      else warm();
-    }, 5000);
-    return () => clearTimeout(t);
+    return warmUpOffline({ delayMs: 5000 });
   }, [openState]);
 
   // Saves reaching the server (lib/device/outbox): the editor catches up.
@@ -2471,8 +2463,10 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const editFloorPlan = async () => {
     const id = activeSheet?.sketchId;
     if (!id) return;
+    // This device's copy of the sketch (lib/device/sketches.js), so the floor
+    // plan opens with no signal too.
     let data = null;
-    try { data = await getSketchData(id); }
+    try { data = (await openSketch(id))?.data || null; }
     catch (err) { alert("Couldn't open the floor plan. Check your connection and try again."); return; }
     if (!data) { setPlanGone(true); return; }
     await saveProject();
