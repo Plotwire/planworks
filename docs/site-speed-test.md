@@ -250,4 +250,42 @@ only at risk if the iPad isn't used with Plotwire for that long.
 
 ---
 
+## 11. Kill switch: turning the service worker off everywhere
+
+If the cached app ever causes trouble, one deploy removes it from every
+device. Saves waiting to upload are kept and still go up. Only the app's
+cached code and pages are removed.
+
+**How to switch it off:** in Vercel, add the environment variable
+`NEXT_PUBLIC_SW_OFF` = `1` to the deployment (for this test, the
+stripe-plotwire-test preview only) and redeploy. (Without Vercel: copy
+`public/sw-off.js` over `public/sw.js` and deploy. It does the same.)
+**To switch it back on:** remove the variable and redeploy.
+
+1. Before switching it off, on the laptop with signal: open the app.
+   DevTools → **Application** → **Service workers** shows `sw.js` running, and
+   **Cache storage** lists `plotwire-static-v1` and `plotwire-pages-…`.
+2. Network → **Offline**. Open a TEST drawing, place a symbol, **Save**
+   (**WAITING FOR SIGNAL**). Leave the tab open.
+3. Switch it off (above) and wait for the deploy to finish.
+4. Network → **No throttling**, then reload the tab.
+
+**Now:**
+- **Service workers** shows nothing for the site.
+- **Cache storage** has no `plotwire-…` caches.
+- **IndexedDB** → **plotwire-device** → **outbox** still holds the waiting
+  save, and within a few seconds it uploads. The amber bar goes and the
+  drawing has the symbol.
+
+5. Go to `/sw.js` in the address bar. The file starts **Plotwire service
+   worker: SWITCHED OFF**.
+6. **iPad:** open the app (with signal). It switches itself off the same way.
+   A tab left open in the background also picks it up within 30 minutes of
+   being brought back into view. With Airplane Mode on, the app no longer
+   opens. That's expected while it's switched off.
+7. Switch it back on, wait for the deploy, and reload twice. **Service
+   workers** shows `sw.js` running again.
+
+---
+
 Delete the TEST drawings when done, including the **(copy)** ones.

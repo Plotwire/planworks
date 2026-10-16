@@ -17,6 +17,10 @@
  *
  * Registered by components/AppShell.jsx as /sw.js?build=<id>; a new build
  * installs a new worker, which drops the old build's pages.
+ *
+ * Kill switch: deployed with NEXT_PUBLIC_SW_OFF=1, public/sw-off.js is served
+ * in place of this file and removes the worker and its caches from every
+ * device, keeping saves that are waiting to upload (next.config.js).
  */
 
 const BUILD = new URL(self.location.href).searchParams.get("build") || "dev";
