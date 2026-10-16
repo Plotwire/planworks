@@ -1,7 +1,9 @@
 "use client";
 import React from "react";
 
-const DRAFT_KEY = "planworks:draft:v1";
+// The crash-recovery drafts (components/ElectricalPlanTool.jsx): the saved
+// drawing's and the unsaved new drawing's. The backup offered is the newer.
+const DRAFT_KEYS = ["planworks:draft:v1", "planworks:draft:new:v1"];
 
 // Catches render errors in the editor so a crash shows a recovery screen
 // (with the local backup and the error text) instead of a blank document.
@@ -18,9 +20,12 @@ export default class EditorErrorBoundary extends React.Component {
   }
   downloadBackup = () => {
     try {
-      const raw = window.localStorage.getItem(DRAFT_KEY);
-      if (!raw) { alert("No local backup was found on this device."); return; }
-      const draft = JSON.parse(raw);
+      const drafts = DRAFT_KEYS
+        .map((k) => { try { return JSON.parse(window.localStorage.getItem(k) || "null"); } catch { return null; } })
+        .filter(Boolean)
+        .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+      if (!drafts.length) { alert("No local backup was found on this device."); return; }
+      const draft = drafts[0];
       const proj = draft.project || draft;
       const data = JSON.stringify(proj, null, 2);
       const blob = new Blob([data], { type: "application/json" });

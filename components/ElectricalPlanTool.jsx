@@ -7,7 +7,8 @@ import {
   Palette, Ruler, Hand, Sparkles, Type, Printer, Settings,
   ChevronRight, X, FileText, Eye, EyeOff, Layers,
 } from "lucide-react";
-import { listProjects, getProjectData, insertProject, updateProjectRow, deleteProjectRow, unreferencedPlanPaths } from "@/lib/db";
+import { listProjects, getProjectData, getProjectRecord, insertProjectRecord, updateProjectRow, deleteProjectRow, unreferencedPlanPaths } from "@/lib/db";
+import { defaultDrawingName } from "@/lib/drawingName";
 import { uploadPlanImage, signPlanImages, deletePlanImages, dataUrlToBlob, blobToDataUrl } from "@/lib/planImages";
 import { ensurePdfjs } from "@/lib/pdfjs";
 import {
@@ -99,10 +100,12 @@ function freshSheet(name = "Ground floor") {
 }
 
 // A project holds meta + drawings (sheets); notes live on each sheet.
+// A new drawing is named after when it was started (lib/drawingName), so it
+// can be told apart on the dashboard until the user names it.
 function freshProject() {
   const sheet = freshSheet("Ground floor");
   return {
-    meta: { ...DEFAULT_META, date: new Date().toISOString().slice(0, 10) },
+    meta: { ...DEFAULT_META, projectName: defaultDrawingName(), date: new Date().toISOString().slice(0, 10) },
     notes: "", // new drawings start with blank Installation Notes
     boq: null,
     titleBlock: null, // null = use the account default; set = job-specific
@@ -285,7 +288,8 @@ async function prepareProjectForSave(p) {
     }
     return s;
   }));
-  return { ...p, sheets };
+  const { _recordId, ...rest } = p; // which row it came from: the editor's own note, never stored
+  return { ...rest, sheets };
 }
 
 // After a save, copy any newly-minted paths back onto in-memory sheets while
@@ -320,6 +324,54 @@ function stripImagesForDraft(p) {
       return { ...s, bgImage: rest };
     }),
   };
+}
+
+// The crash-recovery drafts, one per kind, so opening a saved drawing never
+// overwrites the backup of an unsaved new one:
+//   DRAFT_KEY      the saved drawing last open: { projectId, version, savedAt, project }
+//                  (version: the row's updated_at the work is based on)
+//   NEW_DRAFT_KEY  the unsaved new drawing: { projectId: null, sessionKey, savedAt, project }
+//                  (sessionKey: which new drawing, so its first save can clear it)
+// The project carries _recordId, the row it was loaded from or first saved as
+// (none for an unsaved drawing). components/EditorErrorBoundary.jsx and
+// lib/deviceData.js know both keys.
+const DRAFT_KEY = "planworks:draft:v1";
+const NEW_DRAFT_KEY = "planworks:draft:new:v1";
+// A backup handed from "Open as a new drawing" to the /new page (this tab only).
+const HANDOFF_KEY = "planworks:openAsNew";
+
+function readDraft(key) {
+  try {
+    const d = JSON.parse(window.localStorage.getItem(key) || "null");
+    return d && d.project && typeof d.project === "object" ? d : null;
+  } catch { return null; }
+}
+function writeDraft(key, draft) {
+  try { window.localStorage.setItem(key, JSON.stringify(draft)); } catch { /* storage full / unavailable */ }
+}
+function removeDraft(key) {
+  try { window.localStorage.removeItem(key); } catch { /* unavailable */ }
+}
+// The backup of an unsaved new drawing, if this device has one. The editor
+// before this one kept it in DRAFT_KEY with no id; such a draft is moved
+// across now, before the drawing being opened writes its own over it.
+function readUnsavedDraft() {
+  const d = readDraft(NEW_DRAFT_KEY);
+  if (d) return d;
+  const legacy = readDraft(DRAFT_KEY);
+  if (legacy && !legacy.projectId && !legacy.project._recordId) {
+    writeDraft(NEW_DRAFT_KEY, legacy);
+    removeDraft(DRAFT_KEY);
+    return legacy;
+  }
+  return null;
+}
+const newSessionKey = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+// A backup's work as an unsaved drawing: no row of its own.
+function asUnsaved(p) {
+  if (!p) return p;
+  const { _recordId, ...rest } = p;
+  return rest;
 }
 
 // Tool definitions
@@ -390,7 +442,7 @@ const TOUCH_GESTURES = [
 ];
 
 // ============================================================================
-export default function ElectricalPlanTool({ initialTarget = null, onHome = null, theme = "light", onToggleTheme = null, onProjectId = null, onOpenFloorPlan = null }) {
+export default function ElectricalPlanTool({ initialTarget = null, onHome = null, theme = "light", onToggleTheme = null, onProjectId = null, onOpenFloorPlan = null, onOpenAsNew = null }) {
   // Project state
   const project = useEditor(s => s.project);
   const setProject = useEditor(s => s.setProject);
@@ -563,6 +615,24 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const [showProjects, setShowProjects] = useState(false); // project manager modal
   const [projectList, setProjectList] = useState([]);   // saved projects index
   const [currentProjectId, setCurrentProjectId] = useState(null);
+  // Opening a saved drawing: "opening" until it arrives, then "ready";
+  // "failed" (couldn't be fetched) or "missing" (no such drawing) if it
+  // doesn't. Nothing can be edited or saved until "ready" (openProjectById).
+  const [openState, setOpenStateValue] = useState(
+    initialTarget?.mode === "open" && initialTarget.projectId ? "opening" : "ready");
+  const openStateRef = useRef(openState);
+  const setOpenState = (s) => { openStateRef.current = s; setOpenStateValue(s); };
+  // False once this editor has closed. The drawing lives in a store that
+  // outlives the editor (store/editorStore.ts), so nothing that finishes after
+  // that may put anything in it.
+  const aliveRef = useRef(true);
+  useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
+  // The version (updated_at) of each row this editor has loaded or saved, by
+  // id: a save only writes over the version it was based on (writeRecord).
+  const versionsRef = useRef(new Map());
+  // Which unsaved new drawing this is, for its crash-recovery draft
+  // (NEW_DRAFT_KEY); null once it has a row.
+  const newKeyRef = useRef(null);
   // Try mode (components/TryMode.jsx): the account-wide symbol count, and the
   // "Subscribe to keep going" / locked-feature prompt. Callbacks that outlive a
   // render read the latest count through the ref.
@@ -681,8 +751,12 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     if (currentProjectIdRef.current && updated) {
       await enqueueSave(updated, async ({ p, id, stillLoaded }) => {
         try {
-          const safe = await readyToSave(p);
-          await updateProjectRow(id, p.meta?.projectName || "Untitled drawing", safe);
+          // Only over the drawing's own row, at the version it was based on;
+          // otherwise nothing is written now and the next Save keeps the work
+          // as a new drawing (saveProject).
+          const r = await writeRecord(p, id, drawingName(p));
+          if (!r.ok) return false;
+          const safe = r.safe;
           if (stillLoaded()) setProject(prev => mergeSavedPaths(prev, safe));
           // Same confirmation the Save button gives, so the rename visibly sticks.
           setSavedFlash(true);
@@ -990,6 +1064,9 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     const pointerId = e.pointerId;
     const startX = e.clientX, startY = e.clientY;
     const startPlaced = placed;
+    // The drawing this drag began on. Dropped onto another one (it arrived
+    // mid-drag), startPlaced would replace that drawing's symbols.
+    const startGen = loadGenRef.current;
     const isTouch = e.pointerType !== "mouse";
     const scroller = (e.currentTarget && e.currentTarget.closest)
       ? e.currentTarget.closest("[data-palette-scroll]") : null;
@@ -1031,6 +1108,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       const mode = state.mode;
       cleanup();
       if (!place || mode !== "drag" || !findSymbol(symbolId)) return;
+      if (loadGenRef.current !== startGen || openStateRef.current !== "ready") return;
       const { x, y } = clientToDrawing(ev.clientX, ev.clientY);
       if (x < 0 || y < 0 || x > DRAW.w || y > DRAW.h) return; // released off the sheet → ignore
       if (!tryUsageRef.current.canAdd(1)) { tryPrompt.show(LOCKED.limit); return; } // Try mode: at the limit
@@ -1528,6 +1606,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       // The floor-plan sketch open over the editor owns the keyboard: no
       // editor shortcut (Delete, R, W, Ctrl+Z...) may act on the hidden sheet.
       if (floorPlanOpen) return;
+      // Nor while a drawing is opening (or failed to): nothing is editable.
+      if (openStateRef.current !== "ready") return;
       const isInput = e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.isContentEditable;
       if (e.code === "Space" && !isInput) {
         e.preventDefault();
@@ -1609,9 +1689,12 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   //     when its turn comes, so edits made during the wait are included, and
   //     a second Save of a new drawing updates the row the first one created;
   //   - loadGenRef changes whenever a different project is put in the editor.
-  //     A save that runs or finishes after that writes the snapshot it was
-  //     asked to save, to the row it was asked for, and leaves the editor
-  //     (now showing another drawing) alone.
+  //     A save that runs or finishes after that -- or after the editor has
+  //     closed -- writes the snapshot it was asked to save, to the row it was
+  //     asked for, and leaves the editor (now showing another drawing, or
+  //     another editor's) alone.
+  // Whatever row a save is aimed at, it only writes over it through
+  // writeRecord, below.
   const saveQueueRef = useRef(Promise.resolve());
   const queuedSavesRef = useRef(0);
   const loadGenRef = useRef(0);
@@ -1621,10 +1704,12 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     const waited = queuedSavesRef.current > 0;
     queuedSavesRef.current += 1;
     const turn = saveQueueRef.current.then(() => {
-      const stillLoaded = () => loadGenRef.current === gen;
+      const stillLoaded = () => aliveRef.current && loadGenRef.current === gen;
       const current = stillLoaded();
       return save({
-        p: current && waited ? projectRef.current : snapshot,
+        // The store, not projectRef: a save queued behind a first Save sees
+        // the row id that save stamped on the project before any re-render.
+        p: current && waited ? useEditor.getState().project : snapshot,
         id: current ? currentProjectIdRef.current : requestedId,
         stillLoaded,
       });
@@ -1646,24 +1731,77 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     setTimeout(() => setSavedFlash(false), 1500);
   };
 
+  // ---------- Save guard ----------
+  // A drawing's row is only ever written over with that drawing's own work:
+  //   - the project on screen carries _recordId, the row it was loaded from
+  //     (openProjectById) or first saved as (insertAsNewProject). Anything
+  //     else put in the editor -- a new drawing, a backup kept as a new
+  //     drawing -- has none, and a project that reached the store from
+  //     anywhere else would carry another row's id;
+  //   - the write only lands if the row is still at the version this editor
+  //     loaded or last saved (versionsRef). A tab or device that has been
+  //     sitting on an older copy can't overwrite a newer save made elsewhere.
+  // Either check failing writes nothing: saveProject keeps the work as a new
+  // drawing instead (keepAsNewDrawing).
+  const belongsTo = (p, id) => Boolean(id && p && p._recordId === id && versionsRef.current.has(id));
+  // Resolves to { ok: true, safe } once written, or { ok: false, reason } --
+  // "other" (not this row's work) or "changed" (changed or gone since) -- with
+  // nothing written. Throws if the save itself failed.
+  const writeRecord = async (p, id, name) => {
+    if (!belongsTo(p, id)) return { ok: false, reason: "other" };
+    const safe = await readyToSave(p);
+    const r = await updateProjectRow(id, name, safe, { expectedVersion: versionsRef.current.get(id) });
+    if (!r.ok) return { ok: false, reason: "changed" };
+    versionsRef.current.set(id, r.version);
+    return { ok: true, safe };
+  };
+  // The name a save gives the row: the project name (a new drawing starts
+  // with one, freshProject), else what unnamed drawings have always been.
+  const drawingName = (p) => p?.meta?.projectName || "Untitled drawing";
+
   // Quick-save: writes to the currently open project, or creates one if new.
-  const saveProject = () => enqueueSave(projectRef.current, async ({ p, id, stillLoaded }) => {
-    const name = p.meta?.projectName || "Untitled drawing";
-    if (readOnlyRef.current) return false; // lapsed: read-only
-    // Try mode: the database would refuse a save over the limit; say so first.
-    if (tryUsageRef.current.blocksSave(id || null)) { tryPrompt.show(LOCKED.limit); return false; }
-    if (!id) return insertAsNewProject(p, name, { stillLoaded, rename: false });
-    try {
-      const safe = await readyToSave(p);
-      await updateProjectRow(id, name, safe);
-      if (stillLoaded()) setProject(prev => mergeSavedPaths(prev, safe));
-      confirmSaved();
-      return true;
-    } catch (err) {
-      alert("Save failed: " + (err.message || err));
-      return false;
+  // Nothing while a drawing is opening or failed to open: there is no
+  // drawing on screen to save.
+  const saveProject = () => {
+    if (openStateRef.current !== "ready") return Promise.resolve(false);
+    return enqueueSave(useEditor.getState().project, async ({ p, id, stillLoaded }) => {
+      if (readOnlyRef.current) return false; // lapsed: read-only
+      if (!id) {
+        // Try mode: the database would refuse a save over the limit; say so first.
+        if (tryUsageRef.current.blocksSave(null)) { tryPrompt.show(LOCKED.limit); return false; }
+        return insertAsNewProject(p, p.meta?.projectName || defaultDrawingName(), { stillLoaded, rename: false });
+      }
+      // Kept as a new drawing below, which counts as one in Try mode.
+      if (tryUsageRef.current.blocksSave(belongsTo(p, id) ? id : null)) { tryPrompt.show(LOCKED.limit); return false; }
+      try {
+        const r = await writeRecord(p, id, drawingName(p));
+        if (!r.ok) return keepAsNewDrawing(p, r.reason, { stillLoaded });
+        if (stillLoaded()) setProject(prev => mergeSavedPaths(prev, r.safe));
+        confirmSaved();
+        return true;
+      } catch (err) {
+        alert("Save failed: " + (err.message || err));
+        return false;
+      }
+    });
+  };
+
+  // A save that may not write over its row (writeRecord) keeps the work as a
+  // new drawing, named as a copy so the two can be told apart, and says so.
+  // The row it was aimed at is left exactly as it is.
+  const keepAsNewDrawing = async (p, reason, { stillLoaded }) => {
+    if (tryUsageRef.current.blocksSave(null)) { tryPrompt.show(LOCKED.limit); return false; }
+    const base = drawingName(p);
+    const name = /\(copy\)$/.test(base) ? base : `${base} (copy)`;
+    const ok = await insertAsNewProject(p, name, { stillLoaded, rename: true });
+    if (ok) {
+      const why = reason === "changed"
+        ? "This drawing was changed or deleted somewhere else (another tab or device) after it was opened here, so your version can't replace it."
+        : "What's on screen didn't come from this drawing, so it can't replace it.";
+      setTimeout(() => window.alert(`${why}\n\nYour work has been saved as a new drawing, "${name}". The other drawing hasn't been changed.`), 0);
     }
-  });
+    return ok;
+  };
 
   // Apply a plan handed back from the embedded Floor Plan sketch, in place (no navigation).
   // scale / frame: the true scale and plan frame it was drawn at
@@ -1700,9 +1838,11 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     if (currentProjectIdRef.current) {
       const ok = await enqueueSave(updated, async ({ p, id, stillLoaded }) => {
         try {
-          const safe = await readyToSave(p);
-          await updateProjectRow(id, p.meta?.projectName || "Untitled drawing", safe);
-          if (stillLoaded()) setProject(prev => mergeSavedPaths(prev, safe));
+          // As renameSheet: only over its own row (writeRecord), else the
+          // next Save keeps it as a new drawing.
+          const r = await writeRecord(p, id, drawingName(p));
+          if (!r.ok) return false;
+          if (stillLoaded()) setProject(prev => mergeSavedPaths(prev, r.safe));
           return true;
         } catch (err) {
           console.error("Floor plan save failed:", err);
@@ -1717,30 +1857,45 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
 
   // Save As: store the current canvas as a new named project (new cloud row)
   // Try mode: a copy keeps the original, so its symbols count twice.
-  const saveProjectAs = (name) => enqueueSave(projectRef.current, ({ p, stillLoaded }) => {
-    if (readOnlyRef.current) return false; // lapsed: read-only
-    if (tryUsageRef.current.blocksSave(null)) { tryPrompt.show(LOCKED.limit); return false; }
-    return insertAsNewProject(p, name || p.meta?.projectName || "Untitled drawing", { stillLoaded, rename: true });
-  });
+  const saveProjectAs = (name) => {
+    if (openStateRef.current !== "ready") return Promise.resolve(false);
+    return enqueueSave(useEditor.getState().project, ({ p, stillLoaded }) => {
+      if (readOnlyRef.current) return false; // lapsed: read-only
+      if (tryUsageRef.current.blocksSave(null)) { tryPrompt.show(LOCKED.limit); return false; }
+      return insertAsNewProject(p, name || p.meta?.projectName || defaultDrawingName(), { stillLoaded, rename: true });
+    });
+  };
 
-  // Insert `p` as a new project row named `name`. Used by Save As (rename:
-  // true -- the editor takes the new name) and by the first Save of a new
-  // drawing (rename: false -- a name typed while it waited is kept).
+  // Insert `p` as a new project row named `name`. Used by Save As and when a
+  // save keeps its work as a new drawing (rename: true -- the editor takes the
+  // new name), and by the first Save of a new drawing (rename: false -- a name
+  // typed while it waited is kept).
   const insertAsNewProject = async (p, name, { stillLoaded, rename }) => {
     try {
       const safe = await readyToSave({ ...p, meta: { ...p.meta, projectName: name } });
-      const id = await insertProject(name, safe);
+      const { id, version } = await insertProjectRecord(name, safe);
+      versionsRef.current.set(id, version);
+      // A new drawing's crash-recovery backup is saved work from now on.
+      if (newKeyRef.current && readDraft(NEW_DRAFT_KEY)?.sessionKey === newKeyRef.current) {
+        removeDraft(NEW_DRAFT_KEY);
+      }
       if (stillLoaded()) {
         // Set the ref now, not on the next render: a save queued behind this
-        // one must update this row, not insert another.
+        // one must update this row, not insert another. The project in the
+        // store is stamped with the row at once for the same reason (the save
+        // guard, writeRecord).
         currentProjectIdRef.current = id;
+        newKeyRef.current = null;
         setCurrentProjectId(id);
         // Merged into the live project, so edits made while this save waited
         // on an upload survive.
-        setProject(prev => mergeSavedPaths({
-          ...prev,
-          meta: { ...prev.meta, projectName: rename ? name : (prev.meta.projectName || name) },
-        }, safe));
+        setProject(prev => ({
+          ...mergeSavedPaths({
+            ...prev,
+            meta: { ...prev.meta, projectName: rename ? name : (prev.meta.projectName || name) },
+          }, safe),
+          _recordId: id,
+        }));
       }
       confirmSaved();
       return true;
@@ -1750,27 +1905,65 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     }
   };
 
-  const openProjectById = async (id) => {
+  // Open the saved drawing `id` in this editor. Until it arrives the editor
+  // shows "Opening drawing…" and nothing can be edited or saved (openState).
+  // Only the newest open, in an editor still on screen, may land: an answer
+  // that comes back after the editor closed or after a newer open is dropped,
+  // so a slow connection can never put one drawing into another's editor.
+  // initial: the open this editor was started for. It may offer the
+  // crash-recovery backup, and if it fails it offers Retry or Back instead of
+  // leaving a blank sheet that looks like the drawing.
+  const openSeqRef = useRef(0);
+  const openProjectById = async (id, { initial = false } = {}) => {
+    const seq = ++openSeqRef.current;
+    const live = () => aliveRef.current && openSeqRef.current === seq;
+    setOpenState("opening");
+    let loaded = null, version = null, missing = false;
     try {
-      const data = await getProjectData(id);
-      if (!data) { alert("Could not find that project."); return; }
-      const np = normaliseProject(data);
-      // Mint signed URLs for any Storage-backed plan images before showing.
-      const hydrated = await hydrateImages(np);
-      // Always open on the first drawing (ground floor), regardless of which
-      // sheet was active when the project was last saved.
-      // Bumped only when the project actually arrives: a save asked for before
-      // this never binds to or merges into it, while a save that finishes
-      // first -- or an open that fails -- still binds to the drawing on screen.
-      loadGenRef.current += 1;
-      setProject({ ...hydrated, activeSheetId: hydrated.sheets[0].id });
-      setCurrentProjectId(id);
-      setShowProjects(false);
-      setHistory([]); setFuture([]);
-      setTimeout(fitToScreen, 50);
+      const rec = await getProjectRecord(id);
+      if (!live()) return;
+      if (!rec || !rec.data) {
+        missing = true;
+      } else {
+        const np = normaliseProject(rec.data);
+        // Mint signed URLs for any Storage-backed plan images before showing.
+        const hydrated = await hydrateImages(np);
+        if (!live()) return;
+        // Always open on the first drawing (ground floor), regardless of which
+        // sheet was active when the project was last saved. Stamped with its
+        // row: only this work may be saved over it (writeRecord).
+        loaded = { ...hydrated, activeSheetId: hydrated.sheets[0].id, _recordId: id };
+        version = rec.version;
+      }
     } catch (err) {
-      alert("Open failed.");
+      console.warn("Open failed:", err?.message || err);
+      if (!live()) return;
     }
+    if (!loaded) {
+      if (initial) { setOpenState(missing ? "missing" : "failed"); return; }
+      setOpenState("ready"); // the drawing already on screen stays
+      alert(missing ? "Could not find that project." : "Open failed.");
+      return;
+    }
+    versionsRef.current.set(id, version);
+    // Read now, before this drawing's own backup is written over the draft.
+    const offer = initial ? draftOfferOnOpen(id, version, loaded) : null;
+    // Bumped only when the project actually arrives: a save asked for before
+    // this never binds to or merges into it, while a save that finishes
+    // first -- or an open that fails -- still binds to the drawing on screen.
+    loadGenRef.current += 1;
+    setProject(loaded);
+    currentProjectIdRef.current = id;
+    setCurrentProjectId(id);
+    setOpenState("ready");
+    setShowProjects(false);
+    setHistory([]); setFuture([]);
+    setRecovery(offer);
+    setTimeout(fitToScreen, 50);
+  };
+  // "Retry" after a failed first open.
+  const retryOpen = () => {
+    if (initialTarget?.projectId) openProjectById(initialTarget.projectId, { initial: true });
   };
 
   const deleteProjectById = async (id) => {
@@ -1797,7 +1990,11 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
           .then(deletePlanImages);
       }
       await refreshProjectList();
-      if (currentProjectId === id) setCurrentProjectId(null);
+      if (currentProjectIdRef.current === id) {
+        // Saved again, it becomes a new drawing.
+        currentProjectIdRef.current = null;
+        setCurrentProjectId(null);
+      }
     } catch (err) {
       alert("Delete failed.");
     }
@@ -1807,7 +2004,9 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     if (placed.length && !confirm("Start a new blank project? Unsaved changes to the current drawing will be lost.")) return;
     loadGenRef.current += 1; // see enqueueSave
     setProject(freshProject());
+    currentProjectIdRef.current = null;
     setCurrentProjectId(null);
+    newKeyRef.current = newSessionKey();
     setHistory([]); setFuture([]);
     setShowProjects(false);
     setTimeout(fitToScreen, 50);
@@ -1819,20 +2018,32 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     if (didInit.current || !initialTarget) return;
     didInit.current = true;
     const t = initialTarget;
+    loadGenRef.current += 1; // see enqueueSave
+    // A blank sheet first, whatever the store still holds from the drawing
+    // before (it outlives the editor), so nothing of another drawing is ever
+    // in this editor, even behind "Opening drawing…".
+    setProject(freshProject());
+    setCurrentProjectId(null);
     if (t.mode === "open" && t.projectId) {
-      openProjectById(t.projectId);
-    } else {
-      loadGenRef.current += 1; // see enqueueSave
-      setProject(freshProject());
-      setCurrentProjectId(null);
-      if (t.category) setActiveCategory(t.category);
-      if (t.mode === "import") setTimeout(() => fileInputRef.current?.click(), 250);
-      setTimeout(fitToScreen, 60);
+      openProjectById(t.projectId, { initial: true });
+      return;
     }
+    newKeyRef.current = newSessionKey();
+    if (t.category) setActiveCategory(t.category);
+    if (t.mode === "import") setTimeout(() => fileInputRef.current?.click(), 250);
+    setTimeout(fitToScreen, 60);
+    if (t.restoreUnsaved) openHandedBackup();
+    else setRecovery(draftOfferOnNew());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ---- Crash recovery: keep a local draft so work is never lost -------------
+  // A backup is only offered once the drawing on screen has settled (opened,
+  // or started new), never on a timer, and only ever restored into the
+  // drawing it is a backup of: same id, and the version that just opened. An
+  // unsaved new drawing's backup found while a saved drawing opens -- or one
+  // made on an older version -- is offered as "Open as a new drawing", which
+  // gives it a row of its own (see the draft keys at the top of this file).
   const projectRef = useRef(project); projectRef.current = project;
   const currentProjectIdRef = useRef(currentProjectId); currentProjectIdRef.current = currentProjectId;
   const draftTimer = useRef(null);
@@ -1840,53 +2051,124 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const countPlaced = (p) => (p?.sheets || []).reduce((n, s) => n + ((s.placed && s.placed.length) || 0), 0);
 
   // Debounced local autosave — survives tab crashes / reloads (esp. on iPad).
+  // Not while a drawing is opening: there is nothing of it to back up yet.
   useEffect(() => {
-    if (!didInit.current) return;
+    if (!didInit.current || openState !== "ready") return;
     if (countPlaced(project) === 0 && !bgImage) return;
     if (draftTimer.current) clearTimeout(draftTimer.current);
     draftTimer.current = setTimeout(() => {
-      try {
-        // Strip ALL image bytes (not just migrated ones) so the draft is a few
-        // KB and reliably fits in localStorage — otherwise a freshly-imported
-        // plan made the draft several MB, it silently failed, and a crash then
-        // lost the user's work entirely.
-        window.localStorage.setItem("planworks:draft:v1", JSON.stringify({
-          projectId: currentProjectId || null, savedAt: Date.now(),
-          project: stripImagesForDraft(project),
-        }));
-      } catch (e) { /* storage full / unavailable */ }
+      // Saved since this was scheduled: the next change backs it up by its id.
+      if (!currentProjectId && currentProjectIdRef.current) return;
+      // Strip ALL image bytes (not just migrated ones) so the draft is a few
+      // KB and reliably fits in localStorage — otherwise a freshly-imported
+      // plan made the draft several MB, it silently failed, and a crash then
+      // lost the user's work entirely.
+      const draft = { savedAt: Date.now(), project: stripImagesForDraft(project) };
+      if (currentProjectId) {
+        writeDraft(DRAFT_KEY, { projectId: currentProjectId, version: versionsRef.current.get(currentProjectId) ?? null, ...draft });
+      } else {
+        writeDraft(NEW_DRAFT_KEY, { projectId: null, sessionKey: newKeyRef.current, ...draft });
+      }
     }, 800);
     return () => { if (draftTimer.current) clearTimeout(draftTimer.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, currentProjectId, bgImage]);
+  }, [project, currentProjectId, bgImage, openState]);
 
-  // Once the initial load settles, offer to restore if the local draft holds
-  // more work than what loaded (i.e. a previous session crashed before saving).
-  useEffect(() => {
-    const id = setTimeout(() => {
-      let draft = null;
-      try { draft = JSON.parse(window.localStorage.getItem("planworks:draft:v1") || "null"); } catch (e) {}
-      if (!draft || !draft.project) return;
-      const sameProject = (draft.projectId || null) === (currentProjectIdRef.current || null);
-      if (sameProject && countPlaced(draft.project) > countPlaced(projectRef.current)) {
-        setRecovery({ project: draft.project, savedAt: draft.savedAt });
+  // What to offer once saved drawing `id` has opened at `version` (loaded):
+  //   - its own backup, to Restore into it, when that holds more work and was
+  //     made on the version that just opened;
+  //   - the same backup made on an older version (or by the editor before
+  //     this one, which didn't record it), as a new drawing: restoring it
+  //     here would replace a newer save;
+  //   - else this device's unsaved new drawing, as a new drawing.
+  // Lapsed accounts can't save, so nothing is offered.
+  const draftOfferOnOpen = (id, version, loaded) => {
+    if (readOnlyRef.current) return null;
+    const own = readDraft(DRAFT_KEY);
+    if (own && own.projectId === id && countPlaced(own.project) > countPlaced(loaded)) {
+      const ownWork = (own.project._recordId ?? id) === id;
+      if (ownWork && own.version != null && own.version === version) {
+        return { kind: "restore", projectId: id, project: own.project, savedAt: own.savedAt };
       }
-    }, 1500);
-    return () => clearTimeout(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      if (onOpenAsNew) return { kind: "new", project: own.project, savedAt: own.savedAt, fromUnsaved: false };
+    }
+    const unsaved = onOpenAsNew ? readUnsavedDraft() : null;
+    if (unsaved && countPlaced(unsaved.project) > 0) {
+      return { kind: "new", project: unsaved.project, savedAt: unsaved.savedAt, fromUnsaved: true };
+    }
+    return null;
+  };
+  // What to offer a new drawing: this device's unsaved new drawing, to Restore
+  // into it (it has no row either).
+  const draftOfferOnNew = () => {
+    if (readOnlyRef.current) return null;
+    const unsaved = readUnsavedDraft();
+    if (unsaved && countPlaced(unsaved.project) > 0) {
+      return { kind: "restore", projectId: null, project: unsaved.project, savedAt: unsaved.savedAt, sessionKey: unsaved.sessionKey || null };
+    }
+    return null;
+  };
 
   const restoreDraft = async () => {
-    if (!recovery) return;
+    const r = recovery;
+    if (!r) return;
+    if (r.kind === "new") { openBackupAsNew(r); return; }
+    const gen = loadGenRef.current;
     // The draft stores only Storage paths, so re-mint signed URLs to render.
-    const hydrated = await hydrateImages(recovery.project);
+    const hydrated = await hydrateImages(r.project);
+    // Only into the drawing it was offered for, and only if nothing else has
+    // been put in the editor since.
+    if (!aliveRef.current) return;
+    if (loadGenRef.current !== gen || (currentProjectIdRef.current || null) !== (r.projectId || null)) {
+      setRecovery(null);
+      return;
+    }
     loadGenRef.current += 1; // see enqueueSave
-    setProject(hydrated);
+    setProject(r.projectId ? { ...asUnsaved(hydrated), _recordId: r.projectId } : asUnsaved(hydrated));
+    if (!r.projectId && r.sessionKey) newKeyRef.current = r.sessionKey;
     setHistory([]); setFuture([]);
     setRecovery(null);
     setTimeout(fitToScreen, 60);
   };
   const dismissDraft = () => setRecovery(null);
+
+  // "Open as a new drawing": leave this drawing the usual way (a saved one is
+  // saved on the way out), then the /new page opens the backup as an unsaved
+  // new drawing (openHandedBackup). An unsaved new drawing's backup is read
+  // there from its own draft; any other is handed over for this tab only.
+  const openBackupAsNew = (r) => {
+    setRecovery(null);
+    leaveEditor(() => {
+      try {
+        if (r.fromUnsaved) window.sessionStorage.removeItem(HANDOFF_KEY);
+        else window.sessionStorage.setItem(HANDOFF_KEY, JSON.stringify(r.project));
+      } catch {
+        if (!r.fromUnsaved) { window.alert("That backup couldn't be opened as a new drawing on this device."); return; }
+      }
+      onOpenAsNew?.();
+    });
+  };
+  const openHandedBackup = async () => {
+    let backup = null, sessionKey = null;
+    try {
+      backup = JSON.parse(window.sessionStorage.getItem(HANDOFF_KEY) || "null");
+      window.sessionStorage.removeItem(HANDOFF_KEY);
+    } catch { backup = null; }
+    if (!backup) {
+      const d = readUnsavedDraft();
+      if (d) { backup = d.project; sessionKey = d.sessionKey || null; }
+    }
+    if (!backup || !Array.isArray(backup.sheets) || !backup.sheets.length) return;
+    const gen = loadGenRef.current;
+    const hydrated = await hydrateImages(backup);
+    if (!aliveRef.current || loadGenRef.current !== gen || currentProjectIdRef.current) return;
+    loadGenRef.current += 1; // see enqueueSave
+    const sheets = hydrated.sheets;
+    setProject({ ...asUnsaved(hydrated), activeSheetId: sheets.some(s => s.id === hydrated.activeSheetId) ? hydrated.activeSheetId : sheets[0].id });
+    if (sessionKey) newKeyRef.current = sessionKey;
+    setHistory([]); setFuture([]);
+    setTimeout(fitToScreen, 60);
+  };
 
   // Try mode's Subscribe: save the drawing first (when the save is allowed) so
   // nothing is lost going through checkout, then open the Subscribe screen.
@@ -1900,7 +2182,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   };
 
   const exportJSON = () => {
-    const data = JSON.stringify(project, null, 2);
+    const data = JSON.stringify(asUnsaved(project), null, 2);
     const blob = new Blob([data], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -1938,26 +2220,31 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   // row is saved on the way out, so the dashboard is always safe to click. One
   // that has never been saved has no row to write to, so it asks first rather
   // than silently creating or discarding anything.
-  const leaveToDashboard = async () => {
-    if (!onHome) return;
-    const p = projectRef.current;
+  // `go` is where to (the dashboard, or a new drawing: openBackupAsNew).
+  const leaveEditor = async (go) => {
+    if (!go) return;
+    // Still opening, or the open failed: there is no drawing here to keep.
+    if (openStateRef.current !== "ready") { go(); return; }
+    const p = useEditor.getState().project;
     const hasWork = countPlaced(p) > 0 || (p?.sheets || []).some(s => s && s.bgImage);
     if (readOnlyRef.current) { // lapsed: nothing can be saved
       if (lapsedWhileOpen.current && hasWork &&
           !confirm("Your account is now view-only, so any changes since your last save can't be saved. Download or print a copy from this screen first if you need them. Leave anyway?")) return;
-      onHome();
+      go();
       return;
     }
     if (hasWork) {
       if (currentProjectIdRef.current) {
+        // Over its own row only; otherwise kept as a new drawing (saveProject).
         const ok = await saveProject();
         if (ok === false && !confirm("Your changes couldn't be saved. Leave anyway?")) return;
       } else if (!confirm("This drawing hasn't been saved yet. Leave without saving?")) {
         return;
       }
     }
-    onHome();
+    go();
   };
+  const leaveToDashboard = () => leaveEditor(onHome);
 
   // ---- Floor plan round trip -----------------------------------------------
   // The sheet's plan came from a sketch when the sheet carries its sketchId (an
@@ -1968,7 +2255,9 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const openFloorPlan = (sketchId) => {
     setFloorPlanArgs({
       openSketchId: sketchId || null,
-      linkProject: currentProjectId,
+      // The ref: Edit floor plan saves first, and that save may have made
+      // this a new drawing since this render.
+      linkProject: currentProjectIdRef.current,
       linkSheet: activeSheet?.id || null,
       linkName: meta.projectName || "Floor plan",
     });
@@ -2073,11 +2362,22 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
 
       {recovery && (
         <div className="flex items-center flex-wrap gap-x-3 gap-y-1 px-4 py-2 bg-[#FFF7E6] border-b border-amber-300 text-[12px] text-amber-900">
-          <span className="font-semibold">Recovered unsaved work</span>
-          <span className="text-amber-700">{countPlaced(recovery.project)} symbols · {new Date(recovery.savedAt).toLocaleString()}</span>
+          {/* A backup of another drawing (kind "new") never goes into this
+              one: it can only become a new drawing of its own. */}
+          <span className="font-semibold">{recovery.kind === "new"
+            ? (recovery.fromUnsaved ? "Unsaved new drawing found on this device" : "Unsaved work from an older copy of this drawing")
+            : "Recovered unsaved work"}</span>
+          <span className="text-amber-700">
+            {recovery.kind === "new" && recovery.project?.meta?.projectName ? `${recovery.project.meta.projectName} · ` : ""}
+            {countPlaced(recovery.project)} symbols · {new Date(recovery.savedAt).toLocaleString()}
+          </span>
           <div className="ml-auto flex gap-2">
-            <button onClick={restoreDraft} className="px-3 py-1.5 rounded-md bg-[var(--action)] text-[color:var(--action-ink)] text-[11px] font-semibold uppercase tracking-wider hover:bg-[var(--action-hover)]">Restore</button>
-            <button onClick={dismissDraft} className="px-3 py-1.5 rounded-md bg-white/70 text-amber-800 text-[11px] font-semibold uppercase tracking-wider hover:bg-white">Dismiss</button>
+            <button onClick={restoreDraft} className="px-3 py-1.5 rounded-md bg-[var(--action)] text-[color:var(--action-ink)] text-[11px] font-semibold uppercase tracking-wider hover:bg-[var(--action-hover)]">
+              {recovery.kind === "new" ? "Open as a new drawing" : "Restore"}
+            </button>
+            <button onClick={dismissDraft} className="px-3 py-1.5 rounded-md bg-white/70 text-amber-800 text-[11px] font-semibold uppercase tracking-wider hover:bg-white">
+              {recovery.kind === "new" && recovery.fromUnsaved ? "Not now" : "Dismiss"}
+            </button>
           </div>
         </div>
       )}
@@ -2341,6 +2641,35 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       )}
       <ShortcutsCard open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} subtitle="Electrical drawing"
         groups={SHORTCUTS} touchGroups={TOUCH_GESTURES} />
+      {/* Opening a saved drawing: over everything, so nothing can be edited
+          or saved until it has arrived (openProjectById). If it can't be
+          opened: Retry or Back, never a blank sheet that looks like it. */}
+      {openState !== "ready" && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-[#F4F6F9] dark:bg-[#0B1117]"
+          onDragOver={(e) => e.preventDefault()} onDrop={(e) => e.preventDefault()}>
+          {openState === "opening" ? (
+            <div role="status" className="text-[10px] tracking-[0.3em] text-slate-400 uppercase">Opening drawing…</div>
+          ) : (
+            <div role="alertdialog" aria-modal="true" aria-labelledby="pw-open-failed"
+              className="w-full max-w-[420px] rounded-2xl bg-white dark:bg-[#16202B] ring-1 ring-slate-200 dark:ring-[#263441] p-6 shadow-xl text-slate-900 dark:text-slate-100">
+              <h2 id="pw-open-failed" className="text-[19px] font-bold mb-2" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>
+                {openState === "missing" ? "This drawing can't be found" : "This drawing didn't open"}
+              </h2>
+              <p className="text-[13.5px] leading-relaxed text-slate-600 dark:text-slate-300 mb-5">
+                {openState === "missing"
+                  ? "It may have been deleted, or it belongs to another account. Nothing has been changed."
+                  : "It couldn't be fetched, probably because of the connection. Nothing has been changed. Try again, or go back to your drawings."}
+              </p>
+              <div className="flex justify-end gap-2">
+                <button type="button" onClick={() => onHome?.()}
+                  className="h-10 px-4 rounded-[10px] text-[13px] font-semibold bg-slate-100 text-[#1A2530] dark:bg-[#22303D] dark:text-slate-100">Back</button>
+                <button type="button" onClick={retryOpen}
+                  className="h-10 px-4 rounded-[10px] text-[13px] font-semibold bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)]">Retry</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
       {/* Try mode: the Subscribe prompt (components/TryMode.jsx). */}
       <TryPrompt open={Boolean(tryPrompt.prompt)} title={tryPrompt.prompt?.title} body={tryPrompt.prompt?.body}
         onSubscribe={subscribeFromEditor} onClose={tryPrompt.hide} />

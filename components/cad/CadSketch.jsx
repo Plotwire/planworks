@@ -22,6 +22,7 @@ import { isAuto, roomSpaces, areaAt, roomAt, onWall, spacesOf, spaceBoxAt } from
 import { wallSnap } from "@/lib/cad/snap";
 import { listSketches, getSketchData, insertSketch, updateSketch, deleteSketch } from "@/lib/cad/sketchStore";
 import { insertProject, getProjectData, updateProjectRow } from "@/lib/db";
+import { defaultDrawingName } from "@/lib/drawingName";
 import { uploadPlanImage, dataUrlToBlob } from "@/lib/planImages";
 import { renderModelToPng } from "@/lib/cad/sketchToImage";
 import { SCALES, MARGIN_MM, PLAN_PX, scalePrefOf, scaleLabel, planSheetFrame, applyPlanToSheet, outsideNote, legacyFrameOf, sheetOriginFor, validOrigin, stairsField, planStairs } from "@/lib/cad/planScale";
@@ -1197,7 +1198,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
     setPlanBusy("Creating drawing");
     const sheetId = "s_" + Math.random().toString(36).slice(2, 9);
     const today = new Date().toISOString().slice(0, 10);
-    const name = sketchName || "Untitled drawing";
+    const name = sketchName || defaultDrawingName();
     const data = {
       meta: { projectName: name, drawingNumber: "", date: today, revision: "A", revNote: "First Issue", company: "", clientName: "", clientEmail: "", scale: scaleLabel(ps.scale) },
       boq: null, titleBlock: null, colourMode: "red",

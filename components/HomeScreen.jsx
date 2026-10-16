@@ -114,6 +114,10 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
   onImport = startNew(onImport);
   onSketch = startNew(onSketch);
   const [cards, setCards] = useState(null);
+  // The list couldn't be fetched. Never shown as "No saved drawings yet":
+  // that reads as if every drawing had gone.
+  const [loadError, setLoadError] = useState(false);
+  const drawingsRef = useRef(null); // the "All drawings" section
   const [pending, setPending] = useState(0);   // local jobs awaiting upload
   // The one drawing awaiting a confirmed delete (null = dialog closed). This
   // holds the whole card, not just an id, so the dialog names exactly what goes.
@@ -123,6 +127,7 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
   const [migrating, setMigrating] = useState(false);
 
   const load = async () => {
+    setLoadError(false);
     try {
       const rows = await listProjects();
       // Sign only the small first-sheet plan image referenced by each preview.
@@ -146,13 +151,26 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
           updatedAt: r.updatedAt,
           count: pv.count || 0,
           project: slimProject,
+          // Searched, not shown: the client (drawing details and quote) and
+          // the quote reference.
+          client: r.clientName || "",
+          quoteClient: r.quoteClient || "",
+          quoteRef: r.quoteRef || "",
         };
       });
       setCards(full);
     } catch (err) {
       console.error(err);
-      setCards([]);
+      setCards(null);
+      setLoadError(true);
     }
+  };
+
+  // "All drawings" in the rail: every saved drawing is in the list below,
+  // newest first. Clears a search and scrolls to it.
+  const showAllDrawings = () => {
+    setQuery("");
+    drawingsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   useEffect(() => {
@@ -187,14 +205,14 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
   }, [toast]);
 
   // Live filter over the drawings already fetched -- no extra query, and no
-  // change to how they're loaded. Matches the same fields the cards show:
-  // name, plot/address and drawing number.
+  // change to how they're loaded. Matches the fields the cards show (name,
+  // plot/address and drawing number) and the client and quote reference.
   const q = query.trim().toLowerCase();
   const visible = useMemo(() => {
     if (!cards) return null;
     if (!q) return cards;
     return cards.filter((c) =>
-      [c.name, c.addr, c.reg].some((v) => (v || "").toLowerCase().includes(q))
+      [c.name, c.addr, c.reg, c.client, c.quoteClient, c.quoteRef].some((v) => (v || "").toLowerCase().includes(q))
     );
   }, [cards, q]);
 
@@ -221,7 +239,7 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
             <svg viewBox="0 0 24 24" fill="none"><path d="M13 2 4 13h6l-1 9 9-11h-6l1-9z" fill="#08313a"/></svg>
           </div>
           <div className="navitem active" title="Dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg></div>
-          <div className="navitem" title="All drawings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></div>
+          <div className="navitem" title="All drawings" onClick={showAllDrawings} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></div>
           <div className="navitem" title="Symbol library" onClick={onSymbols} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="7" cy="7" r="3.2"/><rect x="14" y="4" width="6" height="6" rx="1.4"/><path d="M4 15h6v6H4zM14 18h6"/><circle cx="17" cy="18" r="3.2"/></svg></div>
           <div className="navitem" title="Work planner" onClick={onPlanner} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M7 13h3M7 17h3M14 13h3"/></svg></div>
           <div className="rail-spacer"></div>
@@ -238,7 +256,7 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
                 type="search"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search drawings, plots, drawing numbers..."
+                placeholder="Search drawings, plots, clients, quote refs..."
                 aria-label="Search drawings"
               />
             </div>
@@ -351,9 +369,10 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
                 </div>
               </div>
               <div className="stats">
-                <div className="stat"><div className="n">{stats.drawings}</div><div className="l">Active drawings</div></div>
-                <div className="stat"><div className="n">{stats.month}</div><div className="l">Edited this month</div></div>
-                <div className="stat"><div className="n">{stats.symbols}</div><div className="l">Symbols placed</div></div>
+                {/* Not known while the list hasn't loaded: a dash, not 0. */}
+                <div className="stat"><div className="n">{cards ? stats.drawings : "–"}</div><div className="l">Active drawings</div></div>
+                <div className="stat"><div className="n">{cards ? stats.month : "–"}</div><div className="l">Edited this month</div></div>
+                <div className="stat"><div className="n">{cards ? stats.symbols : "–"}</div><div className="l">Symbols placed</div></div>
               </div>
             </section>
 
@@ -369,12 +388,20 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
               </div>
             </div>
 
-            <div className="sec-head">
-              <h2>Recent drawings</h2>
-              {cards && cards.length > 0 && <span className="muted-count">{cards.length} saved</span>}
+            <div className="sec-head" ref={drawingsRef} id="all-drawings">
+              <h2>All drawings</h2>
+              {cards && cards.length > 0 && <span className="muted-count">{cards.length} saved · newest first</span>}
             </div>
 
-            {cards === null ? (
+            {loadError ? (
+              <div className="empty load-error" role="alert">
+                <strong>Your drawings couldn&rsquo;t be loaded.</strong>
+                <span> They haven&rsquo;t gone anywhere. This is usually the connection. Try again in a moment.</span>
+                <div className="load-error-actions">
+                  <button className="mg-primary" onClick={() => load()}>Retry</button>
+                </div>
+              </div>
+            ) : cards === null ? (
               <div className="grid">
                 {[0, 1, 2].map(i => <div key={i} className="card skel"><div className="thumb"></div><div className="card-body"><div className="sk-line w70"></div><div className="sk-line w40"></div></div></div>)}
               </div>
@@ -714,6 +741,9 @@ html.dark .pw-home .access-banner.is-lapsed{background:#2a2114; border-color:#6b
 .pw-home .sk-line{height:11px; border-radius:5px; background:#eaeef3; margin-top:8px}
 .pw-home .sk-line.w70{width:70%} .pw-home .sk-line.w40{width:40%}
 .pw-home .empty{margin-top:18px; padding:30px; text-align:center; color:var(--muted); font-size:13.5px; background:var(--surface); border:1px dashed var(--line); border-radius:14px}
+.pw-home .load-error{margin-top:0}
+.pw-home .load-error strong{color:var(--ink)}
+.pw-home .load-error-actions{margin-top:14px}
 @media (max-width:720px){.pw-home .rail{width:60px} .pw-home .scroll{padding:24px 18px 50px} .pw-home .hero{padding:24px} .pw-home .hero h1{font-size:24px} .pw-home .stats{gap:22px; flex-wrap:wrap}}
 `;
 
