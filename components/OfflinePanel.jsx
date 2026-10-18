@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { subscribeLibrary, libraryStatus, updateLibrary, appReady } from "@/lib/device/library";
+import { StatusIcon } from "@/components/StatusMark";
 
 // The dashboard's line about the offline library (lib/device/library.js):
 // how many drawings are kept on this device for working without signal, and,
@@ -27,34 +28,40 @@ export default function OfflinePanel() {
   // The app itself (public/sw.js): every page and code file kept too.
   const appDone = appReady(st.app);
   const complete = drawingsDone && appDone;
-  let line;
+  // Traffic-light status (components/StatusMark.jsx): green tick ready to
+  // work offline, amber clock still downloading, red warning needs signal
+  // (or space).
+  const ofTotal = `${st.drawings}${total !== null ? ` of ${total}` : ""}`;
+  let tone, lead, line;
   if (st.state === "updating") {
-    line = total !== null
-      ? `Keeping your drawings on this device for working without signal: ${st.drawings} of ${total}.`
-      : "Checking your drawings for working without signal…";
+    tone = "amber"; lead = "Still downloading:";
+    line = total !== null ? `keeping your drawings on this device, ${st.drawings} of ${total}.` : "checking your drawings…";
   } else if (st.state === "full") {
-    line = `This device is nearly out of storage: ${st.drawings}${total !== null ? ` of ${total}` : ""} drawings are kept for working without signal.`;
+    tone = "red"; lead = "Needs space:";
+    line = `this device is nearly out of storage. ${ofTotal} drawings are kept for working offline.`;
   } else if (complete) {
-    line = total === 0 ? "Your drawings will be kept on this device for working without signal." : `All ${plural(total, "drawing", "drawings")} and their plans are on this device, ready for working without signal.`;
+    tone = "green"; lead = "Ready to work offline:";
+    line = total === 0 ? "your drawings will be kept on this device." : `all ${plural(total, "drawing", "drawings")} and their plans are on this device.`;
   } else if (st.state === "offline") {
+    tone = "red"; lead = "Needs signal:";
     line = appDone
-      ? `No signal: ${plural(st.drawings, "drawing is", "drawings are")} on this device to work on.`
-      : `No signal: ${plural(st.drawings, "drawing is", "drawings are")} on this device, but parts of Plotwire still need signal once to download.`;
+      ? `${ofTotal} drawings are on this device. The rest need signal once to download.`
+      : `${plural(st.drawings, "drawing is", "drawings are")} on this device, but parts of Plotwire still need signal once to download.`;
   } else if (drawingsDone) {
-    line = st.app && st.app.total
-      ? `Your drawings are on this device. Getting the rest of Plotwire ready for working without signal: ${st.app.kept} of ${st.app.total} parts.`
-      : "Your drawings are on this device. Getting Plotwire itself ready for working without signal…";
+    tone = "amber"; lead = "Still downloading:";
+    line = st.app && st.app.total ? `the rest of Plotwire, ${st.app.kept} of ${st.app.total} parts.` : "Plotwire itself…";
   } else {
-    line = `${st.drawings}${total !== null ? ` of ${total}` : ""} drawings are on this device for working without signal.`;
+    tone = "amber"; lead = "Still downloading:";
+    line = `${ofTotal} drawings are on this device so far.`;
   }
   const busy = st.state === "updating";
   const noSignal = st.state === "offline";
 
   return (
-    <div className="offline-strip" role="status">
+    <div className="offline-strip" data-tone={tone} role="status">
       <div className="offline-row">
-        <span className={`offline-dot${complete && !busy ? " is-ready" : ""}${busy ? " is-busy" : ""}`} aria-hidden />
-        <span className="offline-line">{line}</span>
+        <StatusIcon tone={tone} size={22} />
+        <span className="offline-line"><strong>{lead}</strong> {line}</span>
         <button type="button" className="mg-ghost" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
           {open ? "Hide" : "Storage"}
         </button>

@@ -39,7 +39,8 @@ import { planLinks, cachedPlanLinks, rememberUploadedPlan } from "@/lib/device/p
 import { queueSave, subscribeOutbox, outboxStatus, outboxReason, holdSync, releaseSync, discardSave, forgetSaves, pendingSaves, newDrawingId, syncNow } from "@/lib/device/outbox";
 import { warmUpOffline } from "@/lib/device/warmUp";
 import { registerPlanUpload } from "@/lib/device/uploads";
-import { SyncStatus } from "@/components/SheetParts";
+import { SyncStatus, syncView } from "@/components/SheetParts";
+import { hasSignal, subscribeSignal, noteServer, looksLikeNoSignal } from "@/lib/device/connection";
 
 /* ============================================================================
  * PLOTWIRE — Drawing production tool
@@ -213,10 +214,10 @@ function linkPlans(p, links) {
   return changed ? { ...p, sheets } : p;
 }
 
-// The status bar's sync label for a saved drawing: its waiting save's state,
-// or "synced" when nothing of it is waiting (lib/device/outbox). None for a
-// drawing that was never saved.
-const syncLabel = (id) => outboxStatus(id) || (id ? "synced" : null);
+// A saved drawing's save state on this device (lib/device/outbox), or null
+// when nothing of it is waiting. Never "synced" by default: green needs the
+// server's word (syncView in components/SheetParts.jsx, `confirmed` below).
+const syncLabel = (id) => (id ? outboxStatus(id) || null : null);
 
 // Plans already on this device get their links now; the rest follow in the
 // background (the editor's linkPlansLater).
@@ -586,9 +587,22 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const [projectList, setProjectList] = useState([]);   // saved projects index
   const [currentProjectId, setCurrentProjectId] = useState(null);
   // This drawing's save status on this device (lib/device/outbox): "local",
-  // "syncing", "synced", "waiting", "stuck" or "refused"; null before its
-  // first save here.
+  // "syncing", "synced", "waiting", "stuck" or "refused"; null when nothing
+  // of it is waiting.
   const [syncState, setSyncState] = useState(null);
+  // Has the server confirmed the version on screen, this session? true once
+  // it was opened from the server, its version checked, or a save of it went
+  // up; "gone" if the server no longer has it. Opened from this device's
+  // copy, it's false until checked. (syncView, components/SheetParts.jsx.)
+  const [confirmed, setConfirmedValue] = useState(false);
+  const confirmedRef = useRef(false);
+  const setConfirmed = (v) => { confirmedRef.current = v; setConfirmedValue(v); };
+  // Signal, as lib/device/connection sees it: the status changes the moment
+  // it goes or comes back.
+  const [signal, setSignal] = useState(() => hasSignal());
+  // What the drawing looked like when it was put on screen, to tell whether
+  // it has been changed here since (checkLatest).
+  const openedSigRef = useRef(null);
   // A short message about this drawing (a newer version arrived, ...).
   const [openNote, setOpenNote] = useState("");
   // Opening a saved drawing: "opening" until it arrives, then "ready";
@@ -1971,7 +1985,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         showOpened(id, shown, version, initial, waiting ? waiting.tag : null);
         // A new drawing still waiting to upload has no server copy yet.
         if (waiting && waiting.kind === "insert") releaseSync(id);
-        else checkLatest(id, seq, shown, version, Boolean(waiting));
+        else checkLatest(id, seq, editSignature(shown), version, Boolean(waiting));
         return;
       }
       releaseSync(id);
@@ -1998,6 +2012,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       }
     } catch (err) {
       console.warn("Open failed:", err?.message || err);
+      if (looksLikeNoSignal(err)) noteServer(false);
       if (!live()) return;
     }
     if (!loaded) {
@@ -2006,11 +2021,16 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       alert(missing ? "Could not find that project." : "Open failed.");
       return;
     }
-    showOpened(id, loaded, version, initial);
+    noteServer(true);
+    showOpened(id, loaded, version, initial, null, true);
   };
 
-  // Put an opened drawing on screen (either path above).
-  const showOpened = (id, loaded, version, initial, tag = null) => {
+  // Put an opened drawing on screen (either path above). fromServer: just
+  // fetched from the server, so its version is confirmed; from this device's
+  // copy it isn't, until checkLatest hears back.
+  const showOpened = (id, loaded, version, initial, tag = null, fromServer = false) => {
+    setConfirmed(fromServer);
+    openedSigRef.current = editSignature(loaded);
     versionsRef.current.set(id, version);
     lastTagRef.current = null;
     noteTag(tag);
@@ -2038,18 +2058,23 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   // version replaces it on screen. If something has (or this device had a
   // save of its own waiting), the work here is kept: when it goes up, the
   // outbox finds the newer version and saves it as "(copy)" -- the drawing
-  // safety rule. With no signal, the device copy simply carries on.
-  const checkLatest = async (id, seq, shown, version, hadWaiting) => {
+  // safety rule. With no signal, the device copy simply carries on, and the
+  // check runs again when signal returns (the signal effect below).
+  // sigShown: editSignature of the drawing as it was put on screen.
+  const checkingRef = useRef(false);
+  const checkLatest = async (id, seq, sigShown, version, hadWaiting) => {
     const live = () => aliveRef.current && openSeqRef.current === seq;
-    const sigShown = editSignature(shown);
+    checkingRef.current = true;
     try {
       const rec = await getProjectRecord(id, { timeoutMs: 60000 });
+      noteServer(true);
       if (!live()) return;
       if (!rec || !rec.data) {
+        setConfirmed("gone");
         setOpenNote("This drawing has been deleted somewhere else. Saving keeps your work as a new drawing.");
         return;
       }
-      if (rec.version === version) return; // this device's copy is the latest
+      if (rec.version === version) { setConfirmed(true); return; } // this device's copy is the latest
       const edited = editSignature(useEditor.getState().project) !== sigShown;
       if (hadWaiting || edited) {
         setOpenNote("A newer version of this drawing was saved on another device. Your changes here will be saved as a copy.");
@@ -2061,13 +2086,19 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       const links = await cachedPlanLinks(collectImagePaths(np));
       if (!live() || editSignature(useEditor.getState().project) !== sigShown) return;
       versionsRef.current.set(id, rec.version);
-      setProject(prev => ({
+      const latest = {
         ...linkPlans(np, links),
-        activeSheetId: np.sheets.some(s => s.id === prev.activeSheetId) ? prev.activeSheetId : np.sheets[0].id,
+        activeSheetId: np.sheets[0].id,
         _recordId: id,
+      };
+      setProject(prev => ({
+        ...latest,
+        activeSheetId: np.sheets.some(s => s.id === prev.activeSheetId) ? prev.activeSheetId : np.sheets[0].id,
       }));
+      openedSigRef.current = editSignature(latest);
       setHistory([]); setFuture([]);
       setSyncState(syncLabel(id));
+      setConfirmed(true);
       const uid = uidRef.current;
       if (uid) rememberDrawing(uid, id, { name: rec.data?.meta?.projectName || "", data: rec.data, version: rec.version });
       setOpenNote("Updated to the latest version from the server.");
@@ -2076,10 +2107,25 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     } catch (err) {
       // No signal: carry on with this device's copy.
       console.warn("latest version check failed:", err?.message || err);
+      if (looksLikeNoSignal(err)) noteServer(false);
     } finally {
+      checkingRef.current = false;
       releaseSync(id);
     }
   };
+
+  // Signal gone or back (lib/device/connection): the status follows at once.
+  // Back, and the drawing on screen came from this device's copy without
+  // being checked (and nothing of it waits to upload, which would confirm
+  // it): checked now.
+  useEffect(() => subscribeSignal((now) => {
+    setSignal(now);
+    const id = currentProjectIdRef.current;
+    if (!now || !id || confirmedRef.current || checkingRef.current || openStateRef.current !== "ready") return;
+    if (outboxStatus(id)) return;
+    if (!versionsRef.current.has(id) || versionsRef.current.get(id) === undefined) return;
+    checkLatest(id, openSeqRef.current, openedSigRef.current, versionsRef.current.get(id), false);
+  }), []); // eslint-disable-line react-hooks/exhaustive-deps -- refs and stable setters only
 
   // Plans without a link yet: images from this device's copies or downloaded
   // once (planCache), each shown as it arrives; original PDFs from the kept
@@ -2151,6 +2197,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       return ev.type === "copied" ? { ...next, meta: { ...next.meta, projectName: ev.name } } : next;
     });
     setSyncState(syncLabel(ev.id));
+    setConfirmed(true); // the server has this editor's latest save
     tryUsageRef.current.refresh(); // Try mode: the saved totals just changed
     if (ev.type === "copied") {
       const why = ev.reason === "deleted"
@@ -2381,6 +2428,24 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     syncNow();
   };
 
+  // Where this drawing's save is, honestly (components/SheetParts.jsx
+  // syncView): shown beside Save and in the status bar, in traffic-light
+  // colours. Tapped: says why (refused), tries again now (waiting or stuck),
+  // or says what it means.
+  const sync = syncView({
+    state: syncState,
+    reason: currentProjectId ? outboxReason(currentProjectId) : null,
+    signal,
+    confirmed,
+    saved: Boolean(currentProjectId),
+  });
+  const onSyncClick = () => {
+    if (!sync) return;
+    if (syncState === "refused") { explainRefused(); return; }
+    if (syncState === "waiting" || syncState === "stuck" || syncState === "local") syncNow();
+    setOpenNote(`${sync.text}. ${sync.detail.replace(/ Tap (to try now|for why)\.$/, "")}`);
+  };
+
   // Try mode's Subscribe: save the drawing first (when the save is allowed) so
   // nothing is lost going through checkout, then open the Subscribe screen.
   const subscribeFromEditor = async () => {
@@ -2526,6 +2591,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         onImport={() => fileInputRef.current.click()}
         onUndo={undo} onRedo={redo}
         onSave={saveProject} savedFlash={savedFlash}
+        syncView={sync} onSyncClick={onSyncClick}
         onShowProjects={() => { refreshProjectList(); setShowProjects(true); }}
         onExportJSON={access.isTry ? () => tryPrompt.show(LOCKED.saveFile) : exportJSON}
         onPrint={access.isTry ? () => tryPrompt.show(LOCKED.export) : () => setPrintPreview(true)}
@@ -2719,7 +2785,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
               </button>
             </div>
           )}
-          <StatusBar right={<><SyncStatus state={syncState} onRetry={syncState === "refused" ? explainRefused : syncNow} />SHEET A3 · {meta.scale}</>}>
+          <StatusBar right={<><SyncStatus view={sync} onClick={onSyncClick} />SHEET A3 · {meta.scale}</>}>
             {/* The counts always show; the hint after them truncates. */}
             <StatusCount label="SYMBOLS" value={placed.length} />
             <StatusCount label="WIRES" value={wires.length} />

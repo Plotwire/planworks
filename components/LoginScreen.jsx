@@ -6,6 +6,7 @@ import TermsCheckboxes from "@/components/TermsCheckboxes";
 import { LEGAL_LINKS } from "@/lib/legal";
 import { signupTermsMetadata } from "@/lib/termsAcceptance";
 import Turnstile, { TURNSTILE_SITE_KEY, isCaptchaError, CAPTCHA_MESSAGE, captchaPending } from "@/components/Turnstile";
+import { StatusIcon } from "@/components/StatusMark";
 
 // notice: shown above the form, e.g. saves still waiting on this device after
 // the account was signed out by itself (components/AppShell.jsx).
@@ -193,7 +194,8 @@ export default function LoginScreen({ recovery = false, onRecovered, notice = ""
             : mode === "signup" ? "Set up Plotwire for your business — it takes a few seconds."
             : "Enter your account email and we'll send you a link to set a new password."}
         </p>
-        {notice && mode === "signin" && <div className="note" role="status">{notice}</div>}
+        {/* Saves still waiting on this device: amber clock (components/StatusMark.jsx). */}
+        {notice && mode === "signin" && <div className="unsent-note" role="status"><StatusIcon tone="amber" size={20} /><span>{notice}</span></div>}
 
         {mode === "signup" && (
           <label className="field">
@@ -328,6 +330,7 @@ const CSS = `
 .linkish:hover{color:#3FB7C9; text-decoration:underline}
 .note{background:#E8F5F7; border:1px solid #B5DEE4; color:#16596A; font-size:13px; border-radius:10px; padding:10px 12px; margin-bottom:14px}
 .err{background:#FEF2F2; border:1px solid #FECACA; color:#B91C1C; font-size:13px; border-radius:10px; padding:10px 12px; margin-bottom:14px}
+.unsent-note{display:flex; gap:10px; align-items:flex-start; background:#FFFBEB; border:1.5px solid #FBBF24; color:#78350F; font-size:13px; line-height:1.45; border-radius:10px; padding:10px 12px; margin-bottom:14px}
 .submit{width:100%; height:48px; border:none; border-radius:12px; background:var(--action); color:var(--action-ink); font-weight:600; font-size:15px; cursor:pointer; transition:background .15s, transform .1s}
 .submit:hover:not(:disabled){background:var(--action-hover)}
 .submit:active:not(:disabled){transform:translateY(1px)}

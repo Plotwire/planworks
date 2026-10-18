@@ -27,11 +27,22 @@ It fills this "offline library" in the background whenever there's signal,
 and shows its progress on the dashboard. With no signal you can open any
 drawing and work on it. You can also save, start new drawings, import
 plans, sketch, quote and make PDFs. Everything you save goes to the device
-first and uploads by itself when there's signal. The editor's status bar
-(bottom right) says **SAVED ON THIS DEVICE**, **SYNCED** or **WAITING FOR
-SIGNAL**. The drawing-safety rules are unchanged: a save never replaces a
-newer version made elsewhere, it's kept as **"… (copy)"**. Signing out wipes
-everything from the device.
+first and uploads by itself when there's signal. The drawing-safety rules
+are unchanged: a save never replaces a newer version made elsewhere, it's
+kept as **"… (copy)"**. Signing out wipes everything from the device.
+
+**Status is traffic lights** (branch offline-status), in the drawing (a mark
+beside **Save**, and the words at the bottom right), on the dashboard's line
+under **All drawings**, on each drawing card and in the banners:
+- **Green tick:** **Synced** (the server has confirmed it) / **Ready to
+  work offline**.
+- **Amber clock:** **Saved on this device, will upload when signal
+  returns** / **Still downloading** / **No signal**.
+- **Red warning:** **Not uploaded** / **Needs signal**.
+
+Teal is only ever a button. In the drawing, green only shows once the server
+has confirmed the drawing, and the status changes the moment the connection
+drops or returns.
 
 **New since the last round (offline polish):**
 - **The work planner** opens with no signal, showing the planner as last
@@ -66,8 +77,8 @@ everything from the device.
 
 1. With normal signal, go to the dashboard. Under **All drawings** there's a
    new line. It goes from *"Keeping your drawings on this device… 3 of 9"*
-   to **"All 9 drawings and their plans are on this device, ready for working
-   without signal."** with a teal dot.
+   to **"Ready to work offline: all 9 drawings and their plans are on this
+   device."** with a green tick.
 2. Tap **Storage** on that line. Check the details:
    - **Kept for working without signal:** how many drawings and plan files,
      and their size.
@@ -98,7 +109,9 @@ everything from the device.
    - **Before (f791262, on the test link):** "Something went wrong", with
      `ChunkLoadError` in the console (the editor's code wasn't kept: fixed,
      see A15).
-   - **Now:** it opens at once with its plan. The status bar says **SYNCED**.
+   - **Now:** it opens at once with its plan. Beside **Save** and at the
+     bottom: the amber clock, **No signal: saves will wait on this device**
+     (never green: the server can't confirm it without signal).
 3. Open **TEST PDF**. The plan shows. If pdf.js couldn't be fetched, it
    shows the plan's stored image instead, never a blank sheet.
 
@@ -107,15 +120,15 @@ Stay **Offline** for A3 to A7.
 ### A3. Working and saving with no signal
 
 1. In a TEST drawing, place, move and delete symbols. All of it is instant.
-2. Tap **Save**. The status bar shows **WAITING FOR SIGNAL** (amber dot).
+2. Tap **Save**. Beside **Save**, and at the bottom right: the amber clock, **Saved on this device, will upload when signal returns**.
 3. Back on the dashboard, an amber bar says **1 save is waiting for signal**
-   and the card says **Waiting for signal**.
+   and the card shows the amber **Saved on this device**.
 4. Reload (still Offline) and open the drawing: your changes are there.
 
 ### A4. New drawings and imports with no signal
 
 1. **Blank A3 sheet** → place 3 symbols → **Save**. It saves straight away
-   (**WAITING FOR SIGNAL**), and its card is on the dashboard.
+   (amber clock), and its card is on the dashboard.
 2. **Import a PDF plan** → pick a PDF. It imports with no signal. Place a
    symbol and **Save**.
 3. **Blank A3 sheet** → **Import** → a plan image (PNG or JPG) → **Save**.
@@ -125,7 +138,7 @@ Stay **Offline** for A3 to A7.
 1. **Sketch a floor plan** → name it `TEST offline sketch` → draw four
    outline walls → **Save**. It saves (no "Couldn't save").
 2. **Use plan** → **Create a new drawing**. The editor opens the new drawing
-   with the plan on it (**WAITING FOR SIGNAL**).
+   with the plan on it (amber clock).
    - **Before:** "Couldn't send the plan to the editor".
 3. Open **TEST plan B** → **Edit floor plan**. It opens from the device.
    Move a wall, then **Use plan**. The drawing updates with the new plan.
@@ -147,7 +160,7 @@ Stay **Offline** for A3 to A7.
 
 1. Network → **No throttling**. Within a few seconds:
    - the amber bar goes;
-   - every drawing from A3 to A5 shows **SYNCED**;
+   - every drawing from A3 to A5 shows the green tick (**Synced**);
    - the sketch, the new drawings and the rate change are all on the
      account.
 2. Check on another device (or an Edge InPrivate window): the new drawings
@@ -157,8 +170,8 @@ Stay **Offline** for A3 to A7.
 
 1. Network → **Slow 3G**. Reload the dashboard: cards and thumbnails appear
    at once.
-2. Open any drawing: it's on screen at once. Save: **SAVED ON THIS DEVICE**,
-   then **SYNCED** a few seconds later. Tap **Dashboard** straight after
+2. Open any drawing: it's on screen at once. Save: the amber clock,
+   then the green tick (**Synced**) a few seconds later. Tap **Dashboard** straight after
    Save: no waiting.
 
 ### A9. Drawing safety (nothing may ever be overwritten)
@@ -190,8 +203,8 @@ The sign-in renews itself every hour, which needs signal.
 2. Come back and reload (still Offline).
    - **Before:** the sign-in page, after up to a minute's wait.
    - **Now:** straight into the dashboard. Open a drawing, change it, and
-     **Save**: **WAITING FOR SIGNAL**.
-3. **No throttling**: the save uploads (**SYNCED**). You stay signed in.
+     **Save**: the amber clock.
+3. **No throttling**: the save uploads (green tick, **Synced**). You stay signed in.
 
 ### A11. Signing out, and a second account
 
@@ -250,28 +263,29 @@ is at the top of the dashboard and the editor.
    symbols. After **5** more the pill says **25 of 25**, and the next one
    brings up **Subscribe to keep going**: the same as with signal.
 3. **Blank A3 sheet** → try to place a symbol: the same message. Saving the
-   drawing (5 more, **WAITING FOR SIGNAL**) is allowed, because it fits.
-4. **No throttling**: it uploads (**SYNCED**). Nothing is refused.
+   drawing (5 more, the amber clock) is allowed, because it fits.
+4. **No throttling**: it uploads (green tick, **Synced**). Nothing is refused.
 
 **b. A save refused anyway is kept, with a clear message.**
 This needs a second device to use up the trial meanwhile.
 1. Start from **15** symbols used (delete 10 from a TEST drawing if
    needed, and let it sync).
 2. Laptop: Network → **Offline**. Open **TEST drawing 1**, place **5**
-   symbols, **Save** (**WAITING FOR SIGNAL**).
+   symbols, **Save** (amber clock).
 3. InPrivate window (with signal), same account: open **TEST drawing 2**,
    place **10** symbols, **Save**. The account is now at 25.
 4. Laptop: **No throttling**. The laptop's save no longer fits.
    - **Now:** the editor says **Over the trial limit: not uploaded**:
      *kept safe on this device. Subscribe and it uploads by itself, or
-     remove some symbols and save again.* The status bar says **NOT
-     UPLOADED** (red dot); tapping it says the same again.
-   - Dashboard: a pink bar, **1 save is over the trial limit, so not
-     uploaded**, with **Subscribe**, and the card says **Not uploaded**.
+     remove some symbols and save again.* Beside **Save** and at the bottom: the red
+     warning, **Not uploaded**; tapping it says the same again.
+   - Dashboard: a red bar with the warning, **1 save is over the trial
+     limit, so not uploaded**, with **Subscribe**, and the card's red
+     **Not uploaded**.
    - Reload: all of it is still there. Sign out warns that the save would
      be lost (tap **Cancel**).
 5. Open **TEST drawing 1**, remove **5** symbols, **Save**. It uploads
-   (**SYNCED**) and the pink bar goes.
+   (green tick, **Synced**) and the red bar goes.
 
 ### A15. Every part of the app opens offline (the f791262 bug)
 
@@ -297,6 +311,30 @@ name, whatever follows the `?`.
    download** instead, note which. It's the message for a part this device
    never downloaded (in place of the old crash screen); **Try again** with
    signal fixes it.
+
+### A16. Honest status, with the network truly off (offline-status)
+
+DevTools **Offline** doesn't reliably stop the app reaching Supabase, which
+is how a save made "offline" could really upload and say **Synced**. So for
+this one, turn the laptop's **Wi-Fi off** (or unplug the network cable)
+instead of using DevTools.
+
+1. With signal, open a TEST drawing. Within a second or two: the **green
+   tick** beside **Save**, and **Synced** at the bottom right.
+2. **Wi-Fi off.** At once: the **amber clock**, **No signal: saves will wait
+   on this device**.
+3. Place a symbol, **Save**. Still the **amber clock**, now **Saved on this
+   device, will upload when signal returns**. Never green.
+4. Dashboard (still no Wi-Fi): the amber bar **Saved on this device, will
+   upload when signal returns: 1 save**, and that drawing's card shows the
+   amber **Saved on this device**. The others show no badge (nothing to
+   confirm them against without signal).
+5. **Wi-Fi on.** Within a few seconds, without reloading: the drawing goes to
+   the **green tick, Synced**; the dashboard's amber bar goes and the cards
+   show the green **Synced**.
+6. The red **Not uploaded** is A14b.
+7. In dark mode (moon button on the dashboard), check the green, amber and
+   red are still bright and easy to tell apart.
 
 ---
 
@@ -325,7 +363,7 @@ day, from the **Home Screen icon**:
 
 1. Open several jobs, including ones you haven't opened this week.
 2. Place, move and delete symbols. Draw wires. Add notes. **Save** often:
-   **WAITING FOR SIGNAL**.
+   the amber clock.
 3. Start a **new drawing**. **Import** a plan from the camera roll, and a PDF
    plan from Files.
 4. **Sketch a floor plan**, **Use plan** → new drawing. On another drawing,
@@ -348,7 +386,7 @@ day, from the **Home Screen icon**:
 ### B3. End of the day
 
 1. Turn **Airplane Mode off**. Within a minute or so the amber bar goes and
-   the editor says **SYNCED**. Tap **Try now** if you don't want to wait.
+   the editor says the green tick (**Synced**). Tap **Try now** if you don't want to wait.
 2. On the laptop, check:
    - every drawing you changed has the day's changes;
    - the new drawings and sketches are there with their plans;
@@ -360,7 +398,7 @@ day, from the **Home Screen icon**:
 - Anything that didn't open, or said no signal when you didn't expect it.
 - Anything slow.
 - The figures under **Storage** at the end of the day.
-- Whether any drawing showed **Couldn't sync** or **Not uploaded** (red
+- Whether any drawing showed the red **Not uploaded** (warning
   dot), and what the dashboard said about it.
 
 ---

@@ -10,6 +10,7 @@ import {
 } from "@/lib/planner";
 import { keptPlanner, keepPlanner, keepPlannerSettings } from "@/lib/device/plannerCopy";
 import { isMissingCode, NEEDS_SIGNAL_ALERT } from "@/components/NeedsSignal";
+import { StatusIcon } from "@/components/StatusMark";
 import { useApp } from "@/components/AppShell";
 import { useTryPrompt, TryPrompt, LOCKED } from "@/components/TryMode";
 import { FONTS, COND, SEMI, palette, Pill, JobCard, lbl } from "@/components/planner/ui";
@@ -1056,7 +1057,8 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
 
       {/* No signal: this device's copy (lib/device/plannerCopy.js), view only. */}
       {!sharedView && phase === "offline" && (
-        <div role="status" style={{ width: 1300, maxWidth: "100%", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "6px 8px 6px 14px", borderRadius: 9, background: P.amberBg, border: "1px solid " + P.amberLine, color: P.ink, fontSize: 13 }}>
+        <div role="status" style={{ width: 1300, maxWidth: "100%", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "6px 8px 6px 10px", borderRadius: 9, background: dark ? "#33290f" : "#FFFBEB", border: "1.5px solid " + (dark ? "#F59E0B" : "#FBBF24"), color: P.ink, fontSize: 13 }}>
+          <StatusIcon tone="amber" size={20} />
           <span><b>Offline:</b> showing last saved{syncedAt ? " (" + savedWhen(syncedAt) + ")" : ""}. Changes need signal.</span>
           <button type="button" onClick={() => loadOwn()} style={{ ...btn(P, "primary"), marginLeft: "auto", padding: "4px 11px", fontSize: 12.5 }}>Try again</button>
         </div>

@@ -14,6 +14,8 @@ import { LEGAL_LINKS } from "@/lib/legal";
 import { TryPill } from "@/components/TryMode";
 import Turnstile, { TURNSTILE_SITE_KEY, captchaPending } from "@/components/Turnstile";
 import Toast from "@/components/Toast";
+import { StatusIcon, StatusPill } from "@/components/StatusMark";
+import { hasSignal, subscribeSignal, noteServer, looksLikeNoSignal } from "@/lib/device/connection";
 
 /* Sheet geometry — must match ElectricalPlanTool */
 const SHEET = { width: 1587, height: 1123, margin: 18, legendWidth: 230, notesWidth: 280, titleHeight: 110 };
@@ -137,6 +139,10 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
   const [waiting, setWaiting] = useState([]);
   // The list shown is this device's last copy: the server didn't answer.
   const [fromDevice, setFromDevice] = useState(false);
+  // The list shown is the server's, this visit: only then can a card say
+  // "Synced" (green). And whether there's signal now (lib/device/connection).
+  const [fromServer, setFromServer] = useState(false);
+  const [signal, setSignal] = useState(() => hasSignal());
   const uid = user?.id || null;
   const rowsRef = useRef(null);
 
@@ -218,13 +224,17 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
     }
     try {
       const rows = await listProjects({ timeoutMs: 45000 });
+      noteServer(true);
       rememberList(uid, rows);
       setFromDevice(false);
+      setFromServer(true);
       fillThumbnails(await show(rows));
     } catch (err) {
       console.error(err);
+      if (looksLikeNoSignal(err)) noteServer(false);
       if (shownFromDevice || rowsRef.current) {
         setFromDevice(true);
+        setFromServer(false);
         return;
       }
       setCards(null);
@@ -253,6 +263,13 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
   // first drawing opens without waiting for it, and all of it opens with no
   // signal later.
   useEffect(() => warmUpOffline({ delayMs: 2500 }), []);
+
+  // Signal gone: the status says so at once. Back: the list from the
+  // server again, so the cards can say "Synced".
+  useEffect(() => subscribeSignal((now) => {
+    setSignal(now);
+    if (now) load();
+  }), []); // eslint-disable-line react-hooks/exhaustive-deps -- load reads refs
 
   // "All drawings" in the rail: every saved drawing is in the list below,
   // newest first. Clears a search and scrolls to it.
@@ -497,19 +514,23 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
               {cards && cards.length > 0 && <span className="muted-count">{cards.length} saved · newest first</span>}
             </div>
 
-            {(toSend.length > 0 || fromDevice) && (
-              <div className="access-banner sync-banner" role="status">
-                <div>
+            {/* Traffic-light status (components/StatusMark.jsx): amber clock
+                for saves waiting and no signal, red warning for saves not
+                uploaded. */}
+            {(toSend.length > 0 || fromDevice || !signal) && (
+              <div className="access-banner sync-banner status-banner" data-tone="amber" role="status">
+                <StatusIcon tone="amber" size={26} />
+                <div className="status-banner-text">
                   {toSend.length > 0 && (
                     <>
-                      <strong>{toSend.length === 1 ? "1 save is" : `${toSend.length} saves are`} waiting for signal.</strong>
-                      <span> {toSend.length === 1 ? "It's" : "They're"} safe on this device and will upload by {toSend.length === 1 ? "itself" : "themselves"} when there&rsquo;s signal.</span>
+                      <strong>Saved on this device, will upload when signal returns:</strong>
+                      <span> {toSend.length === 1 ? "1 save. It's safe here and uploads by itself." : `${toSend.length} saves. They're safe here and upload by themselves.`}</span>
                     </>
                   )}
-                  {toSend.length === 0 && fromDevice && (
+                  {toSend.length === 0 && (
                     <>
                       <strong>No signal.</strong>
-                      <span> These are your drawings as this device last saw them. The list updates when there&rsquo;s signal.</span>
+                      <span> These are your drawings as this device last saw them. Saves wait on this device, and the list updates when there&rsquo;s signal.</span>
                     </>
                   )}
                 </div>
@@ -520,8 +541,9 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
             {/* Saves the account wouldn't take (lib/device/outbox "refused"),
                 or that keep failing: kept on this device, never dropped. */}
             {overLimit.length > 0 && (
-              <div className="access-banner problem-banner" role="alert">
-                <div>
+              <div className="access-banner problem-banner status-banner" data-tone="red" role="alert">
+                <StatusIcon tone="red" size={26} />
+                <div className="status-banner-text">
                   <strong>{overLimit.length === 1 ? "1 save is" : `${overLimit.length} saves are`} over the trial limit, so not uploaded.</strong>
                   <span> {overLimit.length === 1 ? "It's" : "They're"} kept safe on this device. Subscribe and {overLimit.length === 1 ? "it uploads by itself" : "they upload by themselves"}, or open the drawing, remove some symbols and save again.</span>
                 </div>
@@ -529,8 +551,9 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
               </div>
             )}
             {noSubscription.length > 0 && (
-              <div className="access-banner problem-banner" role="alert">
-                <div>
+              <div className="access-banner problem-banner status-banner" data-tone="red" role="alert">
+                <StatusIcon tone="red" size={26} />
+                <div className="status-banner-text">
                   <strong>{noSubscription.length === 1 ? "1 save isn't" : `${noSubscription.length} saves aren't`} uploaded: your subscription isn&rsquo;t active.</strong>
                   <span> {noSubscription.length === 1 ? "It's" : "They're"} kept safe on this device, and {noSubscription.length === 1 ? "uploads by itself" : "upload by themselves"} once you subscribe again.</span>
                 </div>
@@ -538,8 +561,9 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
               </div>
             )}
             {stuck.length > 0 && (
-              <div className="access-banner problem-banner" role="alert">
-                <div>
+              <div className="access-banner problem-banner status-banner" data-tone="red" role="alert">
+                <StatusIcon tone="red" size={26} />
+                <div className="status-banner-text">
                   <strong>{stuck.length === 1 ? "1 save" : `${stuck.length} saves`} couldn&rsquo;t be uploaded yet.</strong>
                   <span> {stuck.length === 1 ? "It's" : "They're"} kept safe on this device, and Plotwire keeps trying.</span>
                 </div>
@@ -568,15 +592,21 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
                     <div className="thumb">
                       <span className="badge">{c.reg || "A3"}</span>
                       {c.floors > 1 && <span className="badge badge-floors">{c.floors} floors</span>}
-                      {c.waiting && !c.problem && <span className="badge badge-waiting" title="Saved on this device. It uploads when there's signal.">Waiting for signal</span>}
-                      {c.problem && (
-                        <span className="badge badge-problem"
-                          title={c.problem === "limit" ? "Kept on this device: over the trial limit, so your account won't take it yet."
-                            : c.problem === "subscription" ? "Kept on this device: your subscription isn't active, so your account won't take it yet."
-                            : "Kept on this device: it couldn't be uploaded yet. Plotwire keeps trying."}>
-                          Not uploaded
-                        </span>
-                      )}
+                      {/* Traffic-light status: amber clock waiting, red warning
+                          not uploaded, green tick synced (the server's list,
+                          with signal, and nothing of it waiting). */}
+                      <span className="card-status">
+                        {c.problem ? (
+                          <StatusPill tone="red" size="md" text="Not uploaded"
+                            title={c.problem === "limit" ? "Kept on this device: over the trial limit, so your account won't take it yet."
+                              : c.problem === "subscription" ? "Kept on this device: your subscription isn't active, so your account won't take it yet."
+                              : "Kept on this device: it couldn't be uploaded yet. Plotwire keeps trying."} />
+                        ) : c.waiting ? (
+                          <StatusPill tone="amber" size="md" text="Saved on this device" title="Saved on this device, will upload when signal returns." />
+                        ) : fromServer && signal ? (
+                          <StatusPill tone="green" size="md" text="Synced" title="Saved to your account." />
+                        ) : null}
+                      </span>
                       <PlanThumb project={c.project} />
                       <button
                         type="button"
@@ -879,16 +909,28 @@ html.dark .pw-home .access-banner.is-lapsed{background:#2a2114; border-color:#6b
 /* Post-delete confirmation */
 .pw-home .badge-floors{left:auto; right:11px; background:rgba(63,183,201,.92); color:#08313a; font-weight:600}
 /* Saved on this device, not yet uploaded (lib/device/outbox) */
-.pw-home .badge-waiting{top:auto; bottom:11px; background:#F6C453; color:#3B2A05; font-weight:600}
-.pw-home .badge-problem{top:auto; bottom:11px; background:#D9534F; color:#fff; font-weight:600}
-.pw-home .problem-banner{background:#FDF0EF; border-color:#F0B8B4}
-html.dark .pw-home .problem-banner{background:#2E1A1A; border-color:#6E3431}
+/* Traffic-light status (components/StatusMark.jsx): never teal */
+.pw-home .card-status{position:absolute; left:10px; bottom:10px; z-index:2; display:flex}
+.pw-home .card-status .pw-status{box-shadow:0 2px 6px -2px rgba(11,17,23,.3)}
+.pw-home .thumb .card-status svg{position:static; inset:auto; width:16px; height:16px}
+.pw-home .status-banner{justify-content:flex-start; flex-wrap:nowrap; border-width:1.5px}
+.pw-home .status-banner .status-banner-text{flex:1; min-width:0}
+.pw-home .status-banner > button{flex-shrink:0}
+@media (max-width:720px){.pw-home .status-banner{flex-wrap:wrap}}
+.pw-home .problem-banner,.pw-home [data-tone=red].status-banner{background:#FEF2F2; border-color:#F87171}
+html.dark .pw-home .problem-banner,html.dark .pw-home [data-tone=red].status-banner{background:#2E1A1A; border-color:#EF4444}
 .pw-home .offline-strip{border:1px solid var(--line); background:var(--surface); border-radius:14px; padding:10px 14px; margin-bottom:18px}
 .pw-home .offline-row{display:flex; align-items:center; gap:12px; flex-wrap:wrap}
 .pw-home .offline-line{flex:1; min-width:200px; font-size:13.5px; color:var(--ink-2)}
-.pw-home .offline-dot{width:9px; height:9px; border-radius:50%; background:#9AA9B5; flex:none}
-.pw-home .offline-dot.is-ready{background:var(--teal-600)}
-.pw-home .offline-dot.is-busy{background:var(--teal); animation:pw-pulse 1.2s ease-in-out infinite}
+.pw-home .offline-line strong{font-weight:700; color:var(--ink)}
+/* Traffic-light tones (components/StatusMark.jsx), never teal */
+.pw-home .offline-strip[data-tone]{border-width:1.5px}
+.pw-home .offline-strip[data-tone=green]{background:#F0FDF4; border-color:#4ADE80}
+.pw-home .offline-strip[data-tone=amber]{background:#FFFBEB; border-color:#FBBF24}
+.pw-home .offline-strip[data-tone=red]{background:#FEF2F2; border-color:#F87171}
+html.dark .pw-home .offline-strip[data-tone=green]{background:#0F2A1B; border-color:#22C55E}
+html.dark .pw-home .offline-strip[data-tone=amber]{background:#33290f; border-color:#F59E0B}
+html.dark .pw-home .offline-strip[data-tone=red]{background:#2E1A1A; border-color:#EF4444}
 @keyframes pw-pulse{50%{opacity:.35}}
 .pw-home .offline-details{margin-top:12px; padding-top:12px; border-top:1px solid var(--line)}
 .pw-home .offline-details dl{display:grid; grid-template-columns:minmax(150px,auto) 1fr; gap:6px 16px; margin:0 0 10px; font-size:13px}
@@ -911,8 +953,8 @@ html.dark .pw-home .problem-banner{background:#2E1A1A; border-color:#6E3431}
 .pw-home .help-note b{color:var(--ink); font-weight:600}
 .pw-home .help-note .help-why{font-size:12.5px; color:var(--muted)}
 @media (max-width:720px){.pw-home .help-menu{width:230px}}
-.pw-home .sync-banner{background:linear-gradient(120deg,#FFF6E0,#FFFBEF); border-color:#F1D48A}
-html.dark .pw-home .sync-banner{background:linear-gradient(120deg,#33290f,#2a2412); border-color:#6b5520}
+.pw-home .sync-banner{background:#FFFBEB; border-color:#FBBF24}
+html.dark .pw-home .sync-banner{background:#33290f; border-color:#F59E0B}
 .pw-home .card-body{padding:14px 16px 15px; transition:background .2s cubic-bezier(.2,.7,.3,1)}
 .pw-home .card-title{font-size:14.5px; font-weight:600; letter-spacing:-.01em; margin-bottom:3px; transition:color .2s cubic-bezier(.2,.7,.3,1); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .pw-home .card-addr{font-size:12.5px; color:var(--muted); transition:color .2s cubic-bezier(.2,.7,.3,1); display:flex; align-items:center; gap:5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
