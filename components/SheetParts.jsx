@@ -957,13 +957,27 @@ export function Sheet({
 }) {
   const { access = {} } = useApp();
   const trial = Boolean(access.isTry);
+  // With the screen-space plan, the paper is white everywhere but the
+  // drawing area, which paints its own white unless the plan shows through
+  // it from under the sheet (PlanBackground). Set after mount: the server
+  // can't know the device.
+  const [screenPlan, setScreenPlan] = useState(false);
+  useEffect(() => { setScreenPlan(screenPlanEnabled()); }, []);
+  const paper = screenPlan
+    ? [
+        `0 0 / 100% ${DRAW.y}px`,
+        `0 ${DRAW.y + DRAW.h}px / 100% ${SHEET.height - DRAW.y - DRAW.h}px`,
+        `0 ${DRAW.y}px / ${DRAW.x}px ${DRAW.h}px`,
+        `${DRAW.x + DRAW.w}px ${DRAW.y}px / ${SHEET.width - DRAW.x - DRAW.w}px ${DRAW.h}px`,
+      ].map((at) => `linear-gradient(#ffffff, #ffffff) ${at} no-repeat`).join(", ")
+    : "#ffffff";
   return (
     <div
       data-sheet-bg
       style={{
         width: SHEET.width,
         height: SHEET.height,
-        background: "#ffffff",
+        background: paper,
         color: "#0a0a0a",
         position: "relative",
         boxShadow: "0 20px 50px -12px rgba(15,23,42,0.25), 0 0 0 1px rgba(15,23,42,0.08)",
@@ -1154,6 +1168,43 @@ function sharpPlanEnabled() {
   return process.env.NEXT_PUBLIC_SHARP_PLAN === "true";
 }
 
+/* The plan drawn in screen space (Safari and every other WebKit browser:
+ * Mac, iPad, iPhone).
+ *
+ * WebKit draws the plan canvas into the zoomed sheet's layer at the sheet's
+ * layout size (times the device scale, and the supersample N on touch) and
+ * then stretches that layer by the zoom (lib/touch.js). However many pixels
+ * the canvas holds, at 500% it reaches the screen about four times coarser
+ * than the screen: crisp in Chrome and Edge, which draw at the zoom, soft in
+ * Safari on a Mac or an iPad.
+ *
+ * So once the view holds still, the visible part of the plan is drawn again
+ * into a canvas that is NOT inside the zoomed sheet: it sits under it in the
+ * viewport, one canvas pixel per screen pixel, and the drawing area is made
+ * see-through over it. Symbols, walls and the grid stay in the sheet above.
+ * While a pinch or pan moves the sheet, the canvas inside the sheet shows
+ * instead (it moves with it), and the screen one is drawn again on settle.
+ *
+ * ?screenplan=0 turns it off on a device, ?screenplan=1 on (any browser). */
+function screenPlanEnabled() {
+  if (typeof window === "undefined") return false;
+  try {
+    const v = new URLSearchParams(window.location.search).get("screenplan");
+    if (v === "1") return true;
+    if (v === "0") return false;
+  } catch { /* ignore */ }
+  return isWebKitEngine();
+}
+
+// Safari, and every browser on an iPhone or iPad (all WebKit underneath).
+// Not Chrome or Edge, whose user agents say "AppleWebKit" too.
+function isWebKitEngine() {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  if (/iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return true;
+  return /AppleWebKit/.test(ua) && !/(Chrome|Chromium|CriOS|Edg|OPR|SamsungBrowser|Android)\//.test(ua);
+}
+
 /* ----------------------------------------------------------------------------
  * PLAN SOURCES — a PDF page and a decoded bitmap, behind one interface
  * ----------------------------------------------------------------------------
@@ -1240,6 +1291,11 @@ function drawRegionSmooth(ctx, img, r, cw, ch) {
   if (src !== img) { src.width = src.height = 0; }
 }
 
+// The screen-space plan's canvas stays inside iOS's limits: a 12.9in iPad's
+// whole screen is about 5.6M pixels.
+const SCREEN_MAX_AREA = 12_000_000;
+const SCREEN_MAX_DIM = 4096;
+
 function PlanBackground({ bgImage, imageDisplay, viewportRef }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
@@ -1248,6 +1304,38 @@ function PlanBackground({ bgImage, imageDisplay, viewportRef }) {
   // Monotonic render id: only the newest completed render may be swapped in.
   const seqRef = useRef(0);
   const [loaded, setLoaded] = useState(0);
+
+  // The screen-space plan (screenPlanEnabled): its canvas lives in the
+  // viewport, under the zoomed sheet.
+  const [screenOn] = useState(screenPlanEnabled);
+  const screenRef = useRef(null);
+  const screenTaskRef = useRef(null);
+  const screenSeqRef = useRef(0);
+  // Which canvas shows the plan: the screen one (a still view, sharp) or the
+  // one in the sheet (it moves with a gesture). The drawing area and the
+  // plan's box stay white unless the screen one is showing through them.
+  // Written straight to the nodes: React sets those backgrounds once and
+  // leaves them alone after.
+  const showScreen = (on) => {
+    const sc = screenRef.current, cv = canvasRef.current, wrap = wrapRef.current;
+    const show = Boolean(on && sc);
+    if (sc) sc.style.visibility = show ? "visible" : "hidden";
+    if (cv) cv.style.visibility = show ? "hidden" : "visible";
+    if (wrap) {
+      wrap.style.background = show ? "transparent" : "#ffffff";
+      if (wrap.parentElement) wrap.parentElement.style.background = show ? "transparent" : "#ffffff";
+    }
+  };
+  useEffect(() => {
+    const vp = viewportRef?.current;
+    if (!screenOn || !vp) return;
+    const c = document.createElement("canvas");
+    c.setAttribute("aria-hidden", "true");
+    c.style.cssText = "position:absolute;left:0;top:0;width:0;height:0;pointer-events:none;visibility:hidden";
+    vp.insertBefore(c, vp.firstChild); // first, so the sheet paints over it
+    screenRef.current = c;
+    return () => { showScreen(false); c.remove(); screenRef.current = null; };
+  }, [screenOn, viewportRef]); // eslint-disable-line react-hooks/exhaustive-deps -- showScreen reads refs only
 
   // Load whichever source this sheet has, once per source. A PDF wins when both
   // are present: the raster stored alongside it is only the preview rasterised
@@ -1352,7 +1440,9 @@ function PlanBackground({ bgImage, imageDisplay, viewportRef }) {
         // left over. Density is what the user looks at; the margin only shows
         // if you flick faster than the 130ms settle. A soft plan is visible
         // everywhere, a short margin is visible occasionally.
-        const SS = 2 / supersampleFactor();                // supersample factor
+        // With the screen-space plan on, this canvas only shows while a
+        // gesture moves the sheet, so device resolution is plenty.
+        const SS = screenOn ? 1 : 2 / supersampleFactor(); // supersample factor
         const MAX_AREA = 12_000_000;                       // ~12MP visible-window budget
         const MAX_DIM = 4096;                              // iOS-safe per-side limit
         const OVERDRAW_MAX = 0.25;                         // never more than 25% a side
@@ -1436,7 +1526,58 @@ function PlanBackground({ bgImage, imageDisplay, viewportRef }) {
       } catch (e) { /* transient during fast moves — next settle re-renders */ }
     };
 
+    // The screen-space plan for the view now on screen, keyed by the settle
+    // it was asked for: drawn off screen, and swapped in only if the view is
+    // still where it was. One canvas pixel per device pixel, in the viewport.
+    const renderScreen = (key) => {
+      const src = srcRef.current, wrap = wrapRef.current, sc = screenRef.current, vp = viewportRef?.current;
+      const da = wrap && wrap.parentElement;
+      if (!src || !sc || !vp || !da) return;
+      try {
+        const dpr = window.devicePixelRatio || 1;
+        const vr = vp.getBoundingClientRect(), ar = da.getBoundingClientRect(), pr = wrap.getBoundingClientRect();
+        // The drawing area's part of the viewport, in whole device pixels
+        // from the viewport's corner.
+        const L = Math.floor((Math.max(ar.left, vr.left) - vr.left) * dpr);
+        const T = Math.floor((Math.max(ar.top, vr.top) - vr.top) * dpr);
+        const R = Math.ceil((Math.min(ar.right, vr.right) - vr.left) * dpr);
+        const B = Math.ceil((Math.min(ar.bottom, vr.bottom) - vr.top) * dpr);
+        const cw = R - L, ch = B - T;
+        if (cw < 2 || ch < 2 || cw * ch > SCREEN_MAX_AREA || Math.max(cw, ch) > SCREEN_MAX_DIM) return;
+        // The plan's part of that. Its offset is whole pixels; the source
+        // rectangle carries the fraction, so the plan lands where it is.
+        const ox = (pr.left - vr.left) * dpr, oy = (pr.top - vr.top) * dpr;
+        const px0 = Math.max(Math.floor(ox), L), py0 = Math.max(Math.floor(oy), T);
+        const px1 = Math.min(Math.ceil(ox + pr.width * dpr), R), py1 = Math.min(Math.ceil(oy + pr.height * dpr), B);
+        const scale = (pr.width * dpr) / src.w; // source units -> device pixels
+        let reg = null, task = { promise: Promise.resolve(), cancel() {} };
+        if (px1 - px0 >= 1 && py1 - py0 >= 1) {
+          reg = document.createElement("canvas");
+          reg.width = px1 - px0; reg.height = py1 - py0;
+          const rctx = reg.getContext("2d", { alpha: false });
+          rctx.fillStyle = "#ffffff"; rctx.fillRect(0, 0, reg.width, reg.height);
+          task = src.draw(rctx, { x: (px0 - ox) / scale, y: (py0 - oy) / scale, w: reg.width / scale, h: reg.height / scale }, scale, reg.width, reg.height);
+        }
+        if (screenTaskRef.current) { try { screenTaskRef.current.cancel(); } catch {} }
+        screenTaskRef.current = task;
+        const seq = ++screenSeqRef.current;
+        task.promise.then(() => {
+          if (seq !== screenSeqRef.current || key !== lastKey || !done || screenRef.current !== sc) return;
+          sc.width = cw; sc.height = ch; // clears it; drawn again below, before any paint
+          sc.style.left = (L / dpr) + "px"; sc.style.top = (T / dpr) + "px";
+          sc.style.width = (cw / dpr) + "px"; sc.style.height = (ch / dpr) + "px";
+          const sctx = sc.getContext("2d", { alpha: false });
+          sctx.fillStyle = "#ffffff"; sctx.fillRect(0, 0, cw, ch);
+          if (reg) sctx.drawImage(reg, px0 - L, py0 - T);
+          showScreen(true);
+        }).catch(() => { /* cancelled or failed: the sheet's canvas stays */ })
+          .finally(() => { if (reg) reg.width = reg.height = 0; });
+      } catch (e) { /* the sheet's canvas stays */ }
+    };
+
     // Poll the wrapper's screen rect; redraw once it has held still ~130ms.
+    // With the screen-space plan, every frame: the moment the sheet moves,
+    // its own canvas has to take over, or the plan would lag the symbols.
     let lastKey = "", changedAt = 0, done = false;
     const tick = () => {
       const wrap = wrapRef.current;
@@ -1444,9 +1585,15 @@ function PlanBackground({ bgImage, imageDisplay, viewportRef }) {
       const r = wrap.getBoundingClientRect();
       const key = Math.round(r.left) + "|" + Math.round(r.top) + "|" +
                   Math.round(r.width) + "|" + Math.round(r.height);
-      if (key !== lastKey) { lastKey = key; changedAt = Date.now(); done = false; }
-      else if (!done && Date.now() - changedAt >= 130) { done = true; renderWindow(); }
+      if (key !== lastKey) { lastKey = key; changedAt = Date.now(); done = false; if (screenOn) showScreen(false); }
+      else if (!done && Date.now() - changedAt >= 130) { done = true; if (screenOn) renderScreen(key); renderWindow(); }
     };
+    if (screenOn) {
+      let raf = 0;
+      const loop = () => { tick(); raf = requestAnimationFrame(loop); };
+      raf = requestAnimationFrame(loop);
+      return () => { cancelAnimationFrame(raf); showScreen(false); };
+    }
     const iv = setInterval(tick, 60);
     return () => clearInterval(iv);
   }, [loaded, imageDisplay?.x, imageDisplay?.y, imageDisplay?.w, imageDisplay?.h, viewportRef]);
