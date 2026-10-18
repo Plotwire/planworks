@@ -26,6 +26,7 @@ import { useEditor } from "@/store/editorStore";
 import { Masthead } from "@/components/TitleBlockMasthead";
 import { isTouchDevice, supersampleFactor } from "@/lib/touch";
 import { dataUrlToBlob, signPlanImage, signPlanImages } from "@/lib/planImages";
+import { cachedPlanLinks } from "@/lib/device/planCache";
 import { BOQ_ESTIMATE_NOTICE } from "@/lib/legal";
 import { TrialSheetMark, TryPrompt, useTryPrompt, LOCKED } from "@/components/TryMode";
 import { addDaysIso, QUOTE_VALID_DAYS, shownOnQuote, lineTotal as boqLineTotal, sectionTotal, boqTotals, outputSettings, materialsDoc, quoteDoc, docToCsv, QUOTE_DETAILS, QUOTE_SHOW, PRESET_SHOW, presetFor, hasQty, badNumberLines, parseNum, expiredValidUntil, fmtDate } from "@/lib/boqOutputs";
@@ -33,6 +34,7 @@ import BoqDocPages from "@/components/BoqDocPages";
 import { keyText, ariaKeys, SHOW_KBD, TOUCH, CLOSE_MENUS } from "@/components/Shortcuts";
 import { SHEET, planFootprint } from "@/lib/cad/sheet";
 import { onStairs } from "@/lib/cad/planScale";
+import { isMissingCode, NEEDS_SIGNAL_ALERT } from "@/components/NeedsSignal";
 
 // Per-project title block. The editor publishes the *effective* title block
 // (the project's own, falling back to the account default) through this context
@@ -1246,7 +1248,11 @@ function PlanBackground({ bgImage, imageDisplay, viewportRef }) {
   // Load whichever source this sheet has, once per source. A PDF wins when both
   // are present: the raster stored alongside it is only the preview rasterised
   // at import time, and the vector redraws sharper at any zoom.
-  const pdfSrc = bgImage?.pdfSrc || null;
+  // A PDF that can't be shown (no pdf.js, or no PDF file, with no signal)
+  // gives way to the plan image stored with it rather than leave the sheet
+  // blank. Tried again next time the sheet is shown.
+  const [brokenPdf, setBrokenPdf] = useState(null);
+  const pdfSrc = bgImage?.pdfSrc && bgImage.pdfSrc !== brokenPdf ? bgImage.pdfSrc : null;
   const imgSrc = pdfSrc ? null : (bgImage?.src || null);
   const pdfPage = bgImage?.pdfPage || 1;
   useEffect(() => {
@@ -1291,7 +1297,10 @@ function PlanBackground({ bgImage, imageDisplay, viewportRef }) {
           srcRef.current = bitmapSource(img);
         }
         setLoaded(n => n + 1);
-      } catch (e) { console.warn("PlanBackground load failed:", e?.message); }
+      } catch (e) {
+        console.warn("PlanBackground load failed:", e?.message);
+        if (pdfSrc && !dead) setBrokenPdf(pdfSrc);
+      }
     })();
     return () => { dead = true; };
   }, [pdfSrc, imgSrc, pdfPage]);
@@ -2187,6 +2196,32 @@ export function StatusCount({ label, value }) {
   return <span>{label} <span className="text-[#22808F] ml-1" style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>{value}</span></span>;
 }
 
+// Where this drawing's last save is (lib/device/outbox), for the status bar.
+// Waiting or stuck, it's a button that tries again now.
+const SYNC_LABELS = {
+  local:   { text: "Saved on this device", dot: "#94A3B8", title: "Saved on this device. It goes up to your account in the background." },
+  syncing: { text: "Saved on this device", dot: "#3FB7C9", title: "Saved on this device, and going up to your account now." },
+  synced:  { text: "Synced", dot: "#2C97A8", title: "Saved to your account." },
+  waiting: { text: "Waiting for signal", dot: "#E0A100", title: "Saved on this device. It will go up to your account as soon as there's signal. Tap to try now." },
+  stuck:   { text: "Couldn't sync", dot: "#D9534F", title: "Saved on this device, but your account wouldn't take it yet. It keeps trying. Tap to try now." },
+  refused: { text: "Not uploaded", dot: "#D9534F", title: "Saved on this device, but your account won't take this save. Tap for why." },
+};
+// refused: tapping says why (the editor's onRetry for that state).
+export function SyncStatus({ state, onRetry }) {
+  const s = SYNC_LABELS[state];
+  if (!s) return null;
+  const retry = state === "waiting" || state === "stuck" || state === "refused";
+  const body = (
+    <>
+      <span aria-hidden className={`inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle${state === "syncing" ? " animate-pulse" : ""}`} style={{ background: s.dot }} />
+      {s.text.toUpperCase()}
+    </>
+  );
+  return retry
+    ? <button type="button" onClick={onRetry} title={s.title} role="status" className="mr-4 hover:text-slate-700 dark:hover:text-slate-200 underline-offset-2 hover:underline">{body}</button>
+    : <span title={s.title} role="status" className="mr-4">{body}</span>;
+}
+
 // keys: the editor's + / - / 0 in the tooltips (the sketch has no zoom keys).
 export function ZoomControls({ zoom, onIn, onOut, onFit, keys = true }) {
   return (
@@ -2555,7 +2590,8 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
       }
       pdf.save(`${fileBase()}_${doc.fileSuffix}.pdf`);
     } catch (e) {
-      alert("PDF export failed: " + (e?.message || e));
+      // The PDF maker's code not on this device yet, and no signal.
+      alert(isMissingCode(e) ? NEEDS_SIGNAL_ALERT : "PDF export failed: " + (e?.message || e));
     } finally {
       setPdfBusy(false);
     }
@@ -3264,9 +3300,15 @@ const EXPORT_PLAN_MAX_AREA_TOUCH = 9_000_000;
 // already has -- a local blob: link from this session, or a signed link that
 // may have expired -- and `path` is its stored copy. The existing link is used
 // first, so nothing local or still valid is downloaded again; if it is missing
-// or fails, a fresh signed link is minted from `path` and tried once.
+// or fails, the copy kept on this device (lib/device/planCache) is used, so a
+// PDF can be made with no signal; failing that, a fresh signed link is minted
+// from `path` and tried once.
 async function fetchPlanFile(url, path) {
   let res = url ? await fetch(url).catch(() => null) : null;
+  if ((!res || !res.ok) && path) {
+    const kept = (await cachedPlanLinks([path]).catch(() => new Map())).get(path);
+    if (kept && kept !== url) res = await fetch(kept).catch(() => null);
+  }
   if ((!res || !res.ok) && path) {
     const fresh = await signPlanImage(path);
     if (fresh) res = await fetch(fresh);
@@ -3727,7 +3769,8 @@ export function PrintPreview({ project, legendItems, colourMode, wireStrength, s
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 1500);
     } catch (e) {
-      alert("PDF export failed: " + (e?.message || e));
+      // The PDF maker's code not on this device yet, and no signal.
+      alert(isMissingCode(e) ? NEEDS_SIGNAL_ALERT : "PDF export failed: " + (e?.message || e));
     } finally {
       if (scaleEl) scaleEl.style.transform = savedScaleTransform;
       setPdfBusy(false);

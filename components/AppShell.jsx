@@ -9,7 +9,7 @@ import BusinessInfo from "@/components/BusinessInfo";
 import { hasCompanyProfile, getCompanyProfile } from "@/lib/companyProfile";
 import { listCompanyLogos } from "@/lib/companyLogos";
 import { supabase, isConfigured } from "@/lib/supabase";
-import { getSettings, saveSettings, patchSettings } from "@/lib/db";
+import { readSettings, changeSettings, flushSettings, keptAccount, keepAccount } from "@/lib/device/account";
 import { settingsFromPicks } from "@/lib/symbolPicks";
 import { clearSignedOutDeviceData } from "@/lib/deviceData";
 import { DEFAULT_TITLEBLOCK, normaliseTitleBlock, companyProfileToTitleBlock, companyLogoFrom, mergeTitleBlocks } from "@/lib/titleBlock";
@@ -24,6 +24,12 @@ import { LEGAL_LINKS } from "@/lib/legal";
 import TermsGate from "@/components/TermsGate";
 import RotateNotice from "@/components/RotateNotice";
 import { hasAcceptedCurrentTerms, recordTermsAcceptance, acceptedAtSignup } from "@/lib/termsAcceptance";
+import { LEGAL_VERSION } from "@/lib/legal";
+import { registerServiceWorker } from "@/lib/device/serviceWorker";
+import { startDevice, pauseDevice, clearDevice, unsentCount } from "@/lib/device/session";
+import { syncNow } from "@/lib/device/outbox";
+import { rememberGate, recallGate, forgetGate } from "@/lib/device/gates";
+import { keptSession } from "@/lib/authUser";
 
 const AppCtx = createContext(null);
 export const useApp = () => useContext(AppCtx) || {};
@@ -177,6 +183,9 @@ function AppGates({ children }) {
     try { localStorage.setItem("planworks:theme", theme); } catch {}
   }, [theme]);
 
+  // The app shell cache (public/sw.js): the app opens on a weak signal or none.
+  useEffect(() => { registerServiceWorker(); }, []);
+
   useEffect(() => {
     if (!isConfigured || !supabase) { setChecking(false); setSession(false); return; }
     let active = true;
@@ -186,15 +195,24 @@ function AppGates({ children }) {
     if (typeof window !== "undefined" && window.location.hash.includes("type=recovery")) {
       setRecovery(true);
     }
+    // With no signal and a sign-in token due for renewal, Supabase answers "no
+    // session" (after trying to renew for up to a minute) but keeps the
+    // session stored: that isn't signed out. The stored session stands in
+    // (lib/authUser.js keptSession), shown at once rather than after that
+    // minute, so a day without signal still opens straight into the app.
+    // Only a real sign-out (Supabase deletes the stored session, SIGNED_OUT)
+    // goes to the sign-in page.
+    const kept = keptSession();
+    if (kept) { setSession(kept); setChecking(false); }
     supabase.auth.getSession().then(({ data }) => {
       if (!active) return;
-      setSession(data.session || false);
+      setSession(data.session || keptSession() || false);
       setChecking(false);
     });
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
       if (_e === "PASSWORD_RECOVERY") setRecovery(true);
       if (_e === "SIGNED_OUT") setRecovery(false);
-      setSession(s || false);
+      setSession(s || (_e === "SIGNED_OUT" ? false : keptSession()) || false);
       setChecking(false);
     });
     return () => { active = false; sub?.subscription?.unsubscribe(); };
@@ -211,6 +229,8 @@ function AppGates({ children }) {
   // never let another account (signed in since, on the same device) through.
   const [terms, setTerms] = useState({ uid: null, step: "unknown", error: "" });
   const sessionUserId = session?.user?.id || null;
+  const sessionUserIdRef = useRef(sessionUserId);
+  sessionUserIdRef.current = sessionUserId;
   const termsStep = terms.uid === sessionUserId ? terms.step : "unknown";
   const termsError = terms.uid === sessionUserId ? terms.error : "";
   const setTermsFor = useCallback(
@@ -218,14 +238,45 @@ function AppGates({ children }) {
     []
   );
 
+  // This account's drawings, plan images and unsent saves on this device
+  // (lib/device): anything kept for another account is deleted, and this
+  // account's waiting saves start uploading.
+  // Signed out by itself (the sign-in couldn't be renewed, or signed out in
+  // another tab) with saves still waiting here: they are kept, and the
+  // sign-in page says so. They go up once this account signs in again.
+  const [signedOutNote, setSignedOutNote] = useState("");
+  const lastUserRef = useRef(null);
+  useEffect(() => {
+    if (sessionUserId) {
+      lastUserRef.current = sessionUserId;
+      setSignedOutNote("");
+      startDevice(sessionUserId);
+      return;
+    }
+    pauseDevice();
+    const was = lastUserRef.current;
+    if (!was) return;
+    unsentCount(was).then((n) => {
+      if (n > 0) setSignedOutNote(`You've been signed out. ${n === 1 ? "1 save is" : `${n} saves are`} still on this device, waiting to upload. Sign in again with the same account to upload ${n === 1 ? "it" : "them"}.`);
+    });
+  }, [sessionUserId]);
+
   useEffect(() => {
     const user = session?.user;
-    setTerms({ uid: user?.id || null, step: "unknown", error: "" });
+    // Accepted before, as the server confirmed on this device: straight in,
+    // and checked again below. A weak signal never holds the app at the splash.
+    const termsGate = "terms:" + LEGAL_VERSION;
+    const knownOk = user && recallGate(user.id, termsGate) === true;
+    setTerms({ uid: user?.id || null, step: knownOk ? "ok" : "unknown", error: "" });
     if (!user) return;
     // Also ignore this check once a newer one has started, even for the same
     // user (signed out and back in elsewhere): its answer may be out of date.
     let active = true;
-    const land = (patch) => { if (active) setTermsFor(user.id, patch); };
+    const land = (patch) => {
+      if (!active) return;
+      if (patch.step === "ok") rememberGate(user.id, termsGate, true);
+      setTermsFor(user.id, patch);
+    };
     (async () => {
       try {
         if (await hasAcceptedCurrentTerms(user.id)) { land({ step: "ok" }); return; }
@@ -236,9 +287,13 @@ function AppGates({ children }) {
           land({ step: "ok" });
           return;
         }
+        forgetGate(user.id, termsGate);
         land({ step: "needed" });
       } catch (err) {
         console.warn("terms acceptance check failed:", err?.message);
+        // Already let in on the server's last answer: stay in. The check runs
+        // again on the next start.
+        if (knownOk) return;
         land({
           step: "needed",
           error: "We couldn't confirm that you've accepted the current terms. Tick both boxes and try again.",
@@ -270,12 +325,24 @@ function AppGates({ children }) {
   const signOut = useCallback(async () => {
     const failed = "Couldn't log out. Check your connection and try again.";
     try {
+      // Saves still waiting for signal live only on this device, and logging
+      // out deletes them (below). Say so first.
+      const waiting = await unsentCount(sessionUserId);
+      if (waiting > 0 && !window.confirm(
+        `${waiting === 1 ? "1 save is" : `${waiting} saves are`} still on this device, not uploaded yet. ` +
+        "If you log out now, those changes will be lost.\n\nLog out anyway?")) {
+        return "Not logged out.";
+      }
+      // Signing out on purpose: no "you've been signed out" note after.
+      lastUserRef.current = null;
       const { error } = (await supabase?.auth.signOut()) || {};
-      if (error) return failed;
+      if (error) { lastUserRef.current = sessionUserId; return failed; }
       // Signed out: don't leave client details or per-user flags on this
       // device (lib/deviceData.js). Only on success -- a failed sign-out keeps
       // the session, so it keeps the crash-recovery draft too.
       clearSignedOutDeviceData();
+      // Nor the drawings, plan images and saves kept for a weak signal.
+      await clearDevice(sessionUserId);
       // Nor a remembered return from Stripe: signing out on purpose isn't the
       // "session expired on the way back" case that sends them to sign-in.
       forgetCheckoutReturn();
@@ -283,7 +350,7 @@ function AppGates({ children }) {
     } catch {
       return failed;
     }
-  }, [forgetCheckoutReturn]);
+  }, [forgetCheckoutReturn, sessionUserId]);
 
   // Open the Stripe Customer Portal (change plan / card / cancel).
   const manageBilling = useCallback(async () => {
@@ -310,11 +377,14 @@ function AppGates({ children }) {
     }
   }, [beginCheckoutReturn]);
 
-  // Load the account's saved settings (title block + BOQ preset) once signed in.
+  // Load the account's saved settings (title block, quote items and rates,
+  // quote preferences, Symbol Library ticks) once signed in: this device's
+  // copy at once, then the server's (lib/device/account.js), so the quote and
+  // title block have them with no signal too.
   useEffect(() => {
-    if (!session) { setTitleBlock(null); setBoqTemplate(null); setBoqPrefs(null); setSymbolLibrary(null); return; }
+    if (!sessionUserId) { setTitleBlock(null); setBoqTemplate(null); setBoqPrefs(null); setSymbolLibrary(null); return; }
     let active = true;
-    getSettings().then(s => {
+    readSettings(sessionUserId, (s) => {
       if (!active) return;
       settingsRef.current = s || {};
       setTitleBlock(s?.titleBlock ? normaliseTitleBlock(s.titleBlock) : DEFAULT_TITLEBLOCK);
@@ -322,8 +392,11 @@ function AppGates({ children }) {
       setBoqPrefs(s?.boqPrefs || null);
       setSymbolLibrary(s?.symbolLibrary || null);
     });
-    return () => { active = false; };
-  }, [session]);
+    // Changes made without signal go up when it returns.
+    const up = () => flushSettings(sessionUserId);
+    window.addEventListener("online", up);
+    return () => { active = false; window.removeEventListener("online", up); };
+  }, [sessionUserId]);
 
   // Runs once per signed-in session, alongside the settings load above.
   useEffect(() => {
@@ -333,8 +406,13 @@ function AppGates({ children }) {
     try {
       if (localStorage.getItem(skipKey(uid))) { setProfileStep("ok"); return; }
     } catch { /* storage unavailable -- fall through to the query */ }
+    // Filled in before, as the server confirmed on this device: straight in.
+    const known = recallGate(uid, "profile") === true;
+    if (known) setProfileStep("ok");
     hasCompanyProfile().then(has => {
-      if (active) setProfileStep(has ? "ok" : "needed");
+      if (!active) return;
+      if (has) rememberGate(uid, "profile", true);
+      if (!known) setProfileStep(has ? "ok" : "needed");
     });
     return () => { active = false; };
   }, [session]);
@@ -346,58 +424,79 @@ function AppGates({ children }) {
   }, [session]);
 
   // Read on sign-in, and again after the business information screen saves.
+  // This device's copy first (lib/device/account.js), so the title block and
+  // the quote have the company's details and logos with no signal. A failed
+  // read keeps what is shown.
   const refreshCompany = useCallback(async () => {
+    const uid = sessionUserIdRef.current;
+    const show = (c) => {
+      if (uid !== sessionUserIdRef.current) return;
+      setCompanyBlock(c ? companyProfileToTitleBlock(c.profile, c.logos) : null);
+      setCompanyLogo(c ? companyLogoFrom(c.profile, c.logos) : null);
+    };
+    const kept = uid ? await keptAccount(uid, "company") : undefined;
+    if (kept) show(kept);
     try {
-      const [profile, logos] = await Promise.all([getCompanyProfile(), listCompanyLogos()]);
-      setCompanyBlock(companyProfileToTitleBlock(profile, logos));
-      setCompanyLogo(companyLogoFrom(profile, logos));
+      const [profile, logos] = await Promise.all([getCompanyProfile(), listCompanyLogos({ strict: true })]);
+      show({ profile, logos });
+      if (uid) keepAccount(uid, "company", { profile, logos });
     } catch (err) {
       console.warn("company profile load failed:", err && err.message);
-      setCompanyBlock(null);
-      setCompanyLogo(null);
+      if (!kept) show(null);
     }
   }, []);
 
   useEffect(() => {
-    if (!session) { setCompanyBlock(null); setCompanyLogo(null); return; }
+    if (!sessionUserId) { setCompanyBlock(null); setCompanyLogo(null); return; }
     refreshCompany();
-  }, [session, refreshCompany]);
+  }, [sessionUserId, refreshCompany]);
 
+  // Settings changes are saved on this device at once and go up in the
+  // background, only the fields changed (lib/device/account.js): with no
+  // signal they wait, and a change can never overwrite settings this device
+  // didn't load.
   const saveTitleBlock = useCallback(async (tb) => {
     const next = normaliseTitleBlock(tb);
     settingsRef.current = { ...settingsRef.current, titleBlock: next };
-    await saveSettings(settingsRef.current);
+    await changeSettings(sessionUserIdRef.current, { titleBlock: next });
     setTitleBlock(next);
   }, []);
 
   // Presets = the item template plus BOQ preferences, saved together.
   const saveBoqTemplate = useCallback(async (tpl, prefs) => {
     settingsRef.current = { ...settingsRef.current, boqTemplate: tpl, ...(prefs ? { boqPrefs: prefs } : {}) };
-    await saveSettings(settingsRef.current);
+    await changeSettings(sessionUserIdRef.current, { boqTemplate: tpl, ...(prefs ? { boqPrefs: prefs } : {}) });
     setBoqTemplate(tpl);
     if (prefs) setBoqPrefs(prefs);
   }, []);
 
   // One BOQ preference (e.g. the last quote export choice), merged in and saved
-  // with the account's settings. Best effort: a failed save only means it
-  // isn't remembered next time.
+  // with the account's settings.
   const saveBoqPrefs = useCallback(async (patch) => {
     const next = { ...(settingsRef.current.boqPrefs || {}), ...patch };
     settingsRef.current = { ...settingsRef.current, boqPrefs: next };
     setBoqPrefs(next);
-    try { await saveSettings(settingsRef.current); } catch (e) { console.warn("BOQ preference save failed:", e?.message); }
+    try { await changeSettings(sessionUserIdRef.current, { boqPrefs: next }); } catch (e) { console.warn("BOQ preference save failed:", e?.message); }
   }, []);
 
   // The account's Symbol Library ticks: which symbols the editor's picker
-  // offers. Shown at once; saved with patchSettings, which reads the stored
-  // settings first, so it can never overwrite ones this tab didn't load.
-  // Rejects if the save fails: the library page says so and offers a retry.
+  // offers. Shown at once, and saved as above.
   const saveSymbolPicks = useCallback(async (picks) => {
     const stored = settingsFromPicks(picks);
     setSymbolLibrary(stored);
-    await patchSettings({ symbolLibrary: stored });
+    await changeSettings(sessionUserIdRef.current, { symbolLibrary: stored });
     settingsRef.current = { ...settingsRef.current, symbolLibrary: stored };
   }, []);
+
+  // Subscribed (or a payment cleared) while the app is open: saves the
+  // account refused before -- over the trial limit, or no active
+  // subscription -- are kept on this device (lib/device/outbox) and go up now.
+  const accessLevel = BILLING_ENABLED ? subscription.level : "full";
+  const lastLevelRef = useRef(accessLevel);
+  useEffect(() => {
+    if (accessLevel === "full" && lastLevelRef.current && lastLevelRef.current !== "full") syncNow();
+    lastLevelRef.current = accessLevel;
+  }, [accessLevel]);
 
   if (isPublic) {
     return (
@@ -415,7 +514,7 @@ function AppGates({ children }) {
     const wantLogin = showLogin || checkoutReturn.awaitingSignIn ||
       (typeof window !== "undefined" && /[?&#]login(=1)?\b/.test(window.location.search + window.location.hash));
     if (COMING_SOON && !wantLogin) return <ComingSoon onSignIn={() => setShowLogin(true)} />;
-    return <LoginScreen />;
+    return <LoginScreen notice={signedOutNote} />;
   }
 
   // Signed in — the terms come first, before the paywall and everything else.

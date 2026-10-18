@@ -1,5 +1,6 @@
 "use client";
 import React from "react";
+import { NeedsSignalScreen, isMissingCode } from "@/components/NeedsSignal";
 
 // The crash-recovery drafts (components/ElectricalPlanTool.jsx): the saved
 // drawing's and the unsaved new drawing's. The backup offered is the newer.
@@ -39,6 +40,9 @@ export default class EditorErrorBoundary extends React.Component {
     }
   };
   render() {
+    // Not a crash: the editor's code isn't on this device yet, and there's
+    // no signal to fetch it (components/NeedsSignal.jsx).
+    if (this.state.error && isMissingCode(this.state.error)) return <NeedsSignalScreen />;
     if (this.state.error) {
       return (
         <div className="w-full h-screen flex items-center justify-center bg-[#F4F6F9] dark:bg-[#0B1117] p-6">

@@ -1,6 +1,33 @@
+// Names this build for the service worker (public/sw.js): a new deploy
+// installs a new worker, which drops the previous build's cached pages.
+// Vercel sets VERCEL_GIT_COMMIT_SHA; a local build uses the time.
+const BUILD_ID = (process.env.VERCEL_GIT_COMMIT_SHA || `local-${Date.now()}`).slice(0, 24);
+
+// Service worker kill switch. Deploy with NEXT_PUBLIC_SW_OFF=1 and every
+// device's worker is replaced by public/sw-off.js, which deletes its caches
+// and unregisters itself, and the app stops registering one
+// (lib/device/serviceWorker.js). Saves waiting to upload are kept: they're in
+// IndexedDB, not the worker's caches. Remove the variable and redeploy to turn
+// the worker back on. Test: docs/site-speed-test.md, test 11.
+const SW_OFF = process.env.NEXT_PUBLIC_SW_OFF === "1";
+const SW_HEADERS = [{ key: "Cache-Control", value: "no-cache, no-store, must-revalidate" }, { key: "Service-Worker-Allowed", value: "/" }];
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  env: { NEXT_PUBLIC_BUILD_ID: BUILD_ID },
+  // The service worker itself must never be cached by the browser, or a new
+  // deploy's worker (or the kill switch) would be missed.
+  async headers() {
+    return [
+      { source: "/sw.js", headers: SW_HEADERS },
+      { source: "/sw-off.js", headers: SW_HEADERS },
+    ];
+  },
+  // beforeFiles: ahead of public/sw.js itself.
+  async rewrites() {
+    return { beforeFiles: SW_OFF ? [{ source: "/sw.js", destination: "/sw-off.js" }] : [] };
+  },
   // ESLint isn't configured yet; setting it up is a separate cleanup, so we
   // don't let it block Vercel builds for now. Revisit when we add tooling.
   eslint: {

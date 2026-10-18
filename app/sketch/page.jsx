@@ -3,6 +3,7 @@
 import React, { Suspense } from "react";
 import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
+import { NeedsSignalBoundary } from "@/components/NeedsSignal";
 
 const CadSketch = dynamic(() => import("@/components/cad/CadSketch"), {
   ssr: false,
@@ -16,12 +17,14 @@ const CadSketch = dynamic(() => import("@/components/cad/CadSketch"), {
 function SketchInner() {
   const sp = useSearchParams();
   return (
-    <CadSketch
-      openSketchId={sp.get("load") || null}
-      linkProject={sp.get("project") || null}
-      linkSheet={sp.get("sheet") || null}
-      linkName={sp.get("name") || null}
-    />
+    <NeedsSignalBoundary>
+      <CadSketch
+        openSketchId={sp.get("load") || null}
+        linkProject={sp.get("project") || null}
+        linkSheet={sp.get("sheet") || null}
+        linkName={sp.get("name") || null}
+      />
+    </NeedsSignalBoundary>
   );
 }
 

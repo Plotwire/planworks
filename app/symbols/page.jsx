@@ -3,6 +3,7 @@
 import React from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
+import { NeedsSignalBoundary } from "@/components/NeedsSignal";
 
 const SymbolLibrary = dynamic(() => import("@/components/SymbolLibrary"), {
   ssr: false,
@@ -15,5 +16,5 @@ const SymbolLibrary = dynamic(() => import("@/components/SymbolLibrary"), {
 
 export default function SymbolsPage() {
   const router = useRouter();
-  return <SymbolLibrary onClose={() => router.push("/")} />;
+  return <NeedsSignalBoundary><SymbolLibrary onClose={() => router.push("/")} /></NeedsSignalBoundary>;
 }

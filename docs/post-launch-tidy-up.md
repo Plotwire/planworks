@@ -257,3 +257,82 @@ anyone's picker. The badge doesn't expire by itself. After a few weeks live,
 set `isNew: false` on that batch in `lib/symbolDrafts/index.js` and run
 `node scripts/symbol-library/check.cjs`. (The folder name `symbolDrafts` is
 historical: approved batches live there too.)
+
+## Weak-signal saves: loose ends
+
+*Deferred 16 Oct 2026 (branch site-speed; tests in docs/site-speed-test.md).*
+
+None of these lose work. Each was left to keep the branch small.
+
+- **Orphaned-file report and waiting saves.** A plan uploaded on import is
+  only referred to by a drawing once its save reaches the database. A device
+  left offline for more than 7 days with a save waiting (an iPad in a van)
+  holds such a plan, and `supabase/plan-images-orphans.sql` lists it without
+  the `recent` flag. The report deletes nothing, but before acting on it,
+  widen `recent` to 30 days.
+- **`components/PlanWorksApp.jsx` is unused** and has its own sign-out, which
+  doesn't clear what the device keeps (`clearDevice` in `lib/device/session.js`).
+  Nothing renders it today. Delete the file.
+- **Holding a drawing's upload while the editor checks the server is per tab**
+  (`holdSync` in `lib/device/outbox.js`). With the same drawing open in two
+  tabs, the other tab can upload a do-nothing save during that check, and it
+  becomes an unneeded "(copy)". It's rare and safe. To fix, share holds
+  between tabs over the existing BroadcastChannel.
+- **Uploaded local-plan records** (`markLocalImageUploaded` in
+  `lib/device/planCache.js`) are a few bytes each and stay until sign-out.
+  To fix, trim those older than 30 days in `trim()`.
+- **The service worker's code cache** (`plotwire-static-v1` in `public/sw.js`)
+  is trimmed to 400 files, not cleared per deploy. That's on purpose, so a
+  page from the last deploy can still load its code without signal. If it
+  ever needs clearing, bump the `v1`.
+
+## Full offline: loose ends
+
+*Deferred 17 Oct 2026 (branch offline; tests in docs/offline-test.md).*
+
+None of these lose work.
+
+- **Original PDFs imported with no signal.** The plan's image is saved with
+  the drawing and uploads later. The original PDF (used only for the sharpest
+  export) is held in the open tab and uploads with the next save once there's
+  signal. If Plotwire is closed first, that drawing exports from the image
+  (slightly softer). To fix, keep the original's bytes on the device like an
+  unsent plan image (`toDeviceForm` in `lib/device/drawings.js`), and let the
+  outbox upload it once (`prepare` in `lib/device/outbox.js`). Make sure the
+  editor's own background upload (`storeTabOnlyPdf`) doesn't send it as well.
+- **Sketches are last-writer-wins**, as before this branch. A sketch edited
+  on two devices keeps the later save. The drawing it was sent to keeps its
+  plan either way. Adding a version check would mirror the drawings outbox.
+- **The work planner is view only offline** (18 Oct 2026). It shows this
+  device's copy (`lib/device/plannerCopy.js`). A planner save upserts whole
+  jobs with no version check, so queuing changes for later could silently
+  undo office changes made meanwhile. To allow offline changes: give
+  `planner_jobs` saves a version check (`updated_at`, as drawings have), and
+  merge field by field, or ask, when the job changed elsewhere. Deletes
+  would need the same check.
+- **Business information can't be changed offline.** The saved details
+  are used; saving changes needs signal.
+- **A drawing never uploaded can't be deleted from the dashboard.** The
+  delete dialog checks the password (needs signal) and then deletes the row,
+  which doesn't exist yet, so it fails with "couldn't be deleted". That
+  includes a new drawing refused for being over the trial limit. Nothing is
+  lost or stuck (removing symbols and saving uploads it, then it can be
+  deleted), but a never-uploaded drawing should simply be dropped from the
+  device (`forgetSaves`, `forgetDrawing`) without the server delete.
+- **Try counts from another device.** Offline, the trial limit is checked
+  against the counts this device last fetched (`lib/device/symbolCounts.js`)
+  plus its own waiting saves. Symbols used on another device meanwhile can
+  still get a save refused when it uploads. It's kept, marked "Not
+  uploaded" with the reason, retried on start, on "Try now", after other
+  saves go up, and every 5 minutes.
+- **Home Screen app and Stripe Checkout.** Subscribing from the Home Screen
+  app (standalone) hasn't been tried. Check that Checkout returns to the app.
+- **App icons are static PNGs** in `public/icons` (drawn by a script from the
+  dashboard's brandmark). Next's icon generator (`next/og`) fails to build
+  on Windows with Node 24 ("Invalid URL"), so it isn't used.
+- **If the browser's storage stops working mid-session** (rare: some private
+  windows, or iOS dropping its storage process), the drawings outbox keeps
+  saves in that tab's memory until they upload (`memOnly` in
+  `lib/device/outbox.js`). The status bar still says "Saved on this device",
+  but they're lost if the tab is closed before signal returns. To fix, show a
+  distinct status for memory-only saves and warn before the tab closes.
