@@ -35,6 +35,7 @@ import { keyText, ariaKeys, SHOW_KBD, TOUCH, CLOSE_MENUS } from "@/components/Sh
 import { SHEET, planFootprint } from "@/lib/cad/sheet";
 import { onStairs } from "@/lib/cad/planScale";
 import { isMissingCode, NEEDS_SIGNAL_ALERT } from "@/components/NeedsSignal";
+import { StatusPill, StatusIcon } from "@/components/StatusMark";
 
 // Per-project title block. The editor publishes the *effective* title block
 // (the project's own, falling back to the account default) through this context
@@ -79,6 +80,7 @@ export function TopBar({
   onExportJSON, onPrint, colourMode, onToggleColour, wireStrength, onWireStrength, onNormalise, normaliseFlash,
   snapEnabled, onToggleSnap, onShowBoq, onShowTitleBlock, onShowNotes,
   sidebarHidden, onToggleSidebar, trialPill = null, onEditFloorPlan = null, onShowShortcuts = null, shortcutsOpen = false,
+  syncView: sync = null, onSyncClick = null,
 }) {
   const projectLabel = meta.projectName || "Untitled Project";
   const sheetLabel = meta.sheetName || "Drawing";
@@ -95,6 +97,8 @@ export function TopBar({
       <TbGroup label="File">
         <TbButton onClick={onImport} icon={Upload} label="Import" title="Import a plan (PDF or image)" />
         <TbButton onClick={onSave} icon={Save} label={savedFlash ? "Saved ✓" : "Save"} title="Save" kbd="mod+s" flash={savedFlash} />
+        {/* Where the save is: green synced, amber on this device / no signal, red not uploaded. */}
+        <TbSyncMark view={sync} onClick={onSyncClick} />
         <TbButton onClick={onPrint} icon={Download} label="Download" title="Download a PDF or print" kbd="mod+p" />
       </TbGroup>
 
@@ -2196,30 +2200,70 @@ export function StatusCount({ label, value }) {
   return <span>{label} <span className="text-[#22808F] ml-1" style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>{value}</span></span>;
 }
 
-// Where this drawing's last save is (lib/device/outbox), for the status bar.
-// Waiting or stuck, it's a button that tries again now.
-const SYNC_LABELS = {
-  local:   { text: "Saved on this device", dot: "#94A3B8", title: "Saved on this device. It goes up to your account in the background." },
-  syncing: { text: "Saved on this device", dot: "#3FB7C9", title: "Saved on this device, and going up to your account now." },
-  synced:  { text: "Synced", dot: "#2C97A8", title: "Saved to your account." },
-  waiting: { text: "Waiting for signal", dot: "#E0A100", title: "Saved on this device. It will go up to your account as soon as there's signal. Tap to try now." },
-  stuck:   { text: "Couldn't sync", dot: "#D9534F", title: "Saved on this device, but your account wouldn't take it yet. It keeps trying. Tap to try now." },
-  refused: { text: "Not uploaded", dot: "#D9534F", title: "Saved on this device, but your account won't take this save. Tap for why." },
-};
-// refused: tapping says why (the editor's onRetry for that state).
-export function SyncStatus({ state, onRetry }) {
-  const s = SYNC_LABELS[state];
-  if (!s) return null;
-  const retry = state === "waiting" || state === "stuck" || state === "refused";
-  const body = (
-    <>
-      <span aria-hidden className={`inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle${state === "syncing" ? " animate-pulse" : ""}`} style={{ background: s.dot }} />
-      {s.text.toUpperCase()}
-    </>
+// The drawing's save status, honestly (components/StatusMark.jsx colours):
+//   state      its save on this device (lib/device/outbox): "local",
+//              "syncing", "waiting", "stuck", "refused", "synced" or null
+//              (nothing of it waiting);
+//   signal     lib/device/connection hasSignal();
+//   confirmed  the server has confirmed the version on screen this session
+//              (opened from the server, its version checked, or a save of it
+//              uploaded); "gone" if the server no longer has it;
+//   saved      it has been saved at least once.
+// Resolves to { tone, text, detail }, or null for a new drawing not saved
+// yet with signal. Green only for work the server has confirmed, with
+// signal now; while anything waits, or with no signal, amber; red when the
+// account won't take a save.
+export function syncView({ state, reason = null, signal, confirmed, saved }) {
+  if (state === "refused") {
+    return { tone: "red", text: "Not uploaded", detail: reason === "subscription"
+      ? "Saved on this device, but your subscription isn't active, so your account won't take it. Tap for why."
+      : "Saved on this device, but it's over the trial limit, so your account won't take it. Tap for why." };
+  }
+  if (state === "stuck") {
+    return { tone: "red", text: "Not uploaded", detail: "Saved on this device, but your account wouldn't take it yet. Plotwire keeps trying. Tap to try now." };
+  }
+  if (state === "local" || state === "syncing" || state === "waiting") {
+    const later = state === "waiting" || !signal;
+    return later
+      ? { tone: "amber", text: "Saved on this device, will upload when signal returns", detail: "Saved on this device. It uploads by itself when there's signal. Tap to try now." }
+      : { tone: "amber", text: "Saved on this device, uploading…", detail: "Saved on this device, and going up to your account now." };
+  }
+  if (!signal) {
+    return { tone: "amber", text: "No signal: saves will wait on this device", detail: "No signal. Nothing of this drawing is waiting to upload. Saves made now stay on this device and upload when signal returns." };
+  }
+  if (!saved) return null;
+  if (confirmed === "gone") {
+    return { tone: "red", text: "Not uploaded", detail: "This drawing was deleted somewhere else. Saving keeps your work as a new drawing." };
+  }
+  if (confirmed || state === "synced") return { tone: "green", text: "Synced", detail: "Saved to your account." };
+  return { tone: "amber", text: "Checking with your account…", detail: "Checking this drawing against your account." };
+}
+
+// The status bar's pill: the words in full. Tapping does what the detail says.
+export function SyncStatus({ view, onClick }) {
+  if (!view) return null;
+  return <StatusPill tone={view.tone} text={view.text} title={view.detail} onClick={onClick} size="md" className="mr-3" />;
+}
+
+// The same, as a mark beside Save in the top bar: glanceable, the words in
+// its tooltip and the status bar.
+function TbSyncMark({ view, onClick }) {
+  if (!view) return null;
+  return (
+    <button type="button" onClick={onClick} title={`${view.text}. ${view.detail}`} aria-label={view.text} data-tone={view.tone}
+      className="pw-sync-mark ml-1.5 shrink-0 h-9 w-9 rounded-[10px] grid place-items-center border-2">
+      <StatusIcon tone={view.tone} size={20} />
+      <style>{`
+        .pw-sync-mark[data-tone=green]{background:#DCFCE7;border-color:#4ADE80}
+        .pw-sync-mark[data-tone=amber]{background:#FEF3C7;border-color:#FBBF24}
+        .pw-sync-mark[data-tone=red]{background:#FEE2E2;border-color:#F87171}
+        html.dark .pw-sync-mark[data-tone=green]{background:rgba(22,163,74,.22);border-color:#22C55E}
+        html.dark .pw-sync-mark[data-tone=amber]{background:rgba(245,158,11,.22);border-color:#F59E0B}
+        html.dark .pw-sync-mark[data-tone=red]{background:rgba(220,38,38,.24);border-color:#EF4444}
+        @media print{.pw-sync-mark{display:none !important}}
+      `}</style>
+    </button>
   );
-  return retry
-    ? <button type="button" onClick={onRetry} title={s.title} role="status" className="mr-4 hover:text-slate-700 dark:hover:text-slate-200 underline-offset-2 hover:underline">{body}</button>
-    : <span title={s.title} role="status" className="mr-4">{body}</span>;
 }
 
 // keys: the editor's + / - / 0 in the tooltips (the sketch has no zoom keys).
