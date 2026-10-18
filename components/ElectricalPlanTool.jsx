@@ -67,9 +67,21 @@ const ZOOM_WHEEL_SPEED = 0.0015;
 // sheet, so no 1:n holds for it unless the user knows one and types it; the
 // Floor Plan tool sets its own, which is true (lib/cad/planScale).
 const NEW_DRAWING_SCALE = "NTS";
-// What a drawing saved without a scale has always shown when opened. Kept, so
-// opening one never changes its title block under the user.
-const SAVED_WITHOUT_SCALE = "1:50 @ A3";
+// The scale every new drawing used to start with, so it is saved in nearly
+// every older drawing whether or not anyone chose it.
+const OLD_DEFAULT_SCALE = "1:50 @ A3";
+
+// A drawing's scale as it shows when opened. One the user typed, or the Floor
+// Plan tool calculated, is kept. One nobody chose -- none, blank, or the old
+// default with no Floor Plan sheet drawn at 1:50 -- shows NTS. (A "1:50 @ A3"
+// someone typed can't be told from the old default, so it shows NTS too.)
+function shownScale(p) {
+  const s = p?.meta?.scale;
+  if (typeof s !== "string" || !s.trim()) return NEW_DRAWING_SCALE;
+  if (s.trim() !== OLD_DEFAULT_SCALE) return s;
+  const calculated = (p.sheets || []).some((sh) => sh?.bgImage?.planScale && scaleLabel(sh.bgImage.planScale) === OLD_DEFAULT_SCALE);
+  return calculated ? s : NEW_DRAWING_SCALE;
+}
 
 const DEFAULT_META = {
   projectName: "",
@@ -137,7 +149,7 @@ function freshProject() {
 // multi-sheet shape without losing data.
 function normaliseProject(p) {
   if (!p) return freshProject();
-  const meta = { ...DEFAULT_META, scale: SAVED_WITHOUT_SCALE, ...(p.meta || {}) };
+  const meta = { ...DEFAULT_META, ...(p.meta || {}), scale: shownScale(p) };
   const projNotesText = notesToText(p.notes);
   const seedNotes = (sn) => (sn != null && sn !== "" ? notesToText(sn) : projNotesText);
   if (Array.isArray(p.sheets) && p.sheets.length) {
