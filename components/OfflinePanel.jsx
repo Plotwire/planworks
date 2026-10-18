@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { subscribeLibrary, libraryStatus, updateLibrary } from "@/lib/device/library";
+import { subscribeLibrary, libraryStatus, updateLibrary, appReady } from "@/lib/device/library";
 
 // The dashboard's line about the offline library (lib/device/library.js):
 // how many drawings are kept on this device for working without signal, and,
@@ -23,7 +23,10 @@ export default function OfflinePanel() {
   if (st.state === "off") return null;
 
   const total = st.drawingsTotal;
-  const complete = total !== null && st.drawings >= total && (st.filesTotal === null || st.files >= st.filesTotal);
+  const drawingsDone = total !== null && st.drawings >= total && (st.filesTotal === null || st.files >= st.filesTotal);
+  // The app itself (public/sw.js): every page and code file kept too.
+  const appDone = appReady(st.app);
+  const complete = drawingsDone && appDone;
   let line;
   if (st.state === "updating") {
     line = total !== null
@@ -34,7 +37,13 @@ export default function OfflinePanel() {
   } else if (complete) {
     line = total === 0 ? "Your drawings will be kept on this device for working without signal." : `All ${plural(total, "drawing", "drawings")} and their plans are on this device, ready for working without signal.`;
   } else if (st.state === "offline") {
-    line = `No signal: ${plural(st.drawings, "drawing is", "drawings are")} on this device to work on.`;
+    line = appDone
+      ? `No signal: ${plural(st.drawings, "drawing is", "drawings are")} on this device to work on.`
+      : `No signal: ${plural(st.drawings, "drawing is", "drawings are")} on this device, but parts of Plotwire still need signal once to download.`;
+  } else if (drawingsDone) {
+    line = st.app && st.app.total
+      ? `Your drawings are on this device. Getting the rest of Plotwire ready for working without signal: ${st.app.kept} of ${st.app.total} parts.`
+      : "Your drawings are on this device. Getting Plotwire itself ready for working without signal…";
   } else {
     line = `${st.drawings}${total !== null ? ` of ${total}` : ""} drawings are on this device for working without signal.`;
   }
@@ -55,6 +64,13 @@ export default function OfflinePanel() {
           <dl>
             <dt>Kept for working without signal</dt>
             <dd>{plural(st.drawings, "drawing", "drawings")} and {plural(st.files, "plan file", "plan files")}: {size(st.bytes)}</dd>
+            <dt>Plotwire itself</dt>
+            <dd>
+              {!st.app ? "Not kept by this browser"
+                : appDone ? `Kept: all ${st.app.total} parts`
+                : st.app.total ? `${st.app.kept} of ${st.app.total} parts kept. The rest need signal once.`
+                : "Still downloading"}
+            </dd>
             <dt>All Plotwire keeps in this browser</dt>
             <dd>{size(st.usage)}{st.quota ? ` of the ${size(st.quota)} this browser allows` : ""}</dd>
             <dt>Safe from automatic clearing</dt>

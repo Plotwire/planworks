@@ -34,6 +34,7 @@ import BoqDocPages from "@/components/BoqDocPages";
 import { keyText, ariaKeys, SHOW_KBD, TOUCH, CLOSE_MENUS } from "@/components/Shortcuts";
 import { SHEET, planFootprint } from "@/lib/cad/sheet";
 import { onStairs } from "@/lib/cad/planScale";
+import { isMissingCode, NEEDS_SIGNAL_ALERT } from "@/components/NeedsSignal";
 
 // Per-project title block. The editor publishes the *effective* title block
 // (the project's own, falling back to the account default) through this context
@@ -2589,7 +2590,8 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
       }
       pdf.save(`${fileBase()}_${doc.fileSuffix}.pdf`);
     } catch (e) {
-      alert("PDF export failed: " + (e?.message || e));
+      // The PDF maker's code not on this device yet, and no signal.
+      alert(isMissingCode(e) ? NEEDS_SIGNAL_ALERT : "PDF export failed: " + (e?.message || e));
     } finally {
       setPdfBusy(false);
     }
@@ -3767,7 +3769,8 @@ export function PrintPreview({ project, legendItems, colourMode, wireStrength, s
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 1500);
     } catch (e) {
-      alert("PDF export failed: " + (e?.message || e));
+      // The PDF maker's code not on this device yet, and no signal.
+      alert(isMissingCode(e) ? NEEDS_SIGNAL_ALERT : "PDF export failed: " + (e?.message || e));
     } finally {
       if (scaleEl) scaleEl.style.transform = savedScaleTransform;
       setPdfBusy(false);

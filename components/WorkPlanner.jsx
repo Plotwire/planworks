@@ -9,6 +9,7 @@ import {
   plannerSchemaV2, boardPos, jobsOnBoard,
 } from "@/lib/planner";
 import { keptPlanner, keepPlanner, keepPlannerSettings } from "@/lib/device/plannerCopy";
+import { isMissingCode, NEEDS_SIGNAL_ALERT } from "@/components/NeedsSignal";
 import { useApp } from "@/components/AppShell";
 import { useTryPrompt, TryPrompt, LOCKED } from "@/components/TryMode";
 import { FONTS, COND, SEMI, palette, Pill, JobCard, lbl } from "@/components/planner/ui";
@@ -842,7 +843,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
           setTimeout(() => URL.revokeObjectURL(url), 3000);
         }
       }, "image/png");
-    } catch (e) { restore(); setExporting(false); alert("Could not create image: " + (e && e.message ? e.message : e)); }
+    } catch (e) { restore(); setExporting(false); alert(isMissingCode(e) ? NEEDS_SIGNAL_ALERT : "Could not create image: " + (e && e.message ? e.message : e)); }
   };
 
   const navBtn = (disabled) => ({ fontFamily: COND, fontWeight: 600, fontSize: 14, padding: "6px 12px", borderRadius: 6, cursor: "pointer", background: "rgba(255,255,255,.14)", color: P.headerText, border: "1px solid rgba(255,255,255,.35)", opacity: disabled ? 0.35 : 1, pointerEvents: disabled ? "none" : "auto" });

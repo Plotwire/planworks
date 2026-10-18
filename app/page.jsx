@@ -4,6 +4,7 @@ import React from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useApp } from "@/components/AppShell";
+import { NeedsSignalBoundary } from "@/components/NeedsSignal";
 
 const HomeScreen = dynamic(() => import("@/components/HomeScreen"), {
   ssr: false,
@@ -18,6 +19,7 @@ export default function DashboardPage() {
   const router = useRouter();
   const { theme, toggleTheme, user, signOut } = useApp();
   return (
+    <NeedsSignalBoundary>
     <HomeScreen
       onOpenProject={(id) => router.push(`/drawing?id=${id}`)}
       onNewProject={() => router.push("/new")}
@@ -31,6 +33,7 @@ export default function DashboardPage() {
       user={user}
       onSignOut={signOut}
     />
+    </NeedsSignalBoundary>
   );
 }
 

@@ -71,6 +71,10 @@ everything from the device.
 2. Tap **Storage** on that line. Check the details:
    - **Kept for working without signal:** how many drawings and plan files,
      and their size.
+   - **Plotwire itself:** **Kept: all N parts** (the editor, sketch tool,
+     quote and PDF makers). The line above only says **ready for working
+     without signal** once this says all. Until then it says *Getting the
+     rest of Plotwire ready… N of M parts*.
    - **All Plotwire keeps in this browser:** used, out of what the browser
      allows.
    - **Safe from automatic clearing:** Yes or No.
@@ -91,6 +95,9 @@ everything from the device.
    - **Now:** the dashboard, with thumbnails, and a **No signal** bar.
 2. Open a TEST drawing you have **not** opened on this laptop before.
    - **Before (site-speed only):** **This drawing didn't open**.
+   - **Before (f791262, on the test link):** "Something went wrong", with
+     `ChunkLoadError` in the console (the editor's code wasn't kept: fixed,
+     see A15).
    - **Now:** it opens at once with its plan. The status bar says **SYNCED**.
 3. Open **TEST PDF**. The plan shows. If pdf.js couldn't be fetched, it
    shows the plan's stored image instead, never a blank sheet.
@@ -266,6 +273,31 @@ This needs a second device to use up the trial meanwhile.
 5. Open **TEST drawing 1**, remove **5** symbols, **Save**. It uploads
    (**SYNCED**) and the pink bar goes.
 
+### A15. Every part of the app opens offline (the f791262 bug)
+
+On the test link, Vercel adds `?dpl=…` to the address of every code file.
+The service worker used to keep files under their full address and look for
+the code list in a way that `?dpl=` broke, so the editor's own code was
+never kept and opening a drawing offline crashed. Files are now kept by
+name, whatever follows the `?`.
+
+1. **Clear the slate:** in Edge, F12 → **Application** → **Storage** →
+   **Clear site data** (this signs you out and deletes TEST copies on this
+   laptop; make sure nothing is waiting first). Sign in again.
+2. Stay on the dashboard, with signal, until the line says **ready for
+   working without signal** and **Storage** → **Plotwire itself** says
+   **Kept: all N parts**.
+3. Network → **Offline**. Without reloading, open **in turn**: a TEST
+   drawing, **Blank A3 sheet**, **Sketch a floor plan**, the **Work
+   planner**, **Symbol library**, **Edit business information**. In a
+   drawing: **Floor Plan**, **Quote** → **Download PDF**, and **Download**
+   → **Download PDF**. Each one opens or downloads.
+   - The console (F12) shows no `ChunkLoadError` and no `sw.js` errors.
+4. If any part ever does say **This part of Plotwire needs signal once to
+   download** instead, note which. It's the message for a part this device
+   never downloaded (in place of the old crash screen); **Try again** with
+   signal fixes it.
+
 ---
 
 ## Part B: a full day on the iPad in Airplane Mode
@@ -337,6 +369,11 @@ day, from the **Home Screen icon**:
 
 - **Signing in** for the first time on a device, and **signing out**.
 - **Opening the app on a device that has never opened it with signal.**
+- **A part of the app this device hasn't downloaded yet** (say, opened with
+  no signal straight after an update, before the dashboard had signal). It
+  says **This part of Plotwire needs signal once to download**, never the
+  crash screen. The dashboard doesn't say **ready** until every part is
+  kept.
 - **Email and share:** the email button, share links, the planner's share.
 - **Changing the work planner.** With no signal it shows as last saved, to
   look at. A planner change saves the whole job with no check of what's

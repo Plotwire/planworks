@@ -32,6 +32,7 @@ import { useTryUsage, useTryPrompt, TryPill, TryPrompt, LOCKED, drawingSymbolCou
 import { ShortcutsCard, StatusHint, TOUCH } from "@/components/Shortcuts";
 import dynamic from "next/dynamic";
 const CadSketchPanel = dynamic(() => import("@/components/cad/CadSketch"), { ssr: false });
+import { NeedsSignalBoundary } from "@/components/NeedsSignal";
 import { useEditor } from "@/store/editorStore";
 import { toDeviceForm, fromDeviceForm, deviceDrawing, rememberDrawing, forgetDrawing } from "@/lib/device/drawings";
 import { planLinks, cachedPlanLinks, rememberUploadedPlan } from "@/lib/device/planCache";
@@ -2816,6 +2817,9 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       {/* ==================== FLOOR PLAN — embedded sketch, same window ==================== */}
       {floorPlanOpen && (
         <div className="fixed inset-0 z-[60] bg-[#18222D]">
+          {/* The sketch tool's code not on this device and no signal: says
+              so and closes back to the drawing (components/NeedsSignal.jsx). */}
+          <NeedsSignalBoundary onClose={() => setFloorPlanOpen(false)}>
           <CadSketchPanel
             embedded
             openSketchId={floorPlanArgs?.openSketchId || null}
@@ -2825,6 +2829,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
             onClose={() => setFloorPlanOpen(false)}
             onApplyPlan={applyFloorPlan}
           />
+          </NeedsSignalBoundary>
         </div>
       )}
     </div>

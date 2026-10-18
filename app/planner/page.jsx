@@ -2,6 +2,7 @@
 
 import React from "react";
 import dynamic from "next/dynamic";
+import { NeedsSignalBoundary } from "@/components/NeedsSignal";
 
 const WorkPlanner = dynamic(() => import("@/components/WorkPlanner"), {
   ssr: false,
@@ -13,6 +14,6 @@ const WorkPlanner = dynamic(() => import("@/components/WorkPlanner"), {
 });
 
 export default function PlannerPage() {
-  return <WorkPlanner />;
+  return <NeedsSignalBoundary><WorkPlanner /></NeedsSignalBoundary>;
 }
 
