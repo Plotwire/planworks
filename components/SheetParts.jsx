@@ -893,7 +893,7 @@ export function Workspace({
             transform by the same N. The mapping from stored coordinates to
             the screen is identical; only the density of the raster changes.
             N is 1 for everyone except a touch device with the flag on. */}
-        <div style={N > 1 ? { zoom: N } : undefined}>
+        <div data-sheet-zoom style={N > 1 ? { zoom: N } : undefined}>
         <Sheet
           drawingAreaRef={drawingAreaRef}
           meta={meta} notes={notes}
@@ -1291,6 +1291,22 @@ function drawRegionSmooth(ctx, img, r, cw, ch) {
   if (src !== img) { src.width = src.height = 0; }
 }
 
+// Where an element inside the sheet is on screen. WebKit (Safari, every iPad
+// browser) gives boxes inside the sheet's CSS zoom -- the supersample N on
+// touch devices -- in unzoomed pixels: left, top, width and height all
+// divided by N, measured from the window's corner. Chrome and Edge give screen
+// pixels. The wrapper around the zoom isn't zoomed itself, so comparing the
+// two widths gives the factor: exactly 1 in Chrome and Edge, and N in WebKit.
+function sheetRect(el) {
+  const r = el.getBoundingClientRect();
+  const zoomed = el.closest("[data-sheet-zoom]");
+  const outer = zoomed && zoomed.parentElement;
+  const inner = zoomed && zoomed.getBoundingClientRect().width;
+  const k = outer && inner ? outer.getBoundingClientRect().width / inner : 1;
+  if (!(k > 0) || Math.abs(k - 1) < 1e-3) return r;
+  return { left: r.left * k, top: r.top * k, right: r.right * k, bottom: r.bottom * k, width: r.width * k, height: r.height * k };
+}
+
 // The screen-space plan's canvas stays inside iOS's limits: a 12.9in iPad's
 // whole screen is about 5.6M pixels.
 const SCREEN_MAX_AREA = 12_000_000;
@@ -1413,7 +1429,7 @@ function PlanBackground({ bgImage, imageDisplay, viewportRef }) {
       const wrap = wrapRef.current, cv = canvasRef.current;
       if (!src || !wrap || !cv) return;
       try {
-        const pr = wrap.getBoundingClientRect();           // page rect on screen (post-transform)
+        const pr = sheetRect(wrap);                        // page rect on screen (post-transform)
         if (pr.width < 2 || pr.height < 2) return;
         const vp = viewportRef?.current;
         const vr = vp ? vp.getBoundingClientRect()
@@ -1535,7 +1551,7 @@ function PlanBackground({ bgImage, imageDisplay, viewportRef }) {
       if (!src || !sc || !vp || !da) return;
       try {
         const dpr = window.devicePixelRatio || 1;
-        const vr = vp.getBoundingClientRect(), ar = da.getBoundingClientRect(), pr = wrap.getBoundingClientRect();
+        const vr = vp.getBoundingClientRect(), ar = sheetRect(da), pr = sheetRect(wrap);
         // The drawing area's part of the viewport, in whole device pixels
         // from the viewport's corner.
         const L = Math.floor((Math.max(ar.left, vr.left) - vr.left) * dpr);
