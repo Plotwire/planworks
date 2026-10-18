@@ -4,10 +4,11 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   loadPlannerJobs, savePlannerJobs, deletePlannerJobs,
-  loadPlannerSettings, savePlannerSettings,
+  fetchPlannerSettings, savePlannerSettings,
   ensureShareToken, regenerateShareToken, loadSharedPlanner,
-  plannerSchemaV2, boardPos,
+  plannerSchemaV2, boardPos, jobsOnBoard,
 } from "@/lib/planner";
+import { keptPlanner, keepPlanner, keepPlannerSettings } from "@/lib/device/plannerCopy";
 import { useApp } from "@/components/AppShell";
 import { useTryPrompt, TryPrompt, LOCKED } from "@/components/TryMode";
 import { FONTS, COND, SEMI, palette, Pill, JobCard, lbl } from "@/components/planner/ui";
@@ -96,6 +97,16 @@ function failText(err, undoing) {
   return (undoing ? "Couldn’t undo that, so the job is as it was. " : "Couldn’t save that change, so the job has been put back. ") + why;
 }
 
+// With no signal (or a signal too weak to answer) the planner shows this
+// device's copy (lib/device/plannerCopy.js) and can't be changed: see there
+// for why changes aren't kept to upload later.
+const LOAD_TIMEOUT_MS = 20000;
+const noSignal = (err) => (typeof navigator !== "undefined" && navigator.onLine === false) ||
+  /abort|failed to fetch|fetch failed|networkerror|network request failed|load failed|timed? ?out|internet connection/i.test(String(err?.message || err?.name || err || ""));
+const OFFLINE_TEXT = "No signal, so the planner can’t be changed right now. You can still look at it.";
+const CHECKING_TEXT = "One moment: checking the planner for changes made elsewhere.";
+const savedWhen = (ms) => new Date(ms).toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+
 // Quick add: type a job name (and a time) straight into a day. Enter or
 // clicking away saves; Esc, or leaving it empty, cancels. "More" opens the
 // full job form with what's been typed.
@@ -133,7 +144,7 @@ function QuickAdd({ P, onSave, onCancel, onMore }) {
 // viewer's own planner, even when they are signed in and the token is missing.
 export default function WorkPlanner({ sharedView = false, shared = null }) {
   const router = useRouter();
-  const { theme, access = {}, manageBilling } = useApp();
+  const { theme, access = {}, manageBilling, user } = useApp();
   // Try mode: no share link, no image share. Lapsed: no new share link (the
   // database refuses it too), but the image is theirs to export.
   const tryPrompt = useTryPrompt();
@@ -142,7 +153,18 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
   // Lapsed (subscription ended or payment overdue): the planner is view-only,
   // as the database already insists. Say so up front instead of failing saves.
   const lapsed = !sharedView && Boolean(access.readOnly);
-  const canEdit = !sharedView && !lapsed;
+  // Where what's shown came from: "checking" (this device's copy, the server
+  // not answered yet), "live" (the server's, with signal) or "offline" (this
+  // device's copy, or the board as it was when signal went). Only "live" can
+  // be changed (paused otherwise).
+  const [phase, setPhase] = useState("checking");
+  const [syncedAt, setSyncedAt] = useState(null);  // when what's shown was last true on the server
+  const [problem, setProblem] = useState(null);    // nothing to show: "nocopy" (no signal) or "error"
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
+  const paused = !sharedView && phase !== "live";
+  const locked = lapsed || paused;
+  const canEdit = !sharedView && !locked;
   const P = palette(dark);
 
   const [week, setWeek] = useState(0);
@@ -180,32 +202,105 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
   roster.forEach((c) => { CDEF[c.id] = c; });
   const nameOf = (c) => (CDEF[c] ? CDEF[c].name : "");
 
+  // The share link's diary (public, read only).
   useEffect(() => {
+    if (!sharedView) return;
     let alive = true;
     (async () => {
       try {
-        if (sharedView) {
-          const res = shared ? await loadSharedPlanner(shared) : null; // no token: nothing to show
-          if (!alive) return;
-          if (!res) { setNotFound(true); setJobs([]); }
-          else {
-            const s = res.settings || {};
-            setJobs(res.jobs || []);
-            setV2((res.jobs || []).some((j) => j.order != null));
-            setSettings({ company: s.company || "Work Planner", title: s.title || "Work Planner", days: s.days, contractors: (s.contractors && s.contractors.length) ? s.contractors : DEFAULT_CONTRACTORS });
-          }
-        } else {
-          const [rows, s, hasV2] = await Promise.all([loadPlannerJobs(), loadPlannerSettings(), plannerSchemaV2()]);
-          if (!alive) return;
-          setJobs(rows || []);
-          setV2(Boolean(hasV2));
-          if (s) setSettings({ company: s.company || "Your company", title: s.title || "Work Planner", days: s.days, contractors: (s.contractors && s.contractors.length) ? s.contractors : DEFAULT_CONTRACTORS });
+        const res = shared ? await loadSharedPlanner(shared) : null; // no token: nothing to show
+        if (!alive) return;
+        if (!res) { setNotFound(true); setJobs([]); }
+        else {
+          const s = res.settings || {};
+          setJobs(res.jobs || []);
+          setV2((res.jobs || []).some((j) => j.order != null));
+          setSettings({ company: s.company || "Work Planner", title: s.title || "Work Planner", days: s.days, contractors: (s.contractors && s.contractors.length) ? s.contractors : DEFAULT_CONTRACTORS });
         }
-      } catch (e) { console.error(e); if (alive) { setJobs([]); if (sharedView) setNotFound(true); } }
+      } catch (e) { console.error(e); if (alive) { setJobs([]); setNotFound(true); } }
       finally { if (alive) setLoading(false); }
     })();
     return () => { alive = false; };
   }, [sharedView, shared]);
+
+  // ---- The account's own planner: this device's copy at once, then the server's ----
+  // The copy (lib/device/plannerCopy.js) shows straight away, view only; the
+  // server's replaces it when it answers, and the planner can be changed.
+  // With no answer it stays on the copy ("offline"), never an empty board.
+  const uidRef = useRef(null);
+  uidRef.current = user?.id || null;
+  const v2Ref = useRef(false);
+  v2Ref.current = v2;
+  const confirmedRef = useRef([]);  // the jobs as the server last confirmed them
+  const shownRef = useRef(false);   // a planner is on screen (the copy or the server's)
+  const loadSeq = useRef(0);
+  const asShown = (s) => (s
+    ? { company: s.company || "Your company", title: s.title || "Work Planner", days: s.days, contractors: (s.contractors && s.contractors.length) ? s.contractors : DEFAULT_CONTRACTORS }
+    : { company: "Your company", title: "Work Planner", contractors: DEFAULT_CONTRACTORS });
+
+  const loadOwn = useCallback(async ({ first = false } = {}) => {
+    const uid = uidRef.current;
+    const seq = ++loadSeq.current;
+    setPhase("checking");
+    if (first) {
+      const kept = await keptPlanner(uid);
+      if (seq !== loadSeq.current) return;
+      if (kept) {
+        setJobs(jobsOnBoard(kept.jobs));
+        setV2(Boolean(kept.v2));
+        setSettings(asShown(kept.settings));
+        setSyncedAt(kept.asOf || kept.savedAt || null);
+        shownRef.current = true;
+        setLoading(false);
+      }
+    }
+    // Changes still on their way go first, so this can't read from before them.
+    await saveChain.current;
+    const asOf = Date.now();
+    try {
+      const [rows, s, hasV2] = await Promise.all([
+        loadPlannerJobs({ timeoutMs: LOAD_TIMEOUT_MS }),
+        // Settings that couldn't be read keep the ones shown (undefined).
+        fetchPlannerSettings({ timeoutMs: LOAD_TIMEOUT_MS }).catch((err) => { console.warn("planner settings:", err?.message || err); return undefined; }),
+        plannerSchemaV2({ timeoutMs: LOAD_TIMEOUT_MS }),
+      ]);
+      if (seq !== loadSeq.current) return;
+      setJobs(rows || []);
+      setV2(Boolean(hasV2));
+      if (s !== undefined) setSettings(asShown(s));
+      confirmedRef.current = rows || [];
+      shownRef.current = true;
+      setSyncedAt(asOf);
+      setProblem(null);
+      setPhase("live");
+      keepPlanner(uid, { jobs: rows || [], settings: s, v2: hasV2 }, asOf);
+    } catch (e) {
+      if (seq !== loadSeq.current) return;
+      console.warn("planner: showing this device's copy:", e?.message || e);
+      setPhase("offline");
+      if (!shownRef.current) setProblem(noSignal(e) ? "nocopy" : "error");
+    } finally {
+      if (seq === loadSeq.current) setLoading(false);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- refs and setters only
+
+  useEffect(() => {
+    if (sharedView) return;
+    loadOwn({ first: true });
+    // Signal gone: view only. Back (or the planner back in view without
+    // it): the server's planner again.
+    const offline = () => setPhase((p) => (p === "live" ? "offline" : p));
+    const online = () => { if (phaseRef.current === "offline") loadOwn(); };
+    const visible = () => { if (document.visibilityState === "visible" && phaseRef.current === "offline") loadOwn(); };
+    window.addEventListener("offline", offline);
+    window.addEventListener("online", online);
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      window.removeEventListener("offline", offline);
+      window.removeEventListener("online", online);
+      document.removeEventListener("visibilitychange", visible);
+    };
+  }, [sharedView, loadOwn]);
 
   // ---- Changes: shown at once, saved in order, put back if a save fails ----
   // A change is a list of { before, after } (null before = a new job, null
@@ -249,6 +344,8 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
 
   const commit = useCallback((label, changes, { undoing = false } = {}) => {
     if (!changes || !changes.length) return;
+    // No signal (or not checked yet): nothing changes on screen that can't be saved.
+    if (phaseRef.current !== "live") { say("info", phaseRef.current === "checking" ? CHECKING_TEXT : OFFLINE_TEXT); return; }
     setJobs((prev) => apply(prev, changes, "after"));
     const entry = { label, changes };
     if (!undoing) {
@@ -258,12 +355,19 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
       say("info", "Undone: " + label.charAt(0).toLowerCase() + label.slice(1));
     }
     const run = async () => {
-      try { await persist(changes); }
-      catch (err) {
+      try {
+        await persist(changes);
+        // Saved: this device's copy follows (lib/device/plannerCopy.js).
+        confirmedRef.current = apply(confirmedRef.current, changes, "after");
+        keepPlanner(uidRef.current, { jobs: confirmedRef.current, v2: v2Ref.current }, Date.now());
+      } catch (err) {
         console.error(err);
         setJobs((prev) => rollback(prev, changes));
         undoStack.current = undoStack.current.filter((e) => e !== entry);
-        say("error", failText(err, undoing));
+        if (noSignal(err)) {
+          setPhase("offline");
+          say("error", (undoing ? "No signal, so that wasn’t undone." : "No signal, so that change wasn’t saved and the job has been put back.") + " The planner can be changed again when there’s signal.");
+        } else say("error", failText(err, undoing));
       }
     };
     saveChain.current = saveChain.current.then(run, run);
@@ -283,7 +387,10 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
     return () => clearTimeout(t);
   }, [notice]);
 
-  const blocked = useCallback(() => { if (lapsed) setViewOnly(true); }, [lapsed]);
+  const blocked = useCallback(() => {
+    if (lapsed) setViewOnly(true);
+    else if (phaseRef.current !== "live") say("info", phaseRef.current === "checking" ? CHECKING_TEXT : OFFLINE_TEXT);
+  }, [lapsed, say]);
 
   const { today, monday0 } = weekDates();
   const weekStart = new Date(monday0); weekStart.setDate(monday0.getDate() + week * 7);
@@ -352,12 +459,12 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
   // date null: a new unscheduled job. pre: values already typed (quick add's "More").
   const openNew = (c, date, pre = {}) => {
     if (sharedView) return;
-    if (lapsed) { blocked(); return; }
+    if (locked) { blocked(); return; }
     setEditing({ id: uid(), c, date, end: null, order: null, t: "08:00", site: "", type: "Rewire", addr: "", cust: "", st: "booked", notes: "", imp: false, ...pre, isNew: true });
   };
   const openEdit = (id) => {
     if (sharedView) return;
-    if (lapsed) { blocked(); return; }
+    if (locked) { blocked(); return; }
     const j = jobs.find((x) => x.id === id);
     if (j) setEditing({ ...j, isNew: false });
   };
@@ -378,6 +485,8 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
   const cleanJob = (e) => ({ id: e.id, c: e.c, date: e.date, end: e.end || null, order: e.order ?? null, t: e.t, site: e.site, type: e.type, addr: e.addr, cust: e.cust, st: e.st, notes: e.notes, imp: !!e.imp });
 
   const commitEdit = () => {
+    // Signal went while the form was open: it stays open to try again.
+    if (phaseRef.current !== "live") { blocked(); return; }
     const e = editing;
     const before = e.isNew ? null : jobs.find((j) => j.id === e.id) || null;
     const after = cleanJob(e);
@@ -440,7 +549,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
   // Quick add: a name and a time, typed straight into the day.
   const openQuickAdd = (c, date) => {
     if (sharedView) return;
-    if (lapsed) { blocked(); return; }
+    if (locked) { blocked(); return; }
     setQuickAdd({ c, date });
   };
   const saveQuickAdd = (site, t) => {
@@ -464,7 +573,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
 
   const openMenu = (job, x, y) => {
     if (sharedView) return;
-    if (lapsed) { blocked(); return; }
+    if (locked) { blocked(); return; }
     setMenu({ job, x, y });
   };
 
@@ -597,7 +706,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
   // Opened from the menu or the job form. Starts with the job's own day and
   // week ticked and nobody picked: the usual job is "same day, someone else".
   const openDuplicate = (base) => {
-    if (lapsed) { blocked(); return; }
+    if (locked) { blocked(); return; }
     setDuplicating({ base, contractors: [], days: base.d != null ? [base.d] : [0], weeks: base.w != null && base.w >= 0 ? [base.w] : [0] });
   };
   const dupToggle = (key, val) => setDuplicating((d) => {
@@ -619,6 +728,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
     return out;
   };
   const runDuplicate = () => {
+    if (phaseRef.current !== "live") { blocked(); return; }
     const copies = dupCopies(duplicating);
     setDuplicating(null); setEditing(null);
     if (!copies.length) return;
@@ -630,7 +740,10 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
   };
 
   // ---- Settings (company / title / operatives) ----
-  const openSettings = () => setSettingsDraft(JSON.parse(JSON.stringify(settings)));
+  const openSettings = () => {
+    if (paused) { blocked(); return; }
+    setSettingsDraft(JSON.parse(JSON.stringify(settings)));
+  };
   const opField = (idx, f, v) => setSettingsDraft((s) => { const cs = s.contractors.slice(); cs[idx] = { ...cs[idx], [f]: v }; return { ...s, contractors: cs }; });
   const opAdd = () => setSettingsDraft((s) => ({ ...s, contractors: [...s.contractors, { id: cid(), name: "New operative", color: OP_COLORS[s.contractors.length % OP_COLORS.length] }] }));
   const opRemove = (idx) => setSettingsDraft((s) => ({ ...s, contractors: s.contractors.filter((_, i) => i !== idx) }));
@@ -641,12 +754,22 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
     // put the app's placeholder team into someone's own settings row. The board
     // still falls back to the neutral placeholders for DISPLAY (see `roster`),
     // so an empty roster is shown usefully without being persisted as theirs.
+    const before = settings;
     setSettings(clean); setSettingsDraft(null);
-    try { await savePlannerSettings(clean); } catch (err) { alert("Could not save settings: " + (err && err.message ? err.message : err)); }
+    try {
+      await savePlannerSettings(clean);
+      keepPlannerSettings(uidRef.current, clean); // this device's copy follows
+    } catch (err) {
+      // Not saved: the board goes back to what is saved.
+      setSettings(before);
+      if (noSignal(err)) { setPhase("offline"); say("error", "No signal, so the settings weren’t saved. Try again when there’s signal."); }
+      else alert("Could not save settings: " + (err && err.message ? err.message : err));
+    }
   };
 
   const openShare = async () => {
     if (access.isTry || access.readOnly) { tryPrompt.show(LOCKED.share); return; }
+    if (phase === "offline") { say("info", "The view-only link needs signal. Try again when there’s signal."); return; }
     setSharePanel({ loading: true, url: "", copied: false });
     try {
       const token = await ensureShareToken();
@@ -741,6 +864,26 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
     );
   }
 
+  // Nothing to show: no signal and no copy on this device yet, or the server
+  // failed. Never an empty board, which would read as every job gone.
+  if (!sharedView && problem) {
+    const noCopy = problem === "nocopy";
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: P.page, fontFamily: FONTS, padding: 24 }}>
+        <div role="alert" style={{ maxWidth: 440, textAlign: "center", background: P.surface, border: "1px solid " + P.line, borderRadius: 14, padding: "28px 26px" }}>
+          <div style={{ fontFamily: SEMI, fontWeight: 700, fontSize: 20, color: P.ink, marginBottom: 8 }}>{noCopy ? "The planner isn’t on this device yet" : "The planner couldn’t be loaded"}</div>
+          <div style={{ fontSize: 13.5, color: P.ink2, lineHeight: 1.5 }}>{noCopy
+            ? "There’s no signal, and this device hasn’t opened the planner with signal yet. Once it has, the planner is kept here, so you can look at it with no signal."
+            : "Your jobs haven’t gone anywhere. This is usually the connection. Try again in a moment."}</div>
+          <div style={{ display: "flex", justifyContent: "center", gap: 10, marginTop: 18 }}>
+            <button type="button" onClick={() => router.push("/")} style={btn(P, "primary")}>Dashboard</button>
+            <button type="button" onClick={() => { setProblem(null); setLoading(true); loadOwn(); }} style={btn(P, "primary")}>Try again</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // One person's day on the board: their jobs, plus the drop target while a
   // job is dragged over it.
   // d: { iso, narrow, isToday }; w, di: the board cell. dayView: the wide
@@ -787,14 +930,14 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
         style={{
           ...(dayView ? { flex: "1 1 0", minWidth: 210, minHeight: "48vh", padding: "9px 9px 2px" } : { ...dayFlex(d.narrow), minWidth: 0, padding: "7px 7px 2px", minHeight: 82 }),
           borderRight: "2px solid " + P.rowSep, touchAction: "manipulation",
-          cursor: readOnly ? "default" : "cell",
+          cursor: readOnly || paused ? "default" : "cell",
           background: isOver || rz ? P.drop : d.isToday && !dayView ? P.today : d.narrow && !dayView ? P.cellNarrow : P.cell,
           outline: isOver || rz ? "2.5px dashed " + P.accent2 : "none", outlineOffset: -4,
         }}>
         {out}
         {qa && <QuickAdd P={P} onSave={saveQuickAdd} onCancel={() => setQuickAdd(null)}
           onMore={(site, t) => { setQuickAdd(null); openNew(c.id, d.iso, { site, t }); }} />}
-        {!readOnly && !qa && <div className="wp-add" style={{ textAlign: "center", color: P.muted, fontFamily: COND, fontWeight: 600, fontSize: 13, padding: "2px 0 4px", cursor: "pointer" }}>+ add job</div>}
+        {!readOnly && !paused && !qa && <div className="wp-add" style={{ textAlign: "center", color: P.muted, fontFamily: COND, fontWeight: 600, fontSize: 13, padding: "2px 0 4px", cursor: "pointer" }}>+ add job</div>}
       </div>
     );
   };
@@ -820,7 +963,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
               <JobCard j={j} cdef={CDEF} P={P} dark={dark} interactive state={j.id === dragId ? "source" : drag.lifted === j.id ? "lifted" : null} handlers={cardHandlers(j)} />
             </div>
           ))}
-          <button type="button" onClick={() => openNew((roster[0] || {}).id, null)} style={{ width: "100%", marginTop: 4, fontFamily: COND, fontWeight: 700, fontSize: 13.5, padding: "8px 10px", borderRadius: 8, cursor: "pointer", background: "transparent", color: P.accent2, border: "1.5px dashed " + P.accent2 }}>+ Add unscheduled job</button>
+          {!paused && <button type="button" onClick={() => openNew((roster[0] || {}).id, null)} style={{ width: "100%", marginTop: 4, fontFamily: COND, fontWeight: 700, fontSize: 13.5, padding: "8px 10px", borderRadius: 8, cursor: "pointer", background: "transparent", color: P.accent2, border: "1.5px dashed " + P.accent2 }}>+ Add unscheduled job</button>}
         </div>
       </aside>
     );
@@ -862,6 +1005,8 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
         .wp-tool{display:inline-flex;align-items:center;font-family:${COND};font-weight:700;font-size:14px;letter-spacing:.02em;padding:9px 14px;border-radius:8px;cursor:pointer;background:${P.surface};color:${P.ink};border:1px solid ${P.line}}
         .wp-tool:hover{border-color:${P.accent2}}
         .wp-tool[aria-pressed="true"]{border-color:${P.accent2};color:${P.accent2}}
+        .wp-checking:not(:empty){opacity:0;animation:wp-fade .3s ease 1.5s forwards}
+        @keyframes wp-fade{to{opacity:1}}
         .wp-seg{display:inline-flex;border:1px solid ${P.line};border-radius:8px;overflow:hidden;background:${P.surface}}
         .wp-seg button{font-family:${COND};font-weight:700;font-size:14px;padding:9px 15px;border:0;background:transparent;color:${P.ink2};cursor:pointer}
         .wp-seg button[aria-pressed="true"]{background:${P.accent2};color:#fff}
@@ -891,7 +1036,8 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
             {"Unscheduled"}<span style={{ marginLeft: 7, font: "700 11.5px " + FONTS, background: loose.length ? P.accent : P.line2, color: loose.length ? P.accentInk : P.muted, borderRadius: 999, padding: "1px 7px" }}>{loose.length}</span>
           </button>
         )}
-        <span style={{ flex: 1 }} />
+        {/* This device's copy is showing while the server answers: said only if it's slow. */}
+        <span className="wp-checking" style={{ flex: 1, fontSize: 12.5, color: P.muted, textAlign: "center" }}>{!sharedView && phase === "checking" ? "Checking for changes…" : ""}</span>
         {readOnly ? (
           <span style={{ fontSize: 12.5, color: P.muted }}>{"Viewing only — this diary updates automatically when the office changes it."}</span>
         ) : (
@@ -906,6 +1052,14 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
           {exporting ? "Preparing image…" : (view === "day" ? "Share this day as image ▸" : "Share this week as image ▸")}
         </button>
       </div>
+
+      {/* No signal: this device's copy (lib/device/plannerCopy.js), view only. */}
+      {!sharedView && phase === "offline" && (
+        <div role="status" style={{ width: 1300, maxWidth: "100%", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "6px 8px 6px 14px", borderRadius: 9, background: P.amberBg, border: "1px solid " + P.amberLine, color: P.ink, fontSize: 13 }}>
+          <span><b>Offline:</b> showing last saved{syncedAt ? " (" + savedWhen(syncedAt) + ")" : ""}. Changes need signal.</span>
+          <button type="button" onClick={() => loadOwn()} style={{ ...btn(P, "primary"), marginLeft: "auto", padding: "4px 11px", fontSize: 12.5 }}>Try again</button>
+        </div>
+      )}
 
       {lapsed && (
         <div role="status" style={{ width: 1300, maxWidth: "100%", display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderRadius: 10, background: P.amberBg, border: "1px solid " + P.amberLine, color: P.ink, fontSize: 13.5 }}>
@@ -951,7 +1105,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
               </button>
             );
           })}
-          <span style={{ fontSize: 12.5, color: P.muted, fontStyle: "italic", marginLeft: 6 }}>{readOnly ? "Rolls automatically · view only" : "Drag a job to move it · right-click (long-press on iPad) for more · double-click a space to add"}</span>
+          <span style={{ fontSize: 12.5, color: P.muted, fontStyle: "italic", marginLeft: 6 }}>{readOnly ? "Rolls automatically · view only" : phase === "offline" ? "Showing last saved · view only until there’s signal" : "Drag a job to move it · right-click (long-press on iPad) for more · double-click a space to add"}</span>
           <span className="wp-swipe" style={{ width: "100%", fontSize: 12, color: P.accent2, fontWeight: 600, marginTop: 2 }}>{"↔ Swipe the board sideways to see all days"}</span>
         </div>
 
@@ -1075,7 +1229,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                   <span style={{ width: 10, height: 10, borderRadius: 3, background: c.color, flex: "none" }} />
                   <span style={{ fontFamily: SEMI, fontWeight: 700, fontSize: 15, color: P.ink }}>{c.name}</span>
-                  {!readOnly && <button onClick={() => openNew(c.id, cellDate(week, mCur))} style={{ marginLeft: "auto", fontFamily: COND, fontWeight: 600, fontSize: 12, padding: "4px 9px", borderRadius: 6, cursor: "pointer", background: P.surfaceAlt, color: P.accent2, border: "1px solid " + P.line }}>+ add</button>}
+                  {!readOnly && !paused && <button onClick={() => openNew(c.id, cellDate(week, mCur))} style={{ marginLeft: "auto", fontFamily: COND, fontWeight: 600, fontSize: 12, padding: "4px 9px", borderRadius: 6, cursor: "pointer", background: P.surfaceAlt, color: P.accent2, border: "1px solid " + P.line }}>+ add</button>}
                 </div>
                 {list.length ? list.map((j) => {
                   const seg = segAt(j, week, mCur, shown);

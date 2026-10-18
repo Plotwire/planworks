@@ -303,11 +303,28 @@ None of these lose work.
 - **Sketches are last-writer-wins**, as before this branch. A sketch edited
   on two devices keeps the later save. The drawing it was sent to keeps its
   plan either way. Adding a version check would mirror the drawings outbox.
-- **The work planner isn't offline.** With no signal it shows no jobs.
+- **The work planner is view only offline** (18 Oct 2026). It shows this
+  device's copy (`lib/device/plannerCopy.js`). A planner save upserts whole
+  jobs with no version check, so queuing changes for later could silently
+  undo office changes made meanwhile. To allow offline changes: give
+  `planner_jobs` saves a version check (`updated_at`, as drawings have), and
+  merge field by field, or ask, when the job changed elsewhere. Deletes
+  would need the same check.
 - **Business information can't be changed offline.** The saved details
   are used; saving changes needs signal.
-- **The Try-mode count isn't checked offline.** The database enforces the
-  limit when saves upload. A save over the limit then shows "Couldn't sync".
+- **A drawing never uploaded can't be deleted from the dashboard.** The
+  delete dialog checks the password (needs signal) and then deletes the row,
+  which doesn't exist yet, so it fails with "couldn't be deleted". That
+  includes a new drawing refused for being over the trial limit. Nothing is
+  lost or stuck (removing symbols and saving uploads it, then it can be
+  deleted), but a never-uploaded drawing should simply be dropped from the
+  device (`forgetSaves`, `forgetDrawing`) without the server delete.
+- **Try counts from another device.** Offline, the trial limit is checked
+  against the counts this device last fetched (`lib/device/symbolCounts.js`)
+  plus its own waiting saves. Symbols used on another device meanwhile can
+  still get a save refused when it uploads. It's kept, marked "Not
+  uploaded" with the reason, retried on start, on "Try now", after other
+  saves go up, and every 5 minutes.
 - **Home Screen app and Stripe Checkout.** Subscribing from the Home Screen
   app (standalone) hasn't been tried. Check that Checkout returns to the app.
 - **App icons are static PNGs** in `public/icons` (drawn by a script from the

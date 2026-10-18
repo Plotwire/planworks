@@ -27,6 +27,7 @@ import { hasAcceptedCurrentTerms, recordTermsAcceptance, acceptedAtSignup } from
 import { LEGAL_VERSION } from "@/lib/legal";
 import { registerServiceWorker } from "@/lib/device/serviceWorker";
 import { startDevice, pauseDevice, clearDevice, unsentCount } from "@/lib/device/session";
+import { syncNow } from "@/lib/device/outbox";
 import { rememberGate, recallGate, forgetGate } from "@/lib/device/gates";
 import { keptSession } from "@/lib/authUser";
 
@@ -328,7 +329,7 @@ function AppGates({ children }) {
       // out deletes them (below). Say so first.
       const waiting = await unsentCount(sessionUserId);
       if (waiting > 0 && !window.confirm(
-        `${waiting === 1 ? "1 save is" : `${waiting} saves are`} still waiting for signal on this device. ` +
+        `${waiting === 1 ? "1 save is" : `${waiting} saves are`} still on this device, not uploaded yet. ` +
         "If you log out now, those changes will be lost.\n\nLog out anyway?")) {
         return "Not logged out.";
       }
@@ -486,6 +487,16 @@ function AppGates({ children }) {
     await changeSettings(sessionUserIdRef.current, { symbolLibrary: stored });
     settingsRef.current = { ...settingsRef.current, symbolLibrary: stored };
   }, []);
+
+  // Subscribed (or a payment cleared) while the app is open: saves the
+  // account refused before -- over the trial limit, or no active
+  // subscription -- are kept on this device (lib/device/outbox) and go up now.
+  const accessLevel = BILLING_ENABLED ? subscription.level : "full";
+  const lastLevelRef = useRef(accessLevel);
+  useEffect(() => {
+    if (accessLevel === "full" && lastLevelRef.current && lastLevelRef.current !== "full") syncNow();
+    lastLevelRef.current = accessLevel;
+  }, [accessLevel]);
 
   if (isPublic) {
     return (

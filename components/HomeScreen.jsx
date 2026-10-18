@@ -6,8 +6,9 @@ import { listProjects, localProjectsPending, migrateLocalProjects, deleteProject
 import { planLinks, cachedPlanLinks } from "@/lib/device/planCache";
 import { cachedList, rememberList, forgetDrawing } from "@/lib/device/drawings";
 import { pendingSaves, subscribeOutbox, forgetSaves, syncNow } from "@/lib/device/outbox";
+import { forgetSymbolCount } from "@/lib/device/symbolCounts";
 import { warmUpOffline } from "@/lib/device/warmUp";
-import OfflinePanel, { HomeScreenTip } from "@/components/OfflinePanel";
+import OfflinePanel, { HelpMenu } from "@/components/OfflinePanel";
 import { useApp } from "@/components/AppShell";
 import { LEGAL_LINKS } from "@/lib/legal";
 import { TryPill } from "@/components/TryMode";
@@ -165,6 +166,8 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
         planPath: path,
         // Saved on this device, not yet on the server.
         waiting: Boolean(entry),
+        // ...and the server wouldn't take it: "limit", "subscription" or "stuck".
+        problem: entry && entry.error ? entry.refused || "stuck" : null,
         // Searched, not shown: the client (drawing details and quote) and
         // the quote reference.
         client: r.clientName || "",
@@ -234,7 +237,7 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
   useEffect(() => {
     let t = null;
     const off = subscribeOutbox((ev) => {
-      if (ev.type === "status") {
+      if (ev.type === "status" || ev.type === "refused") {
         pendingSaves().then((w) => { setWaiting(w); if (rowsRef.current) show(rowsRef.current); });
         return;
       }
@@ -279,9 +282,11 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
   const onDeleted = (card) => {
     setCards(cs => (cs || []).filter(c => c.id !== card.id));
     if (rowsRef.current) rowsRef.current = rowsRef.current.filter(r => r.id !== card.id);
-    // Nor kept on this device, nor any save of it still waiting.
+    // Nor kept on this device, nor any save of it still waiting, nor
+    // counted towards Try mode's limit.
     forgetDrawing(uid, card.id);
     forgetSaves(card.id);
+    forgetSymbolCount(uid, card.id);
     if (rowsRef.current) rememberList(uid, rowsRef.current);
     setPendingDelete(null);
     setToast(`Deleted "${card.name}"`);
@@ -320,6 +325,14 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
   // Try mode counts the same thing: symbols across every saved drawing.
   const symbolsUsed = stats.symbols;
 
+  // Saves on this device not on the server yet: waiting for signal, or not
+  // taken by the account (lib/device/outbox "refused": over the trial limit,
+  // or no active subscription), or failing for another reason ("stuck").
+  const toSend = waiting.filter((e) => !e.error);
+  const overLimit = waiting.filter((e) => e.error && e.refused === "limit");
+  const noSubscription = waiting.filter((e) => e.error && e.refused === "subscription");
+  const stuck = waiting.filter((e) => e.error && !e.refused);
+
   return (
     <div className="pw-home">
       <style>{CSS}</style>
@@ -333,6 +346,7 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
           <div className="navitem" title="Symbol library" onClick={onSymbols} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="7" cy="7" r="3.2"/><rect x="14" y="4" width="6" height="6" rx="1.4"/><path d="M4 15h6v6H4zM14 18h6"/><circle cx="17" cy="18" r="3.2"/></svg></div>
           <div className="navitem" title="Work planner" onClick={onPlanner} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M7 13h3M7 17h3M14 13h3"/></svg></div>
           <div className="rail-spacer"></div>
+          <HelpMenu />
           <div className="navitem" title="Edit business information" onClick={onBusiness} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 13a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 0 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9 2 2 0 0 1 0-4 1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 2.9-1.2 2 2 0 0 1 4 0 1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9 2 2 0 0 1 0 4 1.7 1.7 0 0 0-1.5 1z"/></svg></div>
           <div className="rail-avatar">{(displayName(user) || user?.email || "?").slice(0, 2).toUpperCase()}</div>
         </aside>
@@ -445,7 +459,6 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
                 </div>
               </div>
             )}
-            <HomeScreenTip />
             <section className="hero">
               <div className="hero-glow"></div>
               <div className="hero-inner">
@@ -484,21 +497,51 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
               {cards && cards.length > 0 && <span className="muted-count">{cards.length} saved · newest first</span>}
             </div>
 
-            {(waiting.length > 0 || fromDevice) && (
+            {(toSend.length > 0 || fromDevice) && (
               <div className="access-banner sync-banner" role="status">
                 <div>
-                  {waiting.length > 0 && (
+                  {toSend.length > 0 && (
                     <>
-                      <strong>{waiting.length === 1 ? "1 save is" : `${waiting.length} saves are`} waiting for signal.</strong>
-                      <span> {waiting.length === 1 ? "It's" : "They're"} safe on this device and will upload by {waiting.length === 1 ? "itself" : "themselves"} when there&rsquo;s signal.</span>
+                      <strong>{toSend.length === 1 ? "1 save is" : `${toSend.length} saves are`} waiting for signal.</strong>
+                      <span> {toSend.length === 1 ? "It's" : "They're"} safe on this device and will upload by {toSend.length === 1 ? "itself" : "themselves"} when there&rsquo;s signal.</span>
                     </>
                   )}
-                  {waiting.length === 0 && fromDevice && (
+                  {toSend.length === 0 && fromDevice && (
                     <>
                       <strong>No signal.</strong>
                       <span> These are your drawings as this device last saw them. The list updates when there&rsquo;s signal.</span>
                     </>
                   )}
+                </div>
+                <button className="mg-primary" onClick={() => { syncNow(); load(); }}>Try now</button>
+              </div>
+            )}
+
+            {/* Saves the account wouldn't take (lib/device/outbox "refused"),
+                or that keep failing: kept on this device, never dropped. */}
+            {overLimit.length > 0 && (
+              <div className="access-banner problem-banner" role="alert">
+                <div>
+                  <strong>{overLimit.length === 1 ? "1 save is" : `${overLimit.length} saves are`} over the trial limit, so not uploaded.</strong>
+                  <span> {overLimit.length === 1 ? "It's" : "They're"} kept safe on this device. Subscribe and {overLimit.length === 1 ? "it uploads by itself" : "they upload by themselves"}, or open the drawing, remove some symbols and save again.</span>
+                </div>
+                <button className="mg-primary" onClick={access.openSubscribe}>Subscribe</button>
+              </div>
+            )}
+            {noSubscription.length > 0 && (
+              <div className="access-banner problem-banner" role="alert">
+                <div>
+                  <strong>{noSubscription.length === 1 ? "1 save isn't" : `${noSubscription.length} saves aren't`} uploaded: your subscription isn&rsquo;t active.</strong>
+                  <span> {noSubscription.length === 1 ? "It's" : "They're"} kept safe on this device, and {noSubscription.length === 1 ? "uploads by itself" : "upload by themselves"} once you subscribe again.</span>
+                </div>
+                <button className="mg-primary" onClick={paymentOverdue ? payInvoice : access.openSubscribe}>{paymentOverdue ? "Open billing" : "Subscribe"}</button>
+              </div>
+            )}
+            {stuck.length > 0 && (
+              <div className="access-banner problem-banner" role="alert">
+                <div>
+                  <strong>{stuck.length === 1 ? "1 save" : `${stuck.length} saves`} couldn&rsquo;t be uploaded yet.</strong>
+                  <span> {stuck.length === 1 ? "It's" : "They're"} kept safe on this device, and Plotwire keeps trying.</span>
                 </div>
                 <button className="mg-primary" onClick={() => { syncNow(); load(); }}>Try now</button>
               </div>
@@ -525,7 +568,15 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
                     <div className="thumb">
                       <span className="badge">{c.reg || "A3"}</span>
                       {c.floors > 1 && <span className="badge badge-floors">{c.floors} floors</span>}
-                      {c.waiting && <span className="badge badge-waiting" title="Saved on this device. It uploads when there's signal.">Waiting for signal</span>}
+                      {c.waiting && !c.problem && <span className="badge badge-waiting" title="Saved on this device. It uploads when there's signal.">Waiting for signal</span>}
+                      {c.problem && (
+                        <span className="badge badge-problem"
+                          title={c.problem === "limit" ? "Kept on this device: over the trial limit, so your account won't take it yet."
+                            : c.problem === "subscription" ? "Kept on this device: your subscription isn't active, so your account won't take it yet."
+                            : "Kept on this device: it couldn't be uploaded yet. Plotwire keeps trying."}>
+                          Not uploaded
+                        </span>
+                      )}
                       <PlanThumb project={c.project} />
                       <button
                         type="button"
@@ -829,6 +880,9 @@ html.dark .pw-home .access-banner.is-lapsed{background:#2a2114; border-color:#6b
 .pw-home .badge-floors{left:auto; right:11px; background:rgba(63,183,201,.92); color:#08313a; font-weight:600}
 /* Saved on this device, not yet uploaded (lib/device/outbox) */
 .pw-home .badge-waiting{top:auto; bottom:11px; background:#F6C453; color:#3B2A05; font-weight:600}
+.pw-home .badge-problem{top:auto; bottom:11px; background:#D9534F; color:#fff; font-weight:600}
+.pw-home .problem-banner{background:#FDF0EF; border-color:#F0B8B4}
+html.dark .pw-home .problem-banner{background:#2E1A1A; border-color:#6E3431}
 .pw-home .offline-strip{border:1px solid var(--line); background:var(--surface); border-radius:14px; padding:10px 14px; margin-bottom:18px}
 .pw-home .offline-row{display:flex; align-items:center; gap:12px; flex-wrap:wrap}
 .pw-home .offline-line{flex:1; min-width:200px; font-size:13.5px; color:var(--ink-2)}
@@ -842,6 +896,21 @@ html.dark .pw-home .access-banner.is-lapsed{background:#2a2114; border-color:#6b
 .pw-home .offline-details dd{margin:0; color:var(--ink)}
 .pw-home .offline-note{font-size:12.5px; color:var(--ink-2); margin:0 0 10px}
 @media (max-width:560px){.pw-home .offline-details dl{grid-template-columns:1fr}.pw-home .offline-details dd{margin-bottom:6px}}
+/* Help in the side menu (components/OfflinePanel.jsx HelpMenu) */
+.pw-home .help-wrap{position:relative}
+.pw-home .navitem.is-open{color:var(--navy); background:var(--teal-600)}
+.pw-home .help-menu{position:absolute; left:calc(100% + 24px); bottom:0; z-index:40; width:260px; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:6px; box-shadow:0 18px 40px -12px rgba(11,17,23,.4)}
+.pw-home .help-head{font-family:var(--font-jetbrains-mono),monospace; font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); padding:8px 10px 6px}
+.pw-home .help-item{display:flex; align-items:center; gap:10px; width:100%; text-align:left; padding:10px; border:0; border-radius:8px; background:transparent; color:var(--ink); font:500 13.5px var(--font-inter),system-ui,sans-serif; cursor:pointer}
+.pw-home .help-item svg{width:18px; height:18px; flex:none; color:var(--teal-700)}
+.pw-home .help-item:hover,.pw-home .help-item:focus-visible{background:rgba(63,183,201,.14); outline:none}
+.pw-home .help-note{max-width:460px}
+.pw-home .help-note ol{margin:4px 0 12px; padding-left:22px; list-style:decimal; font-size:13.5px; line-height:1.5; color:var(--ink-2)}
+.pw-home .help-note li{margin-bottom:6px; padding-left:2px}
+.pw-home .help-note p{font-size:13.5px; line-height:1.5; color:var(--ink-2); margin-bottom:10px}
+.pw-home .help-note b{color:var(--ink); font-weight:600}
+.pw-home .help-note .help-why{font-size:12.5px; color:var(--muted)}
+@media (max-width:720px){.pw-home .help-menu{width:230px}}
 .pw-home .sync-banner{background:linear-gradient(120deg,#FFF6E0,#FFFBEF); border-color:#F1D48A}
 html.dark .pw-home .sync-banner{background:linear-gradient(120deg,#33290f,#2a2412); border-color:#6b5520}
 .pw-home .card-body{padding:14px 16px 15px; transition:background .2s cubic-bezier(.2,.7,.3,1)}

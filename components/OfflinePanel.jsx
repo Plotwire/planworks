@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { subscribeLibrary, libraryStatus, updateLibrary } from "@/lib/device/library";
 
 // The dashboard's line about the offline library (lib/device/library.js):
@@ -76,35 +76,63 @@ export default function OfflinePanel() {
   );
 }
 
-// iPad and iPhone in Safari only, once per device: adding Plotwire to the
-// Home Screen opens it full screen, and keeps what it stores for working
-// without signal (Safari clears a website's storage after about a week of
-// not being used; a Home Screen app's it doesn't). "#homescreen-tip" in the
-// address shows it anywhere, for testing.
-const TIP_KEY = "plotwire:tip:homeScreen";
-export function HomeScreenTip() {
-  const [show, setShow] = useState(false);
+// Help, in the dashboard's side menu: a short menu of help items, each
+// opening a short note. Only one so far: working offline on an iPad (adding
+// Plotwire to the Home Screen opens it full screen, and keeps what it stores
+// for working without signal: Safari clears a website's storage after about
+// a week of not being used, but not a Home Screen app's). Styles: .help-* in
+// components/HomeScreen.jsx.
+export function HelpMenu() {
+  const [open, setOpen] = useState(false);
+  const [topic, setTopic] = useState(null); // "ipad" while its note shows
+  const ref = useRef(null);
   useEffect(() => {
-    try {
-      if (localStorage.getItem(TIP_KEY)) return;
-      const forced = window.location.hash === "#homescreen-tip";
-      const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-      const standalone = navigator.standalone === true || window.matchMedia?.("(display-mode: standalone)").matches;
-      if (forced || (ios && !standalone)) setShow(true);
-    } catch { /* storage unavailable: no tip */ }
-  }, []);
-  if (!show) return null;
-  const dismiss = () => {
-    try { localStorage.setItem(TIP_KEY, String(Date.now())); } catch { /* shown again next time */ }
-    setShow(false);
-  };
+    if (!open) return;
+    const away = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const key = (e) => { if (e.key === "Escape") setOpen(false); };
+    window.addEventListener("pointerdown", away, true);
+    window.addEventListener("keydown", key);
+    return () => { window.removeEventListener("pointerdown", away, true); window.removeEventListener("keydown", key); };
+  }, [open]);
+  useEffect(() => {
+    if (!topic) return;
+    const key = (e) => { if (e.key === "Escape") setTopic(null); };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [topic]);
+  const toggle = () => setOpen((o) => !o);
   return (
-    <div className="access-banner homescreen-tip" role="note">
-      <div>
-        <strong>Working on site without signal? Add Plotwire to your Home Screen.</strong>
-        <span> In Safari, tap the Share button, then <b>Add to Home Screen</b>. Plotwire then opens full screen, and your iPad keeps its offline drawings safe (Safari can clear a website&rsquo;s stored data after a week without use). Open it from the Home Screen and sign in once there: it keeps its own copy of your drawings.</span>
+    <div className="help-wrap" ref={ref}>
+      <div className={`navitem${open ? " is-open" : ""}`} title="Help" role="button" tabIndex={0} aria-haspopup="menu" aria-expanded={open}
+        onClick={toggle} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } }}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.9.7c0 1.7-2.5 2.2-2.5 3.7"/><path d="M12 17.2h.01"/></svg>
       </div>
-      <button type="button" className="mg-primary" onClick={dismiss}>Got it</button>
+      {open && (
+        <div className="help-menu" role="menu" aria-label="Help">
+          <div className="help-head">Help</div>
+          <button type="button" role="menuitem" className="help-item" autoFocus onClick={() => { setOpen(false); setTopic("ipad"); }}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden><rect x="4.5" y="2.5" width="15" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>
+            Using Plotwire offline on iPad
+          </button>
+        </div>
+      )}
+      {topic === "ipad" && (
+        <div className="pw-modal-back" onClick={() => setTopic(null)}>
+          <div className="pw-modal help-note" role="dialog" aria-modal="true" aria-labelledby="help-ipad-title" onClick={(e) => e.stopPropagation()}>
+            <h3 id="help-ipad-title" className="pw-modal-title">Using Plotwire offline on iPad</h3>
+            <ol>
+              <li>In Safari, tap <b>Share</b>, then <b>Add to Home Screen</b>.</li>
+              <li>Open Plotwire from the Home Screen icon and sign in there once. It keeps its own copy of your drawings, separate from Safari.</li>
+              <li>With signal, stay on the dashboard until it says all your drawings are on this device.</li>
+            </ol>
+            <p>With no signal you can then open and change any drawing, start new ones, sketch, quote and make PDFs. Saves upload by themselves when there&rsquo;s signal. The work planner shows as last saved, to look at only.</p>
+            <p className="help-why">Why the Home Screen? Safari can clear a website&rsquo;s stored data after about a week without use. A Home Screen app keeps it.</p>
+            <div className="pw-modal-actions">
+              <button type="button" className="mg-primary" autoFocus onClick={() => setTopic(null)}>Got it</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -2203,11 +2203,13 @@ const SYNC_LABELS = {
   synced:  { text: "Synced", dot: "#2C97A8", title: "Saved to your account." },
   waiting: { text: "Waiting for signal", dot: "#E0A100", title: "Saved on this device. It will go up to your account as soon as there's signal. Tap to try now." },
   stuck:   { text: "Couldn't sync", dot: "#D9534F", title: "Saved on this device, but your account wouldn't take it yet. It keeps trying. Tap to try now." },
+  refused: { text: "Not uploaded", dot: "#D9534F", title: "Saved on this device, but your account won't take this save. Tap for why." },
 };
+// refused: tapping says why (the editor's onRetry for that state).
 export function SyncStatus({ state, onRetry }) {
   const s = SYNC_LABELS[state];
   if (!s) return null;
-  const retry = state === "waiting" || state === "stuck";
+  const retry = state === "waiting" || state === "stuck" || state === "refused";
   const body = (
     <>
       <span aria-hidden className={`inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle${state === "syncing" ? " animate-pulse" : ""}`} style={{ background: s.dot }} />

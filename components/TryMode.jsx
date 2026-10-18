@@ -1,7 +1,11 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
-import { savedSymbolCounts, symbolCount } from "@/lib/db";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { symbolCount } from "@/lib/db";
+import { keptSymbolCounts, refreshSymbolCounts } from "@/lib/device/symbolCounts";
+import { deviceDrawings } from "@/lib/device/drawings";
+import { pendingSaves, subscribeOutbox } from "@/lib/device/outbox";
+import { deviceUser } from "@/lib/device/session";
 
 /* ============================================================================
  * TRY MODE -- the in-app side of "Try Plotwire" (lib/access.js). An account
@@ -24,23 +28,70 @@ export function drawingSymbolCount(project) {
   return symbolCount(project);
 }
 
+// What the limit is checked against, with or without signal:
+//   saved:   each drawing's count as the database holds it -- fetched when
+//            `server` and there's signal, else as kept on this device
+//            (lib/device/symbolCounts), and for any drawing missing from
+//            those, its copy on this device;
+//   waiting: each save still waiting on this device (lib/device/outbox),
+//            new drawings included, at the count it will upload with. Once
+//            up, that is what the database holds, so the limit is checked
+//            now exactly as it will be then.
+async function trialCounts(uid, { server }) {
+  let saved = null;
+  if (server) { try { saved = await refreshSymbolCounts(uid); } catch { saved = null; } }
+  const fromServer = Boolean(saved);
+  if (!saved) {
+    saved = (await keptSymbolCounts(uid)) || new Map();
+    for (const d of await deviceDrawings(uid)) {
+      if (!saved.has(d.id) && d.version !== null) saved.set(d.id, symbolCount(d.data));
+    }
+  }
+  const waiting = new Map((await pendingSaves(uid)).map((e) => [e.id, symbolCount(e.data)]));
+  return { saved, waiting, fromServer };
+}
+
 /* Live Try usage in the drawing editor: the symbols saved in the account's
- * OTHER drawings plus the drawing on screen. */
-export function useTryUsage({ enabled, limit, currentProjectId, project }) {
-  const [saved, setSaved] = useState(null); // Map id -> count, null until loaded
-  const refresh = useCallback(async () => {
-    if (!enabled) return;
-    try { setSaved(await savedSymbolCounts()); } catch (e) { console.warn("Try usage:", e?.message || e); }
-  }, [enabled]);
+ * OTHER drawings plus the drawing on screen. Works the same with no signal
+ * (trialCounts above), so nothing saved without signal can be refused later
+ * for being over the limit. */
+// uid: the signed-in account (its device copies are what's counted).
+export function useTryUsage({ enabled, limit, currentProjectId, project, uid: account }) {
+  const [counts, setCounts] = useState(null); // { saved, waiting }, null until known
+  const seq = useRef(0);
+  const refresh = useCallback(async ({ server = true } = {}) => {
+    const uid = account || deviceUser();
+    if (!enabled || !uid) return;
+    const mine = ++seq.current;
+    try {
+      // This device's figures at once (and with no signal), then the server's.
+      const here = await trialCounts(uid, { server: false });
+      if (mine === seq.current) setCounts(here);
+      if (!server) return;
+      const fresh = await trialCounts(uid, { server: true });
+      if (mine === seq.current && fresh.fromServer) setCounts(fresh);
+    } catch (e) { console.warn("Try usage:", e?.message || e); }
+  }, [enabled, account]);
   useEffect(() => { refresh(); }, [refresh, currentProjectId]);
+  // Saves waiting, going up or refused (in any tab): the waiting counts move.
+  useEffect(() => {
+    if (!enabled) return;
+    let t = null;
+    const off = subscribeOutbox(() => { clearTimeout(t); t = setTimeout(() => refresh({ server: false }), 400); });
+    return () => { off(); clearTimeout(t); };
+  }, [enabled, refresh]);
 
   const current = drawingSymbolCount(project);
   const savedTotal = (excludeId) => {
-    if (!saved) return 0;
+    if (!counts) return 0;
+    const { saved, waiting } = counts;
     let n = 0;
-    saved.forEach((c, id) => { if (id !== excludeId) n += c; });
+    new Set([...saved.keys(), ...waiting.keys()]).forEach((id) => {
+      if (id !== excludeId) n += waiting.has(id) ? waiting.get(id) : saved.get(id) || 0;
+    });
     return n;
   };
+  const saved = counts ? counts.saved : null;
   const used = savedTotal(currentProjectId) + current;
 
   return {
@@ -151,6 +202,15 @@ export const LOCKED = {
   share: { title: "Sharing comes with a subscription", body: "Share links and images of your planner unlock when you subscribe." },
   limit: null, // the default "Subscribe to keep going" wording
 };
+
+// A save the account wouldn't take when it uploaded (lib/device/outbox
+// "refused"): kept on this device, never dropped. reason: "limit" or
+// "subscription". `refused` tells the prompt's Subscribe not to save again.
+export function refusedPrompt(reason, limit = 25) {
+  return reason === "subscription"
+    ? { refused: true, title: "Not uploaded yet", body: "Your subscription isn't active, so your account won't take this save. It's kept safe on this device, and uploads by itself once you subscribe again." }
+    : { refused: true, title: "Over the trial limit: not uploaded", body: `This save would take your drawings past the trial's ${limit} symbols, so your account won't take it. It's kept safe on this device. Subscribe and it uploads by itself, or remove some symbols and save again.` };
+}
 
 // Colours only; sizes are inline (PILL / PILL_BTN). Navy text and a thin teal
 // outline; the button is the standard solid teal action button. Dark mode

@@ -28,14 +28,14 @@ import { SHEET, DRAW } from "@/lib/cad/sheet";
 import { applyPlanToSheet, scaleLabel, outsideNote } from "@/lib/cad/planScale";
 import { DEFAULT_TITLEBLOCK } from "@/lib/titleBlock";
 import { normaliseWireStrength, wireStrengthField } from "@/lib/wireStrength";
-import { useTryUsage, useTryPrompt, TryPill, TryPrompt, LOCKED, drawingSymbolCount } from "@/components/TryMode";
+import { useTryUsage, useTryPrompt, TryPill, TryPrompt, LOCKED, drawingSymbolCount, refusedPrompt } from "@/components/TryMode";
 import { ShortcutsCard, StatusHint, TOUCH } from "@/components/Shortcuts";
 import dynamic from "next/dynamic";
 const CadSketchPanel = dynamic(() => import("@/components/cad/CadSketch"), { ssr: false });
 import { useEditor } from "@/store/editorStore";
 import { toDeviceForm, fromDeviceForm, deviceDrawing, rememberDrawing, forgetDrawing } from "@/lib/device/drawings";
 import { planLinks, cachedPlanLinks, rememberUploadedPlan } from "@/lib/device/planCache";
-import { queueSave, subscribeOutbox, outboxStatus, holdSync, releaseSync, discardSave, forgetSaves, pendingSaves, newDrawingId, syncNow } from "@/lib/device/outbox";
+import { queueSave, subscribeOutbox, outboxStatus, outboxReason, holdSync, releaseSync, discardSave, forgetSaves, pendingSaves, newDrawingId, syncNow } from "@/lib/device/outbox";
 import { warmUpOffline } from "@/lib/device/warmUp";
 import { registerPlanUpload } from "@/lib/device/uploads";
 import { SyncStatus } from "@/components/SheetParts";
@@ -585,7 +585,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const [projectList, setProjectList] = useState([]);   // saved projects index
   const [currentProjectId, setCurrentProjectId] = useState(null);
   // This drawing's save status on this device (lib/device/outbox): "local",
-  // "syncing", "synced", "waiting" or "stuck"; null before its first save here.
+  // "syncing", "synced", "waiting", "stuck" or "refused"; null before its
+  // first save here.
   const [syncState, setSyncState] = useState(null);
   // A short message about this drawing (a newer version arrived, ...).
   const [openNote, setOpenNote] = useState("");
@@ -624,7 +625,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   // Try mode (components/TryMode.jsx): the account-wide symbol count, and the
   // "Subscribe to keep going" / locked-feature prompt. Callbacks that outlive a
   // render read the latest count through the ref.
-  const tryUsage = useTryUsage({ enabled: access.isTry, limit: access.symbolLimit, currentProjectId, project });
+  const tryUsage = useTryUsage({ enabled: access.isTry, limit: access.symbolLimit, currentProjectId, project, uid: user?.id });
   const tryUsageRef = useRef(tryUsage);
   tryUsageRef.current = tryUsage;
   const tryPrompt = useTryPrompt();
@@ -2125,6 +2126,12 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       if (!ev.id || ev.id === cur) setSyncState(syncLabel(cur));
       return;
     }
+    // The account wouldn't take this drawing's save (over the trial limit,
+    // or no active subscription): it stays on this device; say why.
+    if (ev.type === "refused") {
+      if (ev.id === cur) tryPrompt.show(refusedPrompt(ev.reason, access.symbolLimit));
+      return;
+    }
     if (ev.previousId !== cur && ev.id !== cur) return; // another drawing
     // Not this editor's work (the same drawing saved in another tab): this
     // editor stays on the version it had, so its next save can't write over
@@ -2364,6 +2371,13 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     setHistory([]); setFuture([]);
     setTimeout(fitToScreen, 60);
     linkPlansLater();
+  };
+
+  // The status bar's "Not uploaded", tapped: why, and Subscribe. It tries
+  // once more too, in case the account has changed since.
+  const explainRefused = () => {
+    tryPrompt.show(refusedPrompt(outboxReason(currentProjectIdRef.current), access.symbolLimit));
+    syncNow();
   };
 
   // Try mode's Subscribe: save the drawing first (when the save is allowed) so
@@ -2704,7 +2718,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
               </button>
             </div>
           )}
-          <StatusBar right={<><SyncStatus state={syncState} onRetry={syncNow} />SHEET A3 · {meta.scale}</>}>
+          <StatusBar right={<><SyncStatus state={syncState} onRetry={syncState === "refused" ? explainRefused : syncNow} />SHEET A3 · {meta.scale}</>}>
             {/* The counts always show; the hint after them truncates. */}
             <StatusCount label="SYMBOLS" value={placed.length} />
             <StatusCount label="WIRES" value={wires.length} />
@@ -2866,7 +2880,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       )}
       {/* Try mode: the Subscribe prompt (components/TryMode.jsx). */}
       <TryPrompt open={Boolean(tryPrompt.prompt)} title={tryPrompt.prompt?.title} body={tryPrompt.prompt?.body}
-        onSubscribe={subscribeFromEditor} onClose={tryPrompt.hide} />
+        onSubscribe={tryPrompt.prompt?.refused ? () => { tryPrompt.hide(); access.openSubscribe?.(); } : subscribeFromEditor}
+        onClose={tryPrompt.hide} />
     </ProjectTitleBlockContext.Provider>
   );
 }

@@ -451,10 +451,10 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
 
   viewRef.current = view;
 
-  const { theme, toggleTheme, access = {} } = useApp();
+  const { theme, toggleTheme, access = {}, user } = useApp();
   // Try mode: the Trial pill shows the account's symbols across saved drawings
   // (a sketch places none), same pill and Subscribe as the editor.
-  const tryUsage = useTryUsage({ enabled: access.isTry, limit: access.symbolLimit, currentProjectId: null, project: null });
+  const tryUsage = useTryUsage({ enabled: access.isTry, limit: access.symbolLimit, currentProjectId: null, project: null, uid: user?.id });
 
   // Undo / redo: every edit goes through change(); opening or starting a
   // sketch clears the history.

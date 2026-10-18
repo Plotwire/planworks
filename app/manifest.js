@@ -1,8 +1,8 @@
 // The web app manifest: added to an iPad's Home Screen (or installed from
 // Edge or Chrome), Plotwire opens full screen like an app. On an iPad that
 // also keeps what it stores for working without signal, which Safari clears
-// for websites after about a week of not being used (components/OfflinePanel
-// HomeScreenTip says so).
+// for websites after about a week of not being used (the dashboard's Help,
+// "Using Plotwire offline on iPad", components/OfflinePanel HelpMenu, says so).
 export default function manifest() {
   return {
     name: "Plotwire",
