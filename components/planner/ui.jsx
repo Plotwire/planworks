@@ -70,7 +70,7 @@ export function JobCard({ j, cdef, P, dark, state = null, clash = false, seg = n
       {seg && seg.i > 1 && <span aria-hidden="true" title="Continues from the day before" style={{ position: "absolute", left: -2, top: "50%", transform: "translate(-50%,-50%)", width: 14, height: 14, borderRadius: 999, background: P.accent2, color: "#fff", font: "700 11px/13px " + FONTS, textAlign: "center", zIndex: 1 }}>{"‹"}</span>}
       {seg && seg.i < seg.n && <span aria-hidden="true" title="Continues the next day" style={{ position: "absolute", right: -8, top: "50%", transform: "translateY(-50%)", width: 14, height: 14, borderRadius: 999, background: P.accent2, color: "#fff", font: "700 11px/13px " + FONTS, textAlign: "center", zIndex: 1 }}>{"›"}</span>}
       {stretch && (
-        <span className="wp-grip" data-multi={seg && seg.n > 1 ? "" : undefined} title="Drag to stretch across days" aria-label="Stretch across days" onPointerDown={stretch}
+        <span className="wp-grip" data-html2canvas-ignore data-multi={seg && seg.n > 1 ? "" : undefined} title="Drag to stretch across days" aria-label="Stretch across days" onPointerDown={stretch}
           style={{ position: "absolute", top: 0, right: 0, bottom: 0, width: 12, borderRadius: "0 5px 5px 0", cursor: "ew-resize", touchAction: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <span style={{ width: 4, height: 16, borderLeft: "1.5px solid currentColor", borderRight: "1.5px solid currentColor" }} />
         </span>

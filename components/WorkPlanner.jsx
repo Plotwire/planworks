@@ -799,36 +799,42 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
     const card = cardRef.current;
     if (!card || exporting) return;
     setExporting(true);
-    const grid = gridRef.current;
-    const prevMax = grid ? grid.style.maxHeight : null;
-    const prevOv = grid ? grid.style.overflow : null;
-    // The board is wider/taller than a phone screen and scrolls. For the image
-    // we temporarily un-cap it so the WHOLE board is captured, then restore.
-    const prevCardW = card.style.width;
-    const prevCardOv = card.style.overflow;
-    const prevDisp = card.style.display;
-    const prevPos = card.style.position;
-    const prevLeft = card.style.left;
-    const prevTop = card.style.top;
-    const restore = () => {
-      if (grid) { grid.style.maxHeight = prevMax; grid.style.overflow = prevOv; }
-      card.style.width = prevCardW; card.style.overflow = prevCardOv;
-      card.style.display = prevDisp; card.style.position = prevPos;
-      card.style.left = prevLeft; card.style.top = prevTop;
-    };
-    if (grid) { grid.style.maxHeight = "none"; grid.style.overflow = "visible"; }
-    // On phones the full board is hidden (the list view is shown instead), so
-    // reveal it off-screen at full size just long enough to photograph it.
-    card.style.display = "block";
-    card.style.position = "fixed";
-    card.style.left = "-10000px";
-    card.style.top = "0";
-    card.style.width = "1300px";
-    card.style.overflow = "visible";
+    // html2canvas works out where text sits by measuring a 1px image in this
+    // page, and Tailwind's base styles make images blocks, which drew every
+    // line about 5px low (the IMPORTANT badges lost their bottom half). Only
+    // that measuring image is matched, and only while the picture is made.
+    const metricsFix = document.createElement("style");
+    metricsFix.textContent = 'body > div > img[width="1"][height="1"]{display:inline !important}';
+    document.head.appendChild(metricsFix);
     try {
       const html2canvas = (await import("html2canvas")).default;
-      const canvas = await html2canvas(card, { scale: 2, backgroundColor: P.surface, useCORS: true, windowWidth: 1400 });
-      restore();
+      // The picture is drawn with this page's fonts, and on phones the board
+      // isn't on screen, so some of its fonts may not have been fetched yet.
+      const faces = [];
+      if (document.fonts) document.fonts.forEach((f) => { if (/barlow/i.test(f.family)) faces.push(f.load().catch(() => {})); });
+      await Promise.all(faces);
+      // The picture is taken from html2canvas's own copy of the page, so the
+      // planner on screen is never touched (on phones it isn't even shown; the
+      // copy is laid out 1400px wide, where it is). In the copy the board is
+      // lifted out at full size: nothing scrolls, nothing is sticky (a sticky
+      // names column lands on the wrong side), and the buttons, tabs and hints
+      // (data-html2canvas-ignore) are left out.
+      const canvas = await html2canvas(card, {
+        scale: 2, backgroundColor: P.surface, useCORS: true, windowWidth: 1400, scrollX: 0, scrollY: 0,
+        onclone: (doc, el) => {
+          const css = doc.createElement("style");
+          css.textContent = ".wp-shot{position:absolute !important;left:0 !important;top:0 !important;width:1300px !important;height:auto !important;margin:0 !important;box-shadow:none !important}"
+            + ".wp-shot .wp-grid{max-height:none !important;overflow:visible !important}"
+            + ".wp-shot .wp-stick{position:relative !important;left:auto !important;top:auto !important}"
+            + ".wp-shot .wp-wt{min-width:0 !important;text-align:right !important}";
+          doc.head.appendChild(css);
+          el.classList.add("wp-shot");
+          doc.body.appendChild(el);
+          // A day with a lot of people is wider than 1300px: widen to fit.
+          const grid = el.querySelector(".wp-grid");
+          if (grid && grid.scrollWidth > grid.clientWidth) el.style.setProperty("width", (el.offsetWidth + grid.scrollWidth - grid.clientWidth) + "px", "important");
+        },
+      });
       canvas.toBlob((blob) => {
         setExporting(false);
         if (!blob) { alert("Could not create image."); return; }
@@ -844,7 +850,8 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
           setTimeout(() => URL.revokeObjectURL(url), 3000);
         }
       }, "image/png");
-    } catch (e) { restore(); setExporting(false); alert(isMissingCode(e) ? NEEDS_SIGNAL_ALERT : "Could not create image: " + (e && e.message ? e.message : e)); }
+    } catch (e) { setExporting(false); alert(isMissingCode(e) ? NEEDS_SIGNAL_ALERT : "Could not create image: " + (e && e.message ? e.message : e)); }
+    finally { metricsFix.remove(); }
   };
 
   const navBtn = (disabled) => ({ fontFamily: COND, fontWeight: 600, fontSize: 14, padding: "6px 12px", borderRadius: 6, cursor: "pointer", background: "rgba(255,255,255,.14)", color: P.headerText, border: "1px solid rgba(255,255,255,.35)", opacity: disabled ? 0.35 : 1, pointerEvents: disabled ? "none" : "auto" });
@@ -939,7 +946,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
         {out}
         {qa && <QuickAdd P={P} onSave={saveQuickAdd} onCancel={() => setQuickAdd(null)}
           onMore={(site, t) => { setQuickAdd(null); openNew(c.id, d.iso, { site, t }); }} />}
-        {!readOnly && !paused && !qa && <div className="wp-add" style={{ textAlign: "center", color: P.muted, fontFamily: COND, fontWeight: 600, fontSize: 13, padding: "2px 0 4px", cursor: "pointer" }}>+ add job</div>}
+        {!readOnly && !paused && !qa && <div className="wp-add" data-html2canvas-ignore style={{ textAlign: "center", color: P.muted, fontFamily: COND, fontWeight: 600, fontSize: 13, padding: "2px 0 4px", cursor: "pointer" }}>+ add job</div>}
       </div>
     );
   };
@@ -1078,26 +1085,26 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
           <div style={{ display: "flex", alignItems: "baseline", gap: 13 }}>
             <span style={{ fontFamily: COND, fontWeight: 700, fontSize: 26, letterSpacing: ".02em", textTransform: "uppercase" }}>{settings.company || "Your Company"}</span>
             <span style={{ fontSize: 13, color: P.headerSub, letterSpacing: ".12em", textTransform: "uppercase" }}>{settings.title || "Work Planner"}</span>
-            {!readOnly && <button onClick={openSettings} title="Planner settings" style={{ marginLeft: 4, width: 28, height: 28, borderRadius: 7, cursor: "pointer", background: "rgba(255,255,255,.12)", border: "1px solid rgba(255,255,255,.28)", color: P.headerText, display: "grid", placeItems: "center" }}>
+            {!readOnly && <button data-html2canvas-ignore onClick={openSettings} title="Planner settings" style={{ marginLeft: 4, width: 28, height: 28, borderRadius: 7, cursor: "pointer", background: "rgba(255,255,255,.12)", border: "1px solid rgba(255,255,255,.28)", color: P.headerText, display: "grid", placeItems: "center" }}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="3" /><path d="M19.4 13a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 0 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9 2 2 0 0 1 0-4 1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 2.9-1.2 2 2 0 0 1 4 0 1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-1.5 1z" /></svg>
             </button>}
           </div>
           {view === "day" ? (
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-              <button onClick={() => stepDay(-1)} style={navBtn(week === 0 && cols.indexOf(curDay) === 0)}>{"‹ Prev"}</button>
+              <button data-html2canvas-ignore onClick={() => stepDay(-1)} style={navBtn(week === 0 && cols.indexOf(curDay) === 0)}>{"‹ Prev"}</button>
               <div className="wp-wt" style={{ fontFamily: SEMI, fontWeight: 700, fontSize: 21, textAlign: "center" }}>{DAY_NAMES[curDay] + " " + days[curDay].date + " " + weekStart.getFullYear()}</div>
-              <button onClick={() => stepDay(1)} style={navBtn(week === 3 && cols.indexOf(curDay) === cols.length - 1)}>{"Next ›"}</button>
+              <button data-html2canvas-ignore onClick={() => stepDay(1)} style={navBtn(week === 3 && cols.indexOf(curDay) === cols.length - 1)}>{"Next ›"}</button>
             </div>
           ) : (
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-              <button onClick={() => setWeek((w) => Math.max(0, w - 1))} style={navBtn(week === 0)}>{"‹ Prev"}</button>
+              <button data-html2canvas-ignore onClick={() => setWeek((w) => Math.max(0, w - 1))} style={navBtn(week === 0)}>{"‹ Prev"}</button>
               <div className="wp-wt" style={{ fontFamily: SEMI, fontWeight: 700, fontSize: 21, textAlign: "center" }}>{weekTitle}</div>
-              <button onClick={() => setWeek((w) => Math.min(3, w + 1))} style={navBtn(week === 3)}>{"Next ›"}</button>
+              <button data-html2canvas-ignore onClick={() => setWeek((w) => Math.min(3, w + 1))} style={navBtn(week === 3)}>{"Next ›"}</button>
             </div>
           )}
         </div>
 
-        <div style={{ display: "flex", gap: 8, padding: "11px 24px", background: P.surfaceAlt, borderBottom: "1px solid " + P.line2, alignItems: "center", flexWrap: "wrap" }}>
+        <div data-html2canvas-ignore style={{ display: "flex", gap: 8, padding: "11px 24px", background: P.surfaceAlt, borderBottom: "1px solid " + P.line2, alignItems: "center", flexWrap: "wrap" }}>
           {[0, 1, 2, 3].map((w) => {
             const s = new Date(monday0); s.setDate(monday0.getDate() + w * 7);
             const active = w === week;
@@ -1113,7 +1120,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
         </div>
 
         {view === "day" && (
-          <div style={{ display: "flex", gap: 7, padding: "10px 24px", background: P.surface, borderBottom: "1px solid " + P.line2, overflowX: "auto" }}>
+          <div data-html2canvas-ignore style={{ display: "flex", gap: 7, padding: "10px 24px", background: P.surface, borderBottom: "1px solid " + P.line2, overflowX: "auto" }}>
             {colDays.map((d) => {
               const i = d.i;
               const on = i === curDay;
@@ -1128,8 +1135,8 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
         )}
 
         {view === "day" ? (
-          <div ref={gridRef} style={{ maxHeight: "66vh", overflow: "auto", position: "relative" }}>
-            <div style={{ display: "flex", minWidth: roster.length * 214, position: "sticky", top: 0, zIndex: 3, background: P.colHead }}>
+          <div ref={gridRef} className="wp-grid" style={{ maxHeight: "66vh", overflow: "auto", position: "relative" }}>
+            <div className="wp-stick" style={{ display: "flex", minWidth: roster.length * 214, position: "sticky", top: 0, zIndex: 3, background: P.colHead }}>
               {roster.map((c) => (
                 <div key={c.id} style={{ flex: "1 1 0", minWidth: 210, padding: "11px 14px", color: P.headerText, borderRight: "1px solid rgba(255,255,255,.18)", display: "flex", alignItems: "center", gap: 9 }}>
                   <span style={{ width: 11, height: 11, borderRadius: 3, background: c.color, flex: "none" }} />
@@ -1143,9 +1150,9 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
             </div>
           </div>
         ) : (
-        <div ref={gridRef} style={{ maxHeight: "62vh", overflow: "auto", position: "relative" }}>
-        <div className="wp-row" style={{ display: "flex", alignItems: "stretch", background: P.colHead, position: "sticky", top: 0, zIndex: 3 }}>
-          <div className="wp-cname" style={{ padding: "12px 16px", color: P.headerSub, position: "sticky", left: 0, zIndex: 4, backgroundColor: P.colHead, boxShadow: "3px 0 6px -3px rgba(10,25,35,.35)", fontFamily: COND, fontWeight: 600, fontSize: 13, letterSpacing: ".09em", textTransform: "uppercase", borderRight: "2px solid rgba(255,255,255,.22)" }}>Contractor</div>
+        <div ref={gridRef} className="wp-grid" style={{ maxHeight: "62vh", overflow: "auto", position: "relative" }}>
+        <div className="wp-row wp-stick" style={{ display: "flex", alignItems: "stretch", background: P.colHead, position: "sticky", top: 0, zIndex: 3 }}>
+          <div className="wp-cname wp-stick" style={{ padding: "12px 16px", color: P.headerSub, position: "sticky", left: 0, zIndex: 4, backgroundColor: P.colHead, boxShadow: "3px 0 6px -3px rgba(10,25,35,.35)", fontFamily: COND, fontWeight: 600, fontSize: 13, letterSpacing: ".09em", textTransform: "uppercase", borderRight: "2px solid rgba(255,255,255,.22)" }}>Contractor</div>
           {colDays.map((d) => (
             <div key={d.i} style={{ ...dayFlex(d.narrow), padding: "9px 13px", color: P.headerText, borderRight: "1px solid rgba(255,255,255,.18)", background: d.isToday ? "rgba(63,183,201,.28)" : d.narrow ? "rgba(255,255,255,.08)" : "transparent" }}>
               <div style={{ fontFamily: COND, fontWeight: 700, fontSize: 17, letterSpacing: ".03em" }}>{d.name}</div>
@@ -1157,7 +1164,7 @@ export default function WorkPlanner({ sharedView = false, shared = null }) {
 
         {roster.map((c) => (
           <div key={c.id} className="wp-row" style={{ display: "flex", alignItems: "stretch", borderTop: "1px solid " + P.rowSep }}>
-            <div className="wp-cname" style={{ padding: "11px 14px", backgroundColor: dark ? P.surfaceAlt : P.surface, backgroundImage: dark ? "none" : "linear-gradient(" + c.color + "14, " + c.color + "14)", borderRight: "2px solid " + P.line, boxShadow: "3px 0 6px -3px rgba(10,25,35,.25)", display: "flex", alignItems: "center", gap: 9, position: "sticky", left: 0, zIndex: 2 }}>
+            <div className="wp-cname wp-stick" style={{ padding: "11px 14px", backgroundColor: dark ? P.surfaceAlt : P.surface, backgroundImage: dark ? "none" : "linear-gradient(" + c.color + "14, " + c.color + "14)", borderRight: "2px solid " + P.line, boxShadow: "3px 0 6px -3px rgba(10,25,35,.25)", display: "flex", alignItems: "center", gap: 9, position: "sticky", left: 0, zIndex: 2 }}>
               <span style={{ width: 11, height: 11, borderRadius: 3, background: c.color, flex: "none" }} />
               <span style={{ fontFamily: SEMI, fontWeight: 700, fontSize: 15, lineHeight: 1.1, color: P.ink }}>{c.name}</span>
             </div>
