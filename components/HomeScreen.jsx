@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Trash2 } from "lucide-react";
 import { listProjects, localProjectsPending, migrateLocalProjects, deleteProjectRow, verifyPassword, buildPreview } from "@/lib/db";
+import { planBox } from "@/lib/cad/sheet";
 import { planLinks, cachedPlanLinks } from "@/lib/device/planCache";
 import { cachedList, rememberList, forgetDrawing } from "@/lib/device/drawings";
 import { pendingSaves, subscribeOutbox, forgetSaves, syncNow } from "@/lib/device/outbox";
@@ -75,9 +76,9 @@ function PlanThumb({ project }) {
   const clip = !!(bgImage && bgImage.planFrame);
   let img = null;
   if (bgImage && bgImage.w && bgImage.h) {
-    const s = Math.min(DRAW.w / bgImage.w, DRAW.h / bgImage.h);
-    const w = bgImage.w * s, h = bgImage.h * s;
-    img = { x: DRAW.x + (DRAW.w - w) / 2, y: DRAW.y + (DRAW.h - h) / 2, w, h, src: bgImage.src };
+    // Fitted, or at its true scale: where the editor puts it (planBox).
+    const fp = planBox(DRAW, bgImage);
+    img = { x: DRAW.x + fp.x, y: DRAW.y + fp.y, w: fp.w, h: fp.h, src: bgImage.src };
   }
   return (
     <svg viewBox="0 0 1587 1123" preserveAspectRatio="xMidYMid meet">

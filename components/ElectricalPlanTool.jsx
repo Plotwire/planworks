@@ -10,7 +10,9 @@ import {
 import { listProjects, getProjectData, getProjectRecord, deleteProjectRow, unreferencedPlanPaths } from "@/lib/db";
 import { defaultDrawingName } from "@/lib/drawingName";
 import { uploadPlanImage, signPlanImages, deletePlanImages, blobToDataUrl } from "@/lib/planImages";
-import { looksLikePdf, renderPdfPlan } from "@/lib/pdfPlan";
+import { looksLikePdf, loadPdfPage, renderPdfPage, cropBoxOf, cropPicture } from "@/lib/pdfPlan";
+import CropDialog from "@/components/CropDialog";
+import { cropMmOf, planMapping, remapToPlan, hasWork, hasTrueScale, validRect } from "@/lib/planCrop";
 import {
   SYMBOLS, SYMBOL_META, CATEGORY_COLOURS, VIEWBOX,
   findSymbol, findCategory, resolveColours,
@@ -25,7 +27,7 @@ import {
 import { useApp } from "@/components/AppShell";
 import { openSketch } from "@/lib/device/sketches";
 import { SHEET, DRAW } from "@/lib/cad/sheet";
-import { applyPlanToSheet, scaleLabel, outsideNote } from "@/lib/cad/planScale";
+import { applyPlanToSheet, scaleLabel, outsideNote, PLAN_PX } from "@/lib/cad/planScale";
 import { DEFAULT_TITLEBLOCK } from "@/lib/titleBlock";
 import { normaliseWireStrength, wireStrengthField } from "@/lib/wireStrength";
 import { useTryUsage, useTryPrompt, TryPill, TryPrompt, LOCKED, drawingSymbolCount, refusedPrompt } from "@/components/TryMode";
@@ -39,7 +41,7 @@ import { planLinks, cachedPlanLinks, rememberUploadedPlan } from "@/lib/device/p
 import { queueSave, subscribeOutbox, outboxStatus, outboxReason, holdSync, releaseSync, discardSave, forgetSaves, pendingSaves, newDrawingId, syncNow } from "@/lib/device/outbox";
 import { warmUpOffline } from "@/lib/device/warmUp";
 import { registerPlanUpload } from "@/lib/device/uploads";
-import { SyncStatus, syncView } from "@/components/SheetParts";
+import { SyncStatus, syncView, fetchPlanFile } from "@/components/SheetParts";
 import { hasSignal, subscribeSignal, noteServer, looksLikeNoSignal } from "@/lib/device/connection";
 
 /* ============================================================================
@@ -72,14 +74,15 @@ const NEW_DRAWING_SCALE = "NTS";
 const OLD_DEFAULT_SCALE = "1:50 @ A3";
 
 // A drawing's scale as it shows when opened. One the user typed, or the Floor
-// Plan tool calculated, is kept. One nobody chose -- none, blank, or the old
+// Plan tool calculated, or a PDF plan's true scale (lib/planCrop), is kept. One nobody chose -- none, blank, or the old
 // default with no Floor Plan sheet drawn at 1:50 -- shows NTS. (A "1:50 @ A3"
 // someone typed can't be told from the old default, so it shows NTS too.)
 function shownScale(p) {
   const s = p?.meta?.scale;
   if (typeof s !== "string" || !s.trim()) return NEW_DRAWING_SCALE;
   if (s.trim() !== OLD_DEFAULT_SCALE) return s;
-  const calculated = (p.sheets || []).some((sh) => sh?.bgImage?.planScale && scaleLabel(sh.bgImage.planScale) === OLD_DEFAULT_SCALE);
+  const placedAt = (bg) => bg?.planScale || (hasTrueScale(bg) ? bg.sheetScale : null);
+  const calculated = (p.sheets || []).some((sh) => placedAt(sh?.bgImage) && scaleLabel(placedAt(sh.bgImage)) === OLD_DEFAULT_SCALE);
   return calculated ? s : NEW_DRAWING_SCALE;
 }
 
@@ -587,6 +590,12 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const [history, setHistory] = useState([]);
   const [future, setFuture] = useState([]);
   const [pdfLoading, setPdfLoading] = useState(false);
+  // The crop step (components/CropDialog): { mode, source, initial,
+  // allowScale, note, run(choice) -> null | message, cancelled() }. run makes
+  // the change; a message keeps the dialog open and says why nothing changed.
+  const [cropReq, setCropReq] = useState(null);
+  const [cropBusy, setCropBusy] = useState(false);
+  const [cropError, setCropError] = useState(null);
   const symbolScale = activeSheet.symbolScale ?? 1;
   const setSymbolScale = (v) => setActiveSheet({ symbolScale: v });
   const colourMode = project.colourMode || "colour";
@@ -818,15 +827,20 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   // configured) so the plan is never lost.
   // The plan being replaced keeps its stored file: the saved row still points
   // at it until the next save, and a Save As copy may point at it for good.
-  const setPlanImageFromBlob = (blob, w, h, existingObjectUrl = null, sourcePdf = null) => {
+  // opts.extra: more plan fields (the crop and scale, lib/planCrop).
+  // opts.keepPdf: { pdfSrc, pdfPath, pdfPage } -- a new picture of the same
+  // original PDF (Adjust crop & scale), which is not stored again.
+  // opts.sheetPatch: the sheet's items moved with the plan, applied in the
+  // same change as the plan so they are never out of line with it.
+  const setPlanImageFromBlob = (blob, w, h, existingObjectUrl = null, sourcePdf = null, { extra = {}, keepPdf = null, sheetPatch = null } = {}) => {
     const targetId = activeSheetIdRef.current;
     const displayUrl = existingObjectUrl || URL.createObjectURL(blob);
     // For PDFs, mint a LOCAL link to the original right away so the crisp windowed
     // renderer switches on the instant the plan is imported — no save/reopen needed.
     // This link is transient (blob: URL) and is stripped before any save; the
     // permanent copy is uploaded below and re-linked by hydrateImages on next load.
-    const pdfNow = sourcePdf ? { pdfSrc: URL.createObjectURL(sourcePdf), pdfPage: 1 } : {};
-    patchSheetById(targetId, { bgImage: { src: displayUrl, w, h, ...pdfNow }, sketchId: null });
+    const pdfNow = sourcePdf ? { pdfSrc: URL.createObjectURL(sourcePdf), pdfPage: 1 } : (keepPdf || {});
+    patchSheetById(targetId, { ...(sheetPatch || {}), bgImage: { src: displayUrl, w, h, ...pdfNow, ...extra }, sketchId: null });
     setTimeout(fitToScreen, 60);
     // Registered BEFORE the upload starts, so a save that follows immediately
     // always finds it: the outbox waits for this upload rather than sending the
@@ -839,9 +853,15 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     // changes nothing, but `done` still resolves with its bgImage for a save
     // whose snapshot shows this plan.
     const isNewest = () => planUploadsRef.current.get(targetId) === upload;
+    // The original PDF's path may have landed meanwhile (storeOriginalPdf): kept.
     const applyToSheet = (bg) => setProject(p => ({
       ...p,
-      sheets: p.sheets.map(s => (s.id === targetId && s.bgImage?.src === displayUrl ? { ...s, bgImage: bg } : s)),
+      sheets: p.sheets.map(s => {
+        if (s.id !== targetId || s.bgImage?.src !== displayUrl) return s;
+        const cur = s.bgImage;
+        const carry = cur.pdfPath && !bg.pdfPath && cur.pdfSrc === bg.pdfSrc ? { pdfPath: cur.pdfPath, pdfPage: cur.pdfPage || 1 } : {};
+        return { ...s, bgImage: { ...bg, ...carry } };
+      }),
     }));
     // `done` settles once the raster plan is stored -- the part a save must
     // wait for. The original PDF (larger, optional) follows in the background.
@@ -850,17 +870,17 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         const { path } = await uploadPlanImage(blob);
         // Kept on this device under its stored path: never downloaded again here.
         rememberUploadedPlan(path, blob);
-        const storedBg = { src: displayUrl, w, h, path, ...pdfNow };
+        const storedBg = { src: displayUrl, w, h, path, ...pdfNow, ...extra };
         if (isNewest()) {
           applyToSheet(storedBg);
-          if (pdfNow.pdfSrc) storeOriginalPdf(targetId, pdfNow.pdfSrc);
+          if (sourcePdf && pdfNow.pdfSrc) storeOriginalPdf(targetId, pdfNow.pdfSrc);
         }
         return storedBg;
       } catch (err) {
         console.warn("plan image upload failed; using inline fallback:", err?.message);
         try {
           const dataUrl = await blobToDataUrl(blob);
-          const inlineBg = { src: dataUrl, w, h, ...pdfNow };
+          const inlineBg = { src: dataUrl, w, h, ...pdfNow, ...extra };
           if (isNewest()) applyToSheet(inlineBg);
           return inlineBg;
         } catch {
@@ -876,34 +896,206 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     registerPlanUpload(displayUrl, upload.done.then(bg => bg?.path || null));
   };
 
+  // The sheet on screen, as the store has it now.
+  const currentSheet = () => {
+    const p = useEditor.getState().project;
+    return (p?.sheets || []).find(s => s.id === p.activeSheetId) || null;
+  };
+  // What the crop step shows: a PDF page or a picture, in its own units.
+  const pdfCropSource = (loaded) => ({
+    kind: "pdf", w: loaded.w, h: loaded.h, pageMm: loaded.pageMm,
+    render: (ctx, k) => loaded.page.render({ canvasContext: ctx, viewport: loaded.page.getViewport({ scale: k }) }).promise,
+  });
+  const imageCropSource = (img) => ({
+    kind: "image", w: img.naturalWidth, h: img.naturalHeight,
+    render: (ctx, k) => { ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high"; ctx.drawImage(img, 0, 0, img.naturalWidth * k, img.naturalHeight * k); },
+  });
+  // A PDF plan's crop and scale, as stored on its bgImage (lib/planCrop).
+  const pdfPlanFields = (loaded, { crop, drawingScale, sheetScale }) => ({
+    ...(validRect(crop) ? { crop } : {}),
+    cropBox: cropBoxOf(loaded.page, validRect(crop) ? crop : { x: 0, y: 0, w: loaded.w, h: loaded.h }),
+    pageMm: loaded.pageMm,
+    cropMm: cropMmOf(crop, loaded.w, loaded.h, loaded.pageMm),
+    ...(drawingScale ? { drawingScale } : {}),
+    ...(drawingScale && sheetScale ? { sheetScale } : {}),
+  });
+  // The title block follows a true scale. When a plan goes back to being
+  // fitted, a scale a true scale put there goes back to NTS; one the user
+  // typed stays as it is.
+  const titleScaleFor = (oldBg, newBg) => setProject(p => {
+    const cur = typeof p.meta?.scale === "string" ? p.meta.scale : "";
+    const putThere = hasTrueScale(oldBg) ? scaleLabel(oldBg.sheetScale) : null;
+    const next = hasTrueScale(newBg) ? scaleLabel(newBg.sheetScale) : (cur === putThere ? NEW_DRAWING_SCALE : cur);
+    return next === cur ? p : { ...p, meta: { ...p.meta, scale: next } };
+  });
+
+  // One crop step at a time: an import or Crop & scale started while another
+  // is loading or open is ignored (cropLockRef), and each step frees what it
+  // opened when it ends (release).
+  const cropLockRef = useRef(false);
+  const cropSeqRef = useRef(0);
+  const openCrop = (req) => setCropReq({ ...req, id: ++cropSeqRef.current });
+  const endCrop = (req, { cancelled = false } = {}) => {
+    if (cancelled) req?.cancelled?.();
+    req?.release?.();
+    cropLockRef.current = false;
+    setCropReq(null);
+    setCropError(null);
+  };
+
   const handleFile = async (file) => {
-    if (!file) return;
+    if (!file || cropLockRef.current) return;
+    cropLockRef.current = true;
     // By its bytes too: a PDF taken for a picture is drawn at 1 pixel per
     // point by Safari, and stored like that (lib/pdfPlan.js).
     const isPdf = await looksLikePdf(file);
     if (isPdf) {
+      // Stored as a PDF even when it came without the type or the name.
+      const pdfFile = file.type === "application/pdf" ? file
+        : new File([file], (file.name || "plan").replace(/\.pdf$/i, "") + ".pdf", { type: "application/pdf" });
       setPdfLoading(true);
+      let loaded;
       try {
-        // Stored as a PDF even when it came without the type or the name.
-        const pdfFile = file.type === "application/pdf" ? file
-          : new File([file], (file.name || "plan").replace(/\.pdf$/i, "") + ".pdf", { type: "application/pdf" });
-        const { blob, w, h } = await renderPdfPlan(await pdfFile.arrayBuffer());
-        setPlanImageFromBlob(blob, w, h, null, pdfFile);
+        loaded = await loadPdfPage(await pdfFile.arrayBuffer());
       } catch (err) {
+        cropLockRef.current = false;
         alert("Could not read PDF: " + err.message);
+        return;
       } finally {
         setPdfLoading(false);
       }
-    } else {
-      const objectUrl = URL.createObjectURL(file);
-      const img = new Image();
-      img.onload = () => {
-        setPlanImageFromBlob(file, img.width, img.height, objectUrl);
-      };
-      img.onerror = () => { URL.revokeObjectURL(objectUrl); alert("Could not read image."); };
-      img.src = objectUrl;
+      // The crop step, then the plan: just the area kept, at full detail.
+      openCrop({
+        mode: "import", source: pdfCropSource(loaded), allowScale: true, initial: {},
+        release: () => { try { loaded.pdf.destroy(); } catch { /* gone */ } },
+        run: async (choice) => {
+          const { blob, w, h } = await renderPdfPage(loaded.page, choice.crop);
+          const extra = pdfPlanFields(loaded, choice);
+          const oldBg = currentSheet()?.bgImage || null;
+          setPlanImageFromBlob(blob, w, h, null, pdfFile, { extra });
+          titleScaleFor(oldBg, extra);
+          setTimeout(fitToScreen, 100);
+          return null;
+        },
+      });
+      return;
     }
-    setTimeout(fitToScreen, 100);
+    const objectUrl = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => openCrop({
+      mode: "import", source: imageCropSource(img), allowScale: false, initial: {},
+      run: async ({ crop }) => {
+        const oldBg = currentSheet()?.bgImage || null;
+        if (!validRect(crop)) {
+          setPlanImageFromBlob(file, img.naturalWidth, img.naturalHeight, objectUrl);
+        } else {
+          const { blob, w, h } = await cropPicture(img, crop, file.type);
+          URL.revokeObjectURL(objectUrl);
+          setPlanImageFromBlob(blob, w, h, null, null, { extra: { crop } });
+        }
+        titleScaleFor(oldBg, null);
+        setTimeout(fitToScreen, 100);
+        return null;
+      },
+      cancelled: () => URL.revokeObjectURL(objectUrl),
+    });
+    img.onerror = () => { cropLockRef.current = false; URL.revokeObjectURL(objectUrl); alert("Could not read image."); };
+    img.src = objectUrl;
+  };
+
+  // What a plan's picture and placement are: a change to any of these is a
+  // different plan. (Its links and stored paths fill in in the background.)
+  const planShape = (bg) => JSON.stringify(bg ? [bg.w, bg.h, bg.crop || null, bg.drawingScale || null, bg.sheetScale || null, bg.pdfPage || 1] : null);
+
+  // Adjust crop & scale on the plan already on the sheet. A PDF plan is
+  // cropped again from its original PDF (any area of the page, any scale); a
+  // picture within what it shows now. Everything placed on the sheet moves
+  // with the plan (lib/planCrop remapToPlan), in the same change; if any of it
+  // would leave the drawing area, nothing changes and the dialog says why.
+  const adjustCropScale = async () => {
+    if (cropLockRef.current) return;
+    const sheet = currentSheet();
+    const bg = sheet && sheet.bgImage;
+    if (!bg) { alert("Import a plan first. Then you can crop it and set its scale."); return; }
+    if (sheet.sketchId || bg.planFrame) { alert("This plan comes from the Floor Plan tool, which sets its own true scale. Change its scale in the Floor Plan tool, then send it again."); return; }
+    const hasPdf = Boolean(bg.pdfSrc || bg.pdfPath);
+    // A Floor Plan sent before plans carried their sketch looks like a 2200 px
+    // picture; cropping it would stop the next send lining up with it.
+    if (!hasPdf && Math.max(bg.w, bg.h) === PLAN_PX) { alert("This plan looks like one from the Floor Plan tool, so it can't be cropped here. Change it in the Floor Plan tool. If it's a picture you imported, import it again to crop it."); return; }
+    if (planUploadsRef.current.has(sheet.id)) { alert("The plan is still being stored. Try again in a moment."); return; }
+    cropLockRef.current = true;
+    let loaded = null, img = null, imgUrl = null, imgType = "image/png";
+    setPdfLoading(true);
+    try {
+      if (hasPdf) {
+        loaded = await loadPdfPage(await (await fetchPlanFile(bg.pdfSrc, bg.pdfPath)).arrayBuffer());
+      } else {
+        const blob = await (await fetchPlanFile(bg.src, bg.path)).blob();
+        imgType = blob.type || imgType;
+        imgUrl = URL.createObjectURL(blob);
+        img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error("could not read the plan")); i.src = imgUrl; });
+      }
+    } catch (err) {
+      cropLockRef.current = false;
+      if (imgUrl) URL.revokeObjectURL(imgUrl);
+      alert(hasPdf
+        ? "The plan's original PDF isn't on this device yet, so its crop and scale can't be changed without signal. Try again when you have signal."
+        : "The plan isn't on this device yet, so it can't be cropped without signal. Try again when you have signal.");
+      return;
+    } finally {
+      setPdfLoading(false);
+    }
+    const srcW = loaded ? loaded.w : img.naturalWidth, srcH = loaded ? loaded.h : img.naturalHeight;
+    const wholeSrc = { x: 0, y: 0, w: srcW, h: srcH };
+    const shape0 = planShape(bg);
+    // Where the plan is now: the area of the page it shows, placed by planBox.
+    const from = planMapping(bg, loaded && validRect(bg.crop) ? bg.crop : wholeSrc);
+    const sameRect = (a, b) => (!validRect(a) && !validRect(b)) || (validRect(a) && validRect(b) && ["x", "y", "w", "h"].every(k => Math.abs(a[k] - b[k]) < 0.01));
+    openCrop({
+      mode: "adjust",
+      source: loaded ? pdfCropSource(loaded) : imageCropSource(img),
+      allowScale: Boolean(loaded),
+      initial: loaded ? { crop: bg.crop || null, drawingScale: bg.drawingScale || null, sheetScale: bg.sheetScale || null } : {},
+      note: hasWork(sheet)
+        ? "Symbols, notes, walls and furniture move with the plan, so they stay where they are on the building."
+        : (!loaded ? "This plan is a picture, so it can be cropped smaller but not given a scale." : null),
+      release: () => { if (loaded) { try { loaded.pdf.destroy(); } catch { /* gone */ } } if (imgUrl) URL.revokeObjectURL(imgUrl); },
+      run: async (choice) => {
+        const changed = () => { const cur = currentSheet(); return !cur || cur.id !== sheet.id || planShape(cur.bgImage) !== shape0; };
+        if (changed()) return "The plan changed while this was open. Close this and try again.";
+        if (!loaded && !validRect(choice.crop)) return null; // the whole picture: nothing to change
+        if (loaded && sameRect(choice.crop, bg.crop) && (choice.drawingScale || null) === (bg.drawingScale || null) && (choice.sheetScale || null) === (bg.sheetScale || null)) return null; // nothing changed
+        let pic, extra, region;
+        if (loaded) {
+          pic = await renderPdfPage(loaded.page, choice.crop);
+          extra = pdfPlanFields(loaded, choice);
+          region = validRect(choice.crop) ? choice.crop : wholeSrc;
+        } else {
+          pic = await cropPicture(img, choice.crop, imgType);
+          // Kept against the picture as it first came, for the record.
+          const c0 = validRect(bg.crop) ? bg.crop : wholeSrc;
+          extra = { crop: { x: c0.x + choice.crop.x * (c0.w / srcW), y: c0.y + choice.crop.y * (c0.h / srcH), w: choice.crop.w * (c0.w / srcW), h: choice.crop.h * (c0.h / srcH) } };
+          region = choice.crop;
+        }
+        // The sheet as it is now, after the render (work can't change behind
+        // the dialog, but its plan's links and paths can fill in).
+        if (changed()) return "The plan changed while this was open. Close this and try again.";
+        const now = currentSheet();
+        const to = planMapping({ w: pic.w, h: pic.h, ...extra }, region);
+        const moved = remapToPlan(now, from, to);
+        if (moved.outside) {
+          return `${moved.outside === 1 ? "1 item" : moved.outside + " items"} on this drawing would end up outside the drawing area, so nothing has changed. Make the crop bigger${loaded ? " or pick a smaller scale (a bigger number)" : ""}, then try again.`;
+        }
+        const cur = now.bgImage;
+        const keepPdf = loaded ? Object.fromEntries(["pdfSrc", "pdfPath", "pdfPage"].filter(k => cur[k] != null).map(k => [k, cur[k]])) : null;
+        setPlanImageFromBlob(pic.blob, pic.w, pic.h, null, null, { extra, keepPdf, sheetPatch: hasWork(now) ? moved.sheet : null });
+        titleScaleFor(cur, extra);
+        // Undo keeps where items were, not the plan they were on, so an undo
+        // past this would put them back off the new plan: start it afresh.
+        setHistory([]); setFuture([]);
+        return null;
+      },
+    });
   };
 
   // ---------- Zoom & pan (over the whole sheet) ----------
@@ -1609,6 +1801,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       // The floor-plan sketch open over the editor owns the keyboard: no
       // editor shortcut (Delete, R, W, Ctrl+Z...) may act on the hidden sheet.
       if (floorPlanOpen) return;
+      // Nor while the crop step is loading or open (CropDialog).
+      if (cropLockRef.current) return;
       // Nor while a drawing is opening (or failed to): nothing is editable.
       if (openStateRef.current !== "ready") return;
       const isInput = e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.isContentEditable;
@@ -2582,6 +2776,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         onToggleTheme={onToggleTheme}
         onShowMeta={() => setShowMeta(true)}
         onImport={() => fileInputRef.current.click()}
+        onCropScale={activeSheet?.bgImage ? adjustCropScale : null}
         onUndo={undo} onRedo={redo}
         onSave={saveProject} savedFlash={savedFlash}
         syncView={sync} onSyncClick={onSyncClick}
@@ -2606,7 +2801,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         shortcutsOpen={shortcutsOpen}
       />
       <input ref={fileInputRef} type="file" accept="image/*,.pdf" className="hidden"
-             onChange={(e) => handleFile(e.target.files[0])} />
+             onChange={(e) => { handleFile(e.target.files[0]); e.target.value = ""; }} />
 
       {paletteGhost && (() => {
         if (paletteGhost.furnitureId) {
@@ -2813,6 +3008,25 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       </div>
 
       {/* ==================== METADATA EDITOR ==================== */}
+      {cropReq && (
+        <CropDialog key={cropReq.id}
+          mode={cropReq.mode} source={cropReq.source} initial={cropReq.initial} allowScale={cropReq.allowScale}
+          note={cropReq.note} error={cropError} busy={cropBusy}
+          onCancel={() => { if (!cropBusy) endCrop(cropReq, { cancelled: true }); }}
+          onApply={async (choice) => {
+            setCropBusy(true); setCropError(null);
+            try {
+              const why = await cropReq.run(choice);
+              if (why) setCropError(why); else endCrop(cropReq);
+            } catch (err) {
+              setCropError("Couldn't make the plan: " + (err?.message || err));
+            } finally {
+              setCropBusy(false);
+            }
+          }}
+        />
+      )}
+
       {showMeta && (
         <MetaEditor meta={displayMeta} updateMeta={updateMeta} onSheetField={setActiveSheet} onClose={() => setShowMeta(false)} />
       )}
