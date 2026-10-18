@@ -10,7 +10,7 @@ import {
 import { listProjects, getProjectData, getProjectRecord, deleteProjectRow, unreferencedPlanPaths } from "@/lib/db";
 import { defaultDrawingName } from "@/lib/drawingName";
 import { uploadPlanImage, signPlanImages, deletePlanImages, blobToDataUrl } from "@/lib/planImages";
-import { ensurePdfjs } from "@/lib/pdfjs";
+import { looksLikePdf, renderPdfPlan } from "@/lib/pdfPlan";
 import {
   SYMBOLS, SYMBOL_META, CATEGORY_COLOURS, VIEWBOX,
   findSymbol, findCategory, resolveColours,
@@ -492,11 +492,15 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const planUploadsRef = useRef(new Map());
 
   // Store a sheet's original PDF (held only as a blob: link in this tab) in
-  // the background, and attach its path to the sheet once stored. Saves never
-  // wait for this: the raster plan is what a save must not lose, the original
-  // only lets the export be vector, and the next save persists its path.
+  // the background, and attach its path to the sheet once stored. Pressing
+  // Save never waits for this: the raster plan is what a save must not lose.
+  // The original is what keeps the plan sharp when zoomed and the export
+  // vector, so a save made before it's stored waits for it in the outbox
+  // (originalPdf in lib/device/outbox) and carries its path.
   const storeOriginalPdf = useCallback((sheetId, pdfSrc) => {
-    storeTabOnlyPdf(pdfSrc).then((pdfPath) => {
+    const stored = storeTabOnlyPdf(pdfSrc);
+    registerPlanUpload(pdfSrc, stored);
+    stored.then((pdfPath) => {
       if (!pdfPath) return;
       setProject(p => ({
         ...p,
@@ -854,48 +858,17 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
 
   const handleFile = async (file) => {
     if (!file) return;
-    const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+    // By its bytes too: a PDF taken for a picture is drawn at 1 pixel per
+    // point by Safari, and stored like that (lib/pdfPlan.js).
+    const isPdf = await looksLikePdf(file);
     if (isPdf) {
       setPdfLoading(true);
       try {
-        const pdfjs = await ensurePdfjs();
-        const buf = await file.arrayBuffer();
-        const pdf = await pdfjs.getDocument({ data: buf }).promise;
-        // Just use first page for now (multi-page is a future feature)
-        const page = await pdf.getPage(1);
-
-        // Render at high resolution so the plan stays crisp. Desktop aims for
-        // ~4400px wide; touch devices (iPad/iOS Safari) are capped well under
-        // iOS's ~16.7M-pixel canvas limit and use JPEG to avoid blank renders
-        // and out-of-memory crashes.
-        const base = page.getViewport({ scale: 1 });
-        const isTouch = typeof navigator !== "undefined" &&
-          (navigator.maxTouchPoints > 1 ||
-           (typeof window !== "undefined" && window.matchMedia && window.matchMedia("(pointer: coarse)").matches));
-        const TARGET_W = isTouch ? 2400 : 4400;
-        const MAX_DIM = isTouch ? 3000 : 6400;
-        const MAX_AREA = isTouch ? 9_000_000 : 40_000_000;
-        let renderScale = Math.max(isTouch ? 1.5 : 3, Math.min(TARGET_W / base.width, isTouch ? 3.2 : 5));
-        let w = base.width * renderScale, h = base.height * renderScale;
-        const maxSide = Math.max(w, h);
-        if (maxSide > MAX_DIM) { const k = MAX_DIM / maxSide; renderScale *= k; w *= k; h *= k; }
-        if (w * h > MAX_AREA) { const k = Math.sqrt(MAX_AREA / (w * h)); renderScale *= k; }
-
-        const viewport = page.getViewport({ scale: renderScale });
-        const c = document.createElement("canvas");
-        c.width = Math.round(viewport.width);
-        c.height = Math.round(viewport.height);
-        const ctx = c.getContext("2d");
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = "high";
-        await page.render({ canvasContext: ctx, viewport }).promise;
-        const mime = isTouch ? "image/jpeg" : "image/png";
-        const quality = isTouch ? 0.9 : undefined;
-        const iw = c.width, ih = c.height;
-        const blob = await new Promise((res, rej) =>
-          c.toBlob(b => b ? res(b) : rej(new Error("Could not render the plan image.")), mime, quality));
-        c.width = c.height = 0; // release the large canvas promptly
-        setPlanImageFromBlob(blob, iw, ih, null, file);
+        // Stored as a PDF even when it came without the type or the name.
+        const pdfFile = file.type === "application/pdf" ? file
+          : new File([file], (file.name || "plan").replace(/\.pdf$/i, "") + ".pdf", { type: "application/pdf" });
+        const { blob, w, h } = await renderPdfPlan(await pdfFile.arrayBuffer());
+        setPlanImageFromBlob(blob, w, h, null, pdfFile);
       } catch (err) {
         alert("Could not read PDF: " + err.message);
       } finally {
