@@ -63,11 +63,19 @@ const ZOOM_MIN = 0.1;
 const ZOOM_MAX = 5;
 const ZOOM_WHEEL_SPEED = 0.0015;
 
+// A new drawing's scale: not to scale. An imported plan is fitted to the
+// sheet, so no 1:n holds for it unless the user knows one and types it; the
+// Floor Plan tool sets its own, which is true (lib/cad/planScale).
+const NEW_DRAWING_SCALE = "NTS";
+// What a drawing saved without a scale has always shown when opened. Kept, so
+// opening one never changes its title block under the user.
+const SAVED_WITHOUT_SCALE = "1:50 @ A3";
+
 const DEFAULT_META = {
   projectName: "",
   plot: "",
   sheetName: "Ground Floor MEP Plan",
-  scale: "1:50 @ A3",
+  scale: NEW_DRAWING_SCALE,
   drawingNumber: "",
   date: new Date().toISOString().slice(0, 10),
   revision: "A",
@@ -129,7 +137,7 @@ function freshProject() {
 // multi-sheet shape without losing data.
 function normaliseProject(p) {
   if (!p) return freshProject();
-  const meta = { ...DEFAULT_META, ...(p.meta || {}) };
+  const meta = { ...DEFAULT_META, scale: SAVED_WITHOUT_SCALE, ...(p.meta || {}) };
   const projNotesText = notesToText(p.notes);
   const seedNotes = (sn) => (sn != null && sn !== "" ? notesToText(sn) : projNotesText);
   if (Array.isArray(p.sheets) && p.sheets.length) {
