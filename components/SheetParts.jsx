@@ -34,7 +34,7 @@ import { addDaysIso, QUOTE_VALID_DAYS, shownOnQuote, lineTotal as boqLineTotal, 
 import BoqDocPages from "@/components/BoqDocPages";
 import { keyText, ariaKeys, SHOW_KBD, TOUCH, CLOSE_MENUS } from "@/components/Shortcuts";
 import { SHEET, SHEET_PX_PER_MM, planFootprint, planBox } from "@/lib/cad/sheet";
-import { hasTrueScale, scaleBarFor, validRect } from "@/lib/planCrop";
+import { hasTrueScale, scaleBarFor, validRect, SYMBOL_SCALE } from "@/lib/planCrop";
 import { onStairs } from "@/lib/cad/planScale";
 import { isMissingCode, NEEDS_SIGNAL_ALERT } from "@/components/NeedsSignal";
 import { StatusPill, StatusIcon } from "@/components/StatusMark";
@@ -644,7 +644,7 @@ export function Palette({ onPalettePointerDown, onFurniturePointerDown, symbolSc
           <span className="uppercase tracking-wider text-[9px] text-slate-500">Symbol Size</span>
           <span className="tabular-nums text-slate-700 text-[10px]">{Math.round(symbolScale*100)}%</span>
         </div>
-        <input type="range" min="0.3" max="2.5" step="0.1" value={symbolScale}
+        <input type="range" min={SYMBOL_SCALE.min} max={SYMBOL_SCALE.max} step="0.1" value={symbolScale}
                onChange={(e) => setSymbolScale(parseFloat(e.target.value))}
                className="w-full accent-[#3FB7C9]"/>
       </div>

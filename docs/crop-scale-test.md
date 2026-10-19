@@ -30,8 +30,14 @@ stays pin-sharp when zoomed (Safari included) and in the PDF download.
 
 **Crop & scale** (top bar, beside Import) changes the crop or scale of the
 plan already on a drawing. Symbols, notes, walls and furniture **move with the
-plan** so they stay on the same spot of the building. If any of them would end
-up outside the drawing area, nothing changes and it says so.
+plan** so they stay on the same spot of the building. The crop step shows
+what's on the plan as **dots**; a crop that would leave any of it out turns
+those dots **amber**, says what ("2 symbols and 4 wires would be outside the
+crop. Adjust the crop or move them first.") and can't be used. When the plan
+will be drawn bigger or smaller, **Resize symbols to suit the new scale** is
+ticked, so each symbol shrinks or grows with the plan and covers the same part
+of the building; untick it to keep the printed size. Symbol size can be
+changed any time afterwards as before.
 
 ## Part A: laptop (Edge)
 
@@ -39,6 +45,11 @@ up outside the drawing area, nothing changes and it says so.
 - The crop step opens showing the page, with **Paper: A3 · 420 × 297 mm**.
 - Drag the corners so only the floor plan (and its dimensions) is inside the
   box; the title block and the architect's scale bar should be outside.
+- **Smooth edges (Joe's jitter).** Pull one side in, then grab the
+  **right-hand edge anywhere along its line** (not just its little square) and
+  pull it left and right slowly and quickly. The edge should stay under the
+  pointer, the other three sides shouldn't move, and the page shouldn't shift.
+  Do the same with each edge and corner.
 - **Original drawing scale: 1:50.** Check **Prints on this sheet at** shows the
   largest that fits (the exact one depends on the crop) and the line **Area
   kept is about … m on site** looks right for the building.
@@ -82,10 +93,21 @@ did before this change.
 - **Crop & scale** → crop to the floor plan → **1:50** → a scale → **Use this
   area**. Every symbol, the note's arrow, the wall and the bed should sit on
   exactly the same spot of the building as in your screenshot (the bed gets
-  bigger or smaller with the plan; symbols keep their size).
-- **Crop & scale** again and drag the box so it cuts off some of your symbols
-  → **Use this area**. It should refuse in red ("… would end up outside the
-  drawing area, so nothing has changed") and change nothing. **Cancel**.
+  bigger or smaller with the plan; so do the symbols, see the next point).
+- **Joe's 1:250 case.** **Crop & scale** → **Use whole page** area, **1:50**,
+  **Prints on this sheet at 1:250**. The tick box says something like
+  **Resize symbols to suit the new scale (100% → 31%: the plan is drawn 3.23
+  times smaller)**, ticked. **Use this area.** Zoom in: every symbol covers
+  exactly the same part of the building as before (a socket's flat back still
+  on its wall), at a sensible size next to the small plan. The **Symbol size**
+  slider shows the new size.
+- Same again but **untick** it: the symbols stay at their printed size. Their
+  centres are still on the same spots, but they look big next to a small plan
+  and stick further over walls. That's why it's ticked by default.
+- **Crop & scale** again and drag the box so it cuts off some of your symbols.
+  The ones left out turn **amber**, the message says how many symbols, notes
+  and wires would be outside the crop, and **Use this area** is greyed out.
+  **Cancel**: nothing has changed.
 - **Undo** after a crop/scale change does nothing to the symbols (undo starts
   afresh there, so it can't pull them off the plan).
 
@@ -99,9 +121,10 @@ scale, and changes nothing.
 
 ## Part B: iPad (Safari)
 
-**B1.** Import the A3 PDF: the crop step opens. Drag the corner handles and
-the box itself with your finger; it should follow your finger smoothly.
-Set **1:50**, **Use this area**.
+**B1.** Import the A3 PDF: the crop step opens. Drag the corners, **each edge
+anywhere along its line**, and the box itself with your finger; it should
+follow your finger smoothly, and the page shouldn't move. Set **1:50**, **Use
+this area**.
 
 **B2.** Pinch-zoom to 240% and 500% on small text: crisp, same as the laptop.
 
@@ -109,7 +132,8 @@ Set **1:50**, **Use this area**.
 open the drawing again: the plan, crop and scale are still there.
 Download the PDF with no signal; it should still come out at the right scale.
 
-**B4.** Do **A9** on the iPad (symbols move with the plan).
+**B4.** Do **A9** on the iPad (symbols move with the plan, the 1:250 resize,
+and the crop that cuts symbols off).
 
 **B5.** Import a photo from the camera roll, crop it: works, says NTS.
 

@@ -12,7 +12,7 @@ import { defaultDrawingName } from "@/lib/drawingName";
 import { uploadPlanImage, signPlanImages, deletePlanImages, blobToDataUrl } from "@/lib/planImages";
 import { looksLikePdf, loadPdfPage, renderPdfPage, cropBoxOf, cropPicture } from "@/lib/pdfPlan";
 import CropDialog from "@/components/CropDialog";
-import { cropMmOf, planMapping, remapToPlan, hasWork, hasTrueScale, validRect } from "@/lib/planCrop";
+import { cropMmOf, planMapping, remapToPlan, hasWork, hasTrueScale, validRect, workMarks, cutBy, cutMessage, symbolScaleFor } from "@/lib/planCrop";
 import {
   SYMBOLS, SYMBOL_META, CATEGORY_COLOURS, VIEWBOX,
   findSymbol, findCategory, resolveColours,
@@ -1051,6 +1051,15 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     // Where the plan is now: the area of the page it shows, placed by planBox.
     const from = planMapping(bg, loaded && validRect(bg.crop) ? bg.crop : wholeSrc);
     const sameRect = (a, b) => (!validRect(a) && !validRect(b)) || (validRect(a) && validRect(b) && ["x", "y", "w", "h"].every(k => Math.abs(a[k] - b[k]) < 0.01));
+    // How many times bigger the plan would be drawn on the sheet (for the
+    // dialog's symbol size choice; the change itself uses the real one).
+    const sizeFactor = (choice) => {
+      const region = validRect(choice.crop) ? choice.crop : wholeSrc;
+      const next = loaded
+        ? { w: region.w, h: region.h, cropMm: cropMmOf(choice.crop, loaded.w, loaded.h, loaded.pageMm), drawingScale: choice.drawingScale, sheetScale: choice.drawingScale ? choice.sheetScale : null }
+        : { w: region.w, h: region.h };
+      return planMapping(next, region).k / from.k;
+    };
     openCrop({
       mode: "adjust",
       source: loaded ? pdfCropSource(loaded) : imageCropSource(img),
@@ -1059,12 +1068,22 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       note: hasWork(sheet)
         ? "Symbols, notes, walls and furniture move with the plan, so they stay where they are on the building."
         : (!loaded ? "This plan is a picture, so it can be cropped smaller but not given a scale." : null),
+      // What's on the plan, so the dialog can show it and say what a crop
+      // would cut off; and the symbols' size, for its resize choice.
+      work: workMarks(sheet, from),
+      symbols: { count: (sheet.placed || []).length, scale: sheet.symbolScale ?? 1 },
+      sizeFactor,
       release: () => { if (loaded) { try { loaded.pdf.destroy(); } catch { /* gone */ } } if (imgUrl) URL.revokeObjectURL(imgUrl); },
       run: async (choice) => {
         const changed = () => { const cur = currentSheet(); return !cur || cur.id !== sheet.id || planShape(cur.bgImage) !== shape0; };
         if (changed()) return "The plan changed while this was open. Close this and try again.";
         if (!loaded && !validRect(choice.crop)) return null; // the whole picture: nothing to change
         if (loaded && sameRect(choice.crop, bg.crop) && (choice.drawingScale || null) === (bg.drawingScale || null) && (choice.sheetScale || null) === (bg.sheetScale || null)) return null; // nothing changed
+        // Work on a part of the building the crop leaves out: refused, never
+        // hidden or moved off the plan.
+        const keep = validRect(choice.crop) ? choice.crop : wholeSrc;
+        const cut0 = cutBy(workMarks(currentSheet(), from), keep);
+        if (cut0.total) return `${cutMessage(cut0)} Nothing has changed.`;
         let pic, extra, region;
         if (loaded) {
           pic = await renderPdfPage(loaded.page, choice.crop);
@@ -1081,6 +1100,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         // the dialog, but its plan's links and paths can fill in).
         if (changed()) return "The plan changed while this was open. Close this and try again.";
         const now = currentSheet();
+        const cut = cutBy(workMarks(now, from), region);
+        if (cut.total) return `${cutMessage(cut)} Nothing has changed.`;
         const to = planMapping({ w: pic.w, h: pic.h, ...extra }, region);
         const moved = remapToPlan(now, from, to);
         if (moved.outside) {
@@ -1088,7 +1109,12 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         }
         const cur = now.bgImage;
         const keepPdf = loaded ? Object.fromEntries(["pdfSrc", "pdfPath", "pdfPage"].filter(k => cur[k] != null).map(k => [k, cur[k]])) : null;
-        setPlanImageFromBlob(pic.blob, pic.w, pic.h, null, null, { extra, keepPdf, sheetPatch: hasWork(now) ? moved.sheet : null });
+        // Symbols: resized with the plan when chosen (so each covers the same
+        // part of the building), else kept at their printed size.
+        const fk = to.k / from.k;
+        const resize = choice.resizeSymbols && (now.placed || []).length > 0 && Math.abs(fk - 1) > 1e-6;
+        const patch = { ...(hasWork(now) ? moved.sheet : {}), ...(resize ? { symbolScale: symbolScaleFor(now.symbolScale ?? 1, fk) } : {}) };
+        setPlanImageFromBlob(pic.blob, pic.w, pic.h, null, null, { extra, keepPdf, sheetPatch: Object.keys(patch).length ? patch : null });
         titleScaleFor(cur, extra);
         // Undo keeps where items were, not the plan they were on, so an undo
         // past this would put them back off the new plan: start it afresh.
@@ -3011,6 +3037,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       {cropReq && (
         <CropDialog key={cropReq.id}
           mode={cropReq.mode} source={cropReq.source} initial={cropReq.initial} allowScale={cropReq.allowScale}
+          work={cropReq.work} symbols={cropReq.symbols} sizeFactor={cropReq.sizeFactor}
           note={cropReq.note} error={cropError} busy={cropBusy}
           onCancel={() => { if (!cropBusy) endCrop(cropReq, { cancelled: true }); }}
           onApply={async (choice) => {
