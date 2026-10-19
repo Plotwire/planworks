@@ -20,9 +20,12 @@
  * error    shown in red while the dialog stays open (a change that was
  *          refused, so the user can try another crop or scale).
  *
- * The page never moves while the dialog is open: its size and place come
- * from the window alone (measured once as it opens), so nothing the panels
- * below it show can shift it under a finger or the mouse mid-drag.
+ * The page never moves under a drag. Its size and place come from the window
+ * alone (measured as the dialog opens), and are held from press to release.
+ * While the box is dragged only the box (and the dots) change: the scale,
+ * size and cut-off text below follow when it's let go, so nothing in the
+ * dialog reflows mid-drag. One input stream: pointer events with pointer
+ * capture, the box updated once a frame.
  * ========================================================================== */
 
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -42,6 +45,11 @@ export default function CropDialog({ mode = "import", source, initial = {}, allo
   const [drawingScale, setDrawingScale] = useState(initial.drawingScale || null);
   const [sheetScale, setSheetScale] = useState(initial.sheetScale || null);
   const [resizeSymbols, setResizeSymbols] = useState(true);
+  // The box while it's being dragged (null otherwise); crop is where it was
+  // let go, and is what everything outside the page follows.
+  const [live, setLive] = useState(null);
+  const [dragging, setDragging] = useState(false);
+  const frozen = useRef(null);
   const canvasRef = useRef(null);
   const stageRef = useRef(null);
   const cardRef = useRef(null);
@@ -59,13 +67,15 @@ export default function CropDialog({ mode = "import", source, initial = {}, allo
   }, []);
   // Room left for a scrollbar at the side (always kept: scrollbar-gutter),
   // so one appearing never moves the dialog sideways.
-  const cardW = Math.max(280, Math.min(view.vw - 50, 1212));
-  const s = Math.max(0.01, Math.min((cardW - 34) / W, (view.vh - 32 - chrome) / H));
-  const cssW = Math.round(W * s), cssH = Math.round(H * s);
-  const top = Math.max(16, Math.round((view.vh - chrome - cssH) / 2));
+  const cardW0 = Math.max(280, Math.min(view.vw - 50, 1212));
+  const s0 = Math.max(0.01, Math.min((cardW0 - 34) / W, (view.vh - 32 - chrome) / H));
+  const cssH0 = Math.round(H * s0);
+  const layoutNow = { cardW: cardW0, s: s0, cssW: Math.round(W * s0), cssH: cssH0, top: Math.max(16, Math.round((view.vh - chrome - cssH0) / 2)) };
+  // Held while a drag is on, whatever happens to the window meanwhile.
+  const { cardW, s, cssW, cssH, top } = dragging && frozen.current ? frozen.current : layoutNow;
   useLayoutEffect(() => {
     const c = cardRef.current;
-    if (!c || passes.current >= 3) return;
+    if (!c || passes.current >= 3 || drag.current) return;
     const room = c.offsetHeight - cssH;
     if (Math.abs(room - chrome) > 2) { passes.current++; setChrome(room); }
   }, [view, chrome, cssH]);
@@ -124,43 +134,63 @@ export default function CropDialog({ mode = "import", source, initial = {}, allo
     if (m.includes("s")) { h = Math.min(Math.max(r0.h + dy, minSide), H - r0.y); }
     return { x, y, w, h };
   };
-  const at = (cx, cy) => {
-    const b = stageRef.current.getBoundingClientRect();
-    return { u: Math.min(Math.max((cx - b.left) / s, 0), W), v: Math.min(Math.max((cy - b.top) / s, 0), H) };
+  // A drag works from what it found at the press: the box, the pointer, and
+  // where the page was and how big (never measured again until the release).
+  const place = (d, cx, cy) => {
+    const dx = (cx - d.x0) / d.s, dy = (cy - d.y0) / d.s;
+    if (d.m === "move") return clampRect({ ...d.r0, x: d.r0.x + dx, y: d.r0.y + dy });
+    if (d.m === "new") {
+      const u = Math.min(Math.max((cx - d.left) / d.s, 0), W), v = Math.min(Math.max((cy - d.top) / d.s, 0), H);
+      if (Math.abs(u - d.u0) <= minSide / 2 && Math.abs(v - d.v0) <= minSide / 2) return null;
+      return clampRect({ x: Math.min(d.u0, u), y: Math.min(d.v0, v), w: Math.abs(u - d.u0), h: Math.abs(v - d.v0) });
+    }
+    return resize(d.r0, d.m, dx, dy);
   };
-
-  // A drag: the pointer is held by the page (pointer capture) from press to
-  // release, and the box follows it from where the drag began -- never from
-  // its own last place, so it can't creep or judder.
-  const follow = (d, cx, cy) => {
-    const dx = (cx - d.x0) / s, dy = (cy - d.y0) / s;
-    if (d.m === "move") setCrop(clampRect({ ...d.r0, x: d.r0.x + dx, y: d.r0.y + dy }));
-    else if (d.m === "new") {
-      const p = at(cx, cy);
-      if (Math.abs(p.u - d.p0.u) > minSide / 2 || Math.abs(p.v - d.p0.v) > minSide / 2) {
-        setCrop(clampRect({ x: Math.min(d.p0.u, p.u), y: Math.min(d.p0.v, p.v), w: Math.abs(p.u - d.p0.u), h: Math.abs(p.v - d.p0.v) }));
-      }
-    } else setCrop(resize(d.r0, d.m, dx, dy));
-  };
+  const frame = useRef(0);
   const start = (m) => (e) => {
     // A second finger never takes over a drag; a new press does.
     if (busy || (e.pointerType === "mouse" && e.button !== 0) || (drag.current && !e.isPrimary)) return;
     e.preventDefault(); e.stopPropagation();
     try { stageRef.current.setPointerCapture(e.pointerId); } catch { /* fine */ }
-    drag.current = { m, id: e.pointerId, x0: e.clientX, y0: e.clientY, r0: crop, p0: at(e.clientX, e.clientY) };
+    const r = stageRef.current.getBoundingClientRect();
+    frozen.current = { cardW, s, cssW, cssH, top };
+    drag.current = {
+      m, id: e.pointerId, x0: e.clientX, y0: e.clientY, r0: crop, s, left: r.left, top: r.top,
+      u0: Math.min(Math.max((e.clientX - r.left) / s, 0), W), v0: Math.min(Math.max((e.clientY - r.top) / s, 0), H), last: null,
+    };
+    setDragging(true);
+  };
+  const finish = (d, pt) => {
+    if (frame.current) { cancelAnimationFrame(frame.current); frame.current = 0; }
+    const p = pt || d.last;
+    const next = p ? place(d, p.x, p.y) : null;
+    drag.current = null;
+    if (next) setCrop(next);
+    setLive(null);
+    setDragging(false);
   };
   const move = (e) => {
     const d = drag.current;
     if (!d || e.pointerId !== d.id) return;
+    // A mouse button let go where the page couldn't see it: the drag is over.
+    if (e.pointerType === "mouse" && e.buttons === 0) { finish(d, null); return; }
     e.preventDefault();
-    follow(d, e.clientX, e.clientY);
+    d.last = { x: e.clientX, y: e.clientY };
+    if (!frame.current) {
+      frame.current = requestAnimationFrame(() => {
+        frame.current = 0;
+        const dd = drag.current;
+        const next = dd && dd.last ? place(dd, dd.last.x, dd.last.y) : null;
+        if (next) setLive(next);
+      });
+    }
   };
   const end = (e) => {
     const d = drag.current;
     if (!d || e.pointerId !== d.id) return;
-    if (e.type === "pointerup") follow(d, e.clientX, e.clientY);
-    drag.current = null;
+    finish(d, e.type === "pointerup" ? { x: e.clientX, y: e.clientY } : null);
   };
+  useEffect(() => () => { if (frame.current) cancelAnimationFrame(frame.current); }, []);
 
   const isWhole = crop.x < 0.5 && crop.y < 0.5 && Math.abs(crop.w - W) < 0.5 && Math.abs(crop.h - H) < 0.5;
   const choiceNow = { crop: isWhole ? null : crop, drawingScale: allowScale ? drawingScale : null, sheetScale: allowScale && drawingScale ? sheetScale : null };
@@ -182,7 +212,8 @@ export default function CropDialog({ mode = "import", source, initial = {}, allo
     onApply({ crop: c, drawingScale: allowScale ? drawingScale : null, sheetScale: allowScale && drawingScale ? sheet : null, resizeSymbols });
   };
 
-  const R = { left: crop.x * s, top: crop.y * s, width: crop.w * s, height: crop.h * s };
+  const box = live || crop;
+  const R = { left: box.x * s, top: box.y * s, width: box.w * s, height: box.h * s };
   const paper = pageMm ? `${paperName(pageMm) ? paperName(pageMm) + " · " : ""}${Math.round(pageMm.w)} × ${Math.round(pageMm.h)} mm` : null;
   const real = cropMm && drawingScale ? realSizeM(cropMm, drawingScale) : null;
   const sel = "px-2.5 py-1.5 text-sm bg-white dark:bg-[#0E141B] rounded-lg ring-1 ring-slate-200 dark:ring-[#2A3947] text-slate-900 dark:text-slate-100 focus:ring-[#3FB7C9] focus:outline-none";
@@ -221,7 +252,7 @@ export default function CropDialog({ mode = "import", source, initial = {}, allo
             ))}
             {/* The work on the plan: dark dots, amber where this crop leaves it out */}
             {work && work.marks.map((m, i) => {
-              const out = outsideArea(m, crop);
+              const out = outsideArea(m, box);
               return <span key={i} aria-hidden="true" style={{ position: "absolute", left: m.u * s - (out ? 5 : 4), top: m.v * s - (out ? 5 : 4), width: out ? 10 : 8, height: out ? 10 : 8, borderRadius: 99, background: out ? "#D97706" : "#1A2530", border: "1.5px solid #fff", boxShadow: "0 0 0 1px rgba(15,23,42,.35)", pointerEvents: "none" }} />;
             })}
             <div data-crop-rect style={{ position: "absolute", ...R, outline: "2px solid #2C97A8", boxShadow: "0 0 0 1px rgba(255,255,255,.9) inset", cursor: "move", touchAction: "none" }}
@@ -262,7 +293,7 @@ export default function CropDialog({ mode = "import", source, initial = {}, allo
             ) : (
               <div className="text-amber-700 dark:text-amber-300 text-xs max-w-[320px] py-1.5">Too big for A3 even at 1:500. It will be fitted to the sheet and shown as NTS. Crop to a smaller area to print it to scale.</div>
             ))}
-            {real && <div className="text-xs text-slate-500 dark:text-slate-400 py-1.5 tabular-nums whitespace-nowrap">Area kept is about {fmtM(real.w)} × {fmtM(real.h)} m on site.</div>}
+            {real && <div className="text-xs text-slate-500 dark:text-slate-400 py-1.5 tabular-nums whitespace-nowrap min-w-[17rem]">Area kept is about {fmtM(real.w)} × {fmtM(real.h)} m on site.</div>}
           </div>
         )}
 

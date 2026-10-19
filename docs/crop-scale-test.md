@@ -11,6 +11,10 @@ that too. Also a **screenshot** or photo of a plan.
 
 Write down anything that surprises you, with a screenshot.
 
+**Before you start:** close every Plotwire tab that was open before the test
+link was updated, then open it fresh (or press **Ctrl+F5**). A tab left open
+keeps running the version it was opened with.
+
 ## What's new, in one paragraph
 
 Importing a plan now opens a **crop step**: drag the corners or edges to keep
@@ -49,7 +53,11 @@ changed any time afterwards as before.
   **right-hand edge anywhere along its line** (not just its little square) and
   pull it left and right slowly and quickly. The edge should stay under the
   pointer, the other three sides shouldn't move, and the page shouldn't shift.
-  Do the same with each edge and corner.
+  Do the same with each edge and corner, for ten seconds or so each.
+- While you drag, the **page picture must stay exactly still and the same
+  size**: only the box (and any dots) move. The text under the page ("Area
+  kept is about…", the scale, any amber message) changes when you let go,
+  not during the drag.
 - **Original drawing scale: 1:50.** Check **Prints on this sheet at** shows the
   largest that fits (the exact one depends on the crop) and the line **Area
   kept is about … m on site** looks right for the building.
