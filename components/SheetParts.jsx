@@ -8,6 +8,7 @@ import {
   Palette as PaletteIcon, Ruler, Hand, Type, Printer, Settings, Search, Sun, Moon, Mail,
   ChevronRight, ChevronLeft, X, FileText, PanelLeftClose, PanelLeftOpen,
   Grid3x3, ChevronDown, Check, ClipboardList, Plus, Clock, LayoutPanelTop, ImagePlus, SlidersHorizontal, Building2, PencilRuler, Keyboard,
+  Crop,
 } from "lucide-react";
 import {
   SYMBOLS, SYMBOL_META, CATEGORY_COLOURS, VIEWBOX,
@@ -32,7 +33,8 @@ import { TrialSheetMark, TryPrompt, useTryPrompt, LOCKED } from "@/components/Tr
 import { addDaysIso, QUOTE_VALID_DAYS, shownOnQuote, lineTotal as boqLineTotal, sectionTotal, boqTotals, outputSettings, materialsDoc, quoteDoc, docToCsv, QUOTE_DETAILS, QUOTE_SHOW, PRESET_SHOW, presetFor, hasQty, badNumberLines, parseNum, expiredValidUntil, fmtDate } from "@/lib/boqOutputs";
 import BoqDocPages from "@/components/BoqDocPages";
 import { keyText, ariaKeys, SHOW_KBD, TOUCH, CLOSE_MENUS } from "@/components/Shortcuts";
-import { SHEET, planFootprint } from "@/lib/cad/sheet";
+import { SHEET, SHEET_PX_PER_MM, planFootprint, planBox } from "@/lib/cad/sheet";
+import { hasTrueScale, scaleBarFor, validRect, SYMBOL_SCALE } from "@/lib/planCrop";
 import { onStairs } from "@/lib/cad/planScale";
 import { isMissingCode, NEEDS_SIGNAL_ALERT } from "@/components/NeedsSignal";
 import { StatusPill, StatusIcon } from "@/components/StatusMark";
@@ -80,7 +82,7 @@ export function TopBar({
   onExportJSON, onPrint, colourMode, onToggleColour, wireStrength, onWireStrength, onNormalise, normaliseFlash,
   snapEnabled, onToggleSnap, onShowBoq, onShowTitleBlock, onShowNotes,
   sidebarHidden, onToggleSidebar, trialPill = null, onEditFloorPlan = null, onShowShortcuts = null, shortcutsOpen = false,
-  syncView: sync = null, onSyncClick = null,
+  syncView: sync = null, onSyncClick = null, onCropScale = null,
 }) {
   const projectLabel = meta.projectName || "Untitled Project";
   const sheetLabel = meta.sheetName || "Drawing";
@@ -96,6 +98,7 @@ export function TopBar({
       {/* 2. File */}
       <TbGroup label="File">
         <TbButton onClick={onImport} icon={Upload} label="Import" title="Import a plan (PDF or image)" />
+        {onCropScale && <TbButton onClick={onCropScale} icon={Crop} label="Crop & scale" title="Adjust crop & scale: keep just the floor plan, and print a PDF plan to scale" />}
         <TbButton onClick={onSave} icon={Save} label={savedFlash ? "Saved ✓" : "Save"} title="Save" kbd="mod+s" flash={savedFlash} />
         {/* Where the save is: green synced, amber on this device / no signal, red not uploaded. */}
         <TbSyncMark view={sync} onClick={onSyncClick} />
@@ -641,7 +644,7 @@ export function Palette({ onPalettePointerDown, onFurniturePointerDown, symbolSc
           <span className="uppercase tracking-wider text-[9px] text-slate-500">Symbol Size</span>
           <span className="tabular-nums text-slate-700 text-[10px]">{Math.round(symbolScale*100)}%</span>
         </div>
-        <input type="range" min="0.3" max="2.5" step="0.1" value={symbolScale}
+        <input type="range" min={SYMBOL_SCALE.min} max={SYMBOL_SCALE.max} step="0.1" value={symbolScale}
                onChange={(e) => setSymbolScale(parseFloat(e.target.value))}
                className="w-full accent-[#3FB7C9]"/>
       </div>
@@ -1225,15 +1228,18 @@ function isWebKitEngine() {
  * runs out at its native pixels. It removes the loss that was never the file's
  * fault.
  * ------------------------------------------------------------------------- */
-function pdfSource(page) {
+// crop: the area of the page the plan shows (lib/planCrop), in the page's
+// own points as pdf.js shows them; the source is just that area.
+function pdfSource(page, crop = null) {
   const base = page.getViewport({ scale: 1 });
+  const c = validRect(crop) ? crop : { x: 0, y: 0, w: base.width, h: base.height };
   return {
-    w: base.width, h: base.height,
+    w: c.w, h: c.h,
     draw(ctx, r, scale) {
       return page.render({
         canvasContext: ctx,
         viewport: page.getViewport({ scale }),
-        transform: [1, 0, 0, 1, -r.x * scale, -r.y * scale],
+        transform: [1, 0, 0, 1, -(c.x + r.x) * scale, -(c.y + r.y) * scale],
       });
     },
   };
@@ -1307,6 +1313,37 @@ function sheetRect(el) {
   return { left: r.left * k, top: r.top * k, right: r.right * k, bottom: r.bottom * k, width: r.width * k, height: r.height * k };
 }
 
+/* A true-scale plan's scale bar (lib/planCrop scaleBarFor), in the drawing
+ * area's bottom-left corner. Its length is true on paper (sheet units per mm
+ * along the sheet's width), in the editor, the print page and the PDF, which
+ * is made from the print page. Nothing for a fitted plan: that has no scale. */
+function ScaleBar({ bg }) {
+  if (!hasTrueScale(bg)) return null;
+  const { metres, mm, step } = scaleBarFor(bg.sheetScale);
+  const len = mm * SHEET_PX_PER_MM.x;
+  const n = Math.max(1, Math.round(metres / step));
+  const seg = len / n, pad = 6, bar = 6, top = 12;
+  const ink = "#0a0a0a";
+  return (
+    <div data-scale-bar aria-label={`Scale bar: ${metres} m at 1:${bg.sheetScale}`}
+         style={{ position: "absolute", left: 8, bottom: 8, padding: "3px 6px 4px", background: "rgba(255,255,255,0.94)",
+                  border: "1px solid #cbd5e1", borderRadius: 3, pointerEvents: "none", color: ink,
+                  fontFamily: "ui-sans-serif, system-ui, -apple-system, sans-serif", lineHeight: 1.15, zIndex: 1 }}>
+      <svg width={len + pad * 2} height={top + bar + 1} style={{ display: "block", overflow: "visible" }} aria-hidden="true">
+        {Array.from({ length: n }, (_, i) => (
+          <rect key={i} x={pad + i * seg} y={top} width={seg} height={bar} fill={i % 2 ? "#ffffff" : ink} stroke={ink} strokeWidth="0.8" />
+        ))}
+        {Array.from({ length: n + 1 }, (_, i) => (
+          <text key={i} x={pad + i * seg} y={top - 3} fontSize="8" textAnchor="middle" fill={ink}>
+            {+(i * step).toFixed(2)}{i === n ? " m" : ""}
+          </text>
+        ))}
+      </svg>
+      <div style={{ fontSize: 7, marginTop: 2, whiteSpace: "nowrap" }}>1:{bg.sheetScale} @ A3 · Print at 100% / actual size</div>
+    </div>
+  );
+}
+
 // The screen-space plan's canvas stays inside iOS's limits: a 12.9in iPad's
 // whole screen is about 5.6M pixels.
 const SCREEN_MAX_AREA = 12_000_000;
@@ -1363,18 +1400,36 @@ function PlanBackground({ bgImage, imageDisplay, viewportRef }) {
   const pdfSrc = bgImage?.pdfSrc && bgImage.pdfSrc !== brokenPdf ? bgImage.pdfSrc : null;
   const imgSrc = pdfSrc ? null : (bgImage?.src || null);
   const pdfPage = bgImage?.pdfPage || 1;
+  // The cropped area, by value: a new crop of the same PDF redraws from it.
+  const cropKey = validRect(bgImage?.crop) ? [bgImage.crop.x, bgImage.crop.y, bgImage.crop.w, bgImage.crop.h].join(",") : "";
+  // The plan's shape on the sheet. When it changes (a new plan, or a new crop
+  // or scale with the symbols moved to match), what the canvas holds is
+  // cleared at once rather than shown out of line until the redraw.
+  const shapeKey = [bgImage?.w, bgImage?.h, cropKey, bgImage?.sheetScale || ""].join("|");
+  const firstShape = useRef(true);
+  useLayoutEffect(() => {
+    if (firstShape.current) { firstShape.current = false; return; }
+    const cv = canvasRef.current;
+    if (cv) { cv.width = 0; cv.height = 0; }
+  }, [shapeKey]);
+  // A PDF is opened once per file (pdf.js holds all of it, with a worker of
+  // its own), and freed when the plan changes or goes.
+  const [pdfPageObj, setPdfPageObj] = useState(null);
   useEffect(() => {
-    let dead = false;
+    let dead = false, task = null;
     srcRef.current = null;
     if (typeof window === "undefined" || (!pdfSrc && !imgSrc)) return;
     (async () => {
       try {
         if (pdfSrc) {
           const pdfjs = await ensurePdfjs();
-          const pdf = await pdfjs.getDocument(pdfSrc).promise;
+          if (dead) return;
+          task = pdfjs.getDocument(pdfSrc);
+          const pdf = await task.promise;
           const page = await pdf.getPage(pdfPage || 1);
           if (dead) return;
-          srcRef.current = pdfSource(page);
+          setPdfPageObj(page); // drawn from below, with its crop
+          return;
         } else {
           // NO crossOrigin, deliberately. bgImage.src is usually a signed
           // Supabase URL, so drawing it taints this canvas -- which is harmless
@@ -1410,8 +1465,20 @@ function PlanBackground({ bgImage, imageDisplay, viewportRef }) {
         if (pdfSrc && !dead) setBrokenPdf(pdfSrc);
       }
     })();
-    return () => { dead = true; };
+    return () => {
+      dead = true;
+      setPdfPageObj(null);
+      if (task) { try { task.destroy(); } catch { /* already gone */ } }
+    };
   }, [pdfSrc, imgSrc, pdfPage]);
+
+  // The PDF's page as the plan: just its cropped area. A new crop of the same
+  // PDF only changes what is drawn; the file isn't opened again.
+  useEffect(() => {
+    if (!pdfPageObj) return;
+    srcRef.current = pdfSource(pdfPageObj, bgImage?.crop);
+    setLoaded(n => n + 1);
+  }, [pdfPageObj, cropKey]); // eslint-disable-line react-hooks/exhaustive-deps -- bgImage.crop is read by value (cropKey)
 
   // Re-render the visible window whenever the on-screen geometry SETTLES.
   // We watch the wrapper's real screen rect rather than React zoom/pan props,
@@ -1657,9 +1724,9 @@ function DrawingArea({
   const selectedWireId = selection?.kind === "wire" ? selection.id : null;
   const [hoverWireId, setHoverWireId] = useState(null);
   const wireLook = wireStyle(wireStrength, colourMode);
-  // Fit the bgImage into the drawing area
+  // Place the bgImage in the drawing area: fitted, or at its true scale.
   const imageDisplay = useMemo(
-    () => (bgImage ? planFootprint(DRAW, bgImage.w, bgImage.h) : null),
+    () => (bgImage ? planBox(DRAW, bgImage) : null),
     [bgImage, DRAW.w, DRAW.h]
   );
 
@@ -1706,6 +1773,8 @@ function DrawingArea({
           viewportRef={viewportRef}
         />
       )}
+
+      <ScaleBar bg={bgImage} />
 
       {/* Grid overlay — drawn above the imported plan, below symbols, so the
           Grid toggle shows alignment lines even when a document is loaded */}
@@ -3510,7 +3579,7 @@ const EXPORT_PLAN_MAX_AREA_TOUCH = 9_000_000;
 // or fails, the copy kept on this device (lib/device/planCache) is used, so a
 // PDF can be made with no signal; failing that, a fresh signed link is minted
 // from `path` and tried once.
-async function fetchPlanFile(url, path) {
+export async function fetchPlanFile(url, path) {
   let res = url ? await fetch(url).catch(() => null) : null;
   if ((!res || !res.ok) && path) {
     const kept = (await cachedPlanLinks([path]).catch(() => new Map())).get(path);
@@ -3851,7 +3920,11 @@ export function PrintPreview({ project, legendItems, colourMode, wireStrength, s
             const rot = ((srcDoc.getPage(idx).getRotation().angle % 360) + 360) % 360;
             // A malformed page throws here, so only this sheet falls back.
             await assertPageEmbeds(PDFDocument, srcDoc, idx);
-            const [embedded] = await out.embedPdf(srcDoc, [idx]);
+            // A cropped plan: just that area of the page (lib/planCrop cropBox).
+            const cb = bg.cropBox;
+            const [embedded] = cb && [cb.left, cb.bottom, cb.right, cb.top].every(Number.isFinite) && cb.right > cb.left && cb.top > cb.bottom
+              ? [await out.embedPage(srcDoc.getPage(idx), cb)]
+              : await out.embedPdf(srcDoc, [idx]);
             // Displayed (rotation-applied) dimensions: what the preview shows and
             // what the symbols were positioned against.
             const swap = rot === 90 || rot === 270;
@@ -3859,7 +3932,9 @@ export function PrintPreview({ project, legendItems, colourMode, wireStrength, s
             const dh = swap ? embedded.width : embedded.height;
             // Contain inside DRAW, centred — the same helper as the on-screen plan,
             // so the vector underlay lands exactly where the raster preview did.
-            const fp = planFootprint(DRAW, dw, dh);
+            // At its true scale when it has one (planBox), so a length on it
+            // measures true on the paper.
+            const fp = hasTrueScale(bg) ? planBox(DRAW, bg) : planFootprint(DRAW, dw, dh);
             const pw = fp.w, ph = fp.h;
             const planX = DRAW.x + fp.x;
             const planY = DRAW.y + fp.y;
@@ -3893,7 +3968,7 @@ export function PrintPreview({ project, legendItems, colourMode, wireStrength, s
         let rasterOK = false;
         if (!vectorOK && bg && (bg.src || bg.path) && bg.w && bg.h) {
           try {
-            const fp = planFootprint(DRAW, bg.w, bg.h);
+            const fp = planBox(DRAW, bg);
             const rect = {
               x: (DRAW.x + fp.x) * sx,
               y: PAGE_H - (DRAW.y + fp.y + fp.h) * sy, // pdf-lib is bottom-left
@@ -4218,7 +4293,7 @@ function NotesColumnStatic({ notes }) {
 
 function DrawingAreaStatic({ DRAW, bgImage, placed, wires, annotations, colourMode, wireStrength, symbolScale = 1, onPlanError }) {
   const imageDisplay = useMemo(
-    () => (bgImage ? planFootprint(DRAW, bgImage.w, bgImage.h) : null),
+    () => (bgImage ? planBox(DRAW, bgImage) : null),
     [bgImage, DRAW.w, DRAW.h]
   );
   const wireLook = wireStyle(wireStrength, colourMode);
@@ -4238,6 +4313,7 @@ function DrawingAreaStatic({ DRAW, bgImage, placed, wires, annotations, colourMo
                display: "block",
              }}/>
       )}
+      <ScaleBar bg={bgImage} />
       <svg width={DRAW.w} height={DRAW.h}
            style={{ position: "absolute", left: 0, top: 0, overflow: "visible" }}>
         {wires.map(w => {
