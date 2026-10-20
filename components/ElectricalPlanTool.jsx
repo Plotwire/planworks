@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from "react";
 import {
   Upload, Trash2, Save, FolderOpen, Download, Undo2, Redo2,
   MousePointer2, Cable, RotateCw, ZoomIn, ZoomOut, Maximize2,
@@ -1814,8 +1814,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     if (r.outside) return;
     snapshot();
     updateProject({ placed: [...placed, ...r.copies], wires: [...wires, ...r.wires] });
-    setPicked(r.copies.map(c => c.id));
-    setMirror(null);
+    // Mirror copy is done: the bar goes (the copies stay, not picked).
+    stopPicking();
   };
   const deletePicked = () => {
     if (!pickedItems.length) return;
@@ -1824,6 +1824,16 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     updateProject({ placed: placed.filter(p => !gone.has(p.id)), wires: wires.filter(w => !gone.has(w.fromId) && !gone.has(w.toId)) });
     setPicked([]);
   };
+  // The bar above the drawing keeps the tallest height it has had while open,
+  // so the drawing below doesn't jump up and down from one step to the next.
+  const mirrorBarRef = useRef(null);
+  const mirrorBarMax = useRef(0);
+  useLayoutEffect(() => {
+    const el = mirrorBarRef.current;
+    if (!el) { mirrorBarMax.current = 0; return; }
+    const h = el.offsetHeight;
+    if (h > mirrorBarMax.current) { mirrorBarMax.current = h; el.style.minHeight = `${h}px`; }
+  });
   // Another floor: nothing picked there yet.
   useEffect(() => { setPicked([]); setPickBox(null); setMirror(null); }, [project.activeSheetId]);
   // While the mirror line is being set, a press in the drawing area is one of
@@ -1955,7 +1965,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         return;
       }
       if (wallDraft && e.key === "Escape") { e.preventDefault(); cancelWall(); return; }
-      if (mirror && e.key === "Escape") { e.preventDefault(); setMirror(null); return; }
+      if (mirror && e.key === "Escape") { e.preventDefault(); stopPicking(); return; }
       if (picking && e.key === "Escape") { e.preventDefault(); stopPicking(); return; }
       if (mirror && e.key === "Enter") { e.preventDefault(); placeMirrorCopies(); return; }
       if ((e.metaKey || e.ctrlKey) && (e.key || "").toLowerCase() === "a" && !readOnly) { e.preventDefault(); pickAllOnFloor(); return; }
@@ -3107,6 +3117,56 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
             onRename={renameSheet}
             onDelete={deleteSheet}
           />
+          {/* Select several / Mirror copy: a bright bar of its own above the
+              drawing (the drawing area gets shorter, nothing is covered), with
+              what to do next in words, big buttons and an obvious Cancel. It
+              goes when mirror copy ends: placed, cancelled or Esc. */}
+          {(picking || mirror) && !readOnly && (() => {
+            const n = pickedItems.length;
+            const tapOr = TOUCH ? "Tap" : "Click";
+            const copies = n === 1 ? "1 copy" : `${n} copies`;
+            const off = mirrorPlan ? mirrorPlan.outside : 0;
+            const [title, tip] = !mirror
+              ? (n ? [`${n === 1 ? "1 symbol" : `${n} symbols`} picked. Add more, or press Mirror copy`, "Drag a box round symbols, or tap them, to add or take them out."]
+                   : ["Pick the symbols to copy: drag a box round them, or tap them", "Or press Select all on this floor."])
+              : !mirror.a ? [`${tapOr} two points on the party wall to set the mirror line`, "Anywhere along the party wall's centre line. Zoom in for accuracy."]
+              : !mirror.bRaw ? [`Now ${tapOr.toLowerCase()} a second point on the same line`, "Further along the party wall. The line stays straight unless you untick Straight line."]
+              : off ? [`${off === 1 ? "1 copy" : `${off} copies`} would land off the drawing area: redraw the line`, "Press Redraw line and set a different line."]
+              : [`Check where the faint copies land, then press Place ${copies}`, "The faint symbols show where the copies will go."];
+            const big = "min-h-[44px] px-3 lg:px-4 rounded-xl text-[14px] font-semibold flex items-center gap-2 whitespace-nowrap";
+            const plain = `${big} bg-white text-[#1A2530] ring-1 ring-[#1A2530]/25 hover:bg-amber-50 disabled:opacity-50`;
+            const main = `${big} bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)] shadow-sm disabled:opacity-45`;
+            return (
+              <div ref={mirrorBarRef} data-mirror-bar="" role="region" aria-label="Mirror copy"
+                   className="shrink-0 relative z-20 flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5 bg-amber-300 text-[#1A2530] border-b-2 border-amber-500 shadow-[0_8px_18px_-10px_rgba(16,28,40,0.45)]">
+                <div className="flex items-center gap-3 min-w-0 flex-1 basis-[280px] min-h-[44px]" title={tip}>
+                  <span className="shrink-0 w-10 h-10 rounded-xl bg-[#1A2530] text-amber-300 flex items-center justify-center" aria-hidden="true"><FlipHorizontal2 size={22}/></span>
+                  <div className="min-w-0 text-[15px] font-bold leading-snug" role="status">{title}</div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {!mirror ? (
+                    <>
+                      <button type="button" onClick={pickAllOnFloor} className={plain}>Select all on this floor</button>
+                      <button type="button" onClick={startMirror} disabled={!n} className={main}><FlipHorizontal2 size={18}/> Mirror copy</button>
+                    </>
+                  ) : (
+                    <>
+                      <label className={`${big} bg-white/70 ring-1 ring-[#1A2530]/20 cursor-pointer select-none`}>
+                        <input type="checkbox" className="w-5 h-5 accent-[#2C97A8]" checked={!mirror.free} onChange={(e) => setMirror(m => ({ ...m, free: !e.target.checked }))}/>
+                        Straight line
+                      </label>
+                      {/* Always there (off until a point is set), so the bar keeps its shape. */}
+                      <button type="button" disabled={!mirror.a} onClick={() => setMirror(m => ({ ...m, a: null, bRaw: null, cursor: null }))} className={plain}>Redraw line</button>
+                      <button type="button" onClick={placeMirrorCopies} disabled={!mirrorSet || !!off} className={main}>
+                        <FlipHorizontal2 size={18}/> Place {copies}
+                      </button>
+                    </>
+                  )}
+                  <button type="button" onClick={stopPicking} className={`${plain} ring-2 ring-[#1A2530]/60`}><X size={18}/> Cancel</button>
+                </div>
+              </div>
+            );
+          })()}
           <div className="relative flex-1 overflow-hidden" style={{ cursor: viewportCursor }}>
           <Workspace
             viewportRef={viewportRef}
@@ -3165,46 +3225,6 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
               setTool(t); setWireStart(null); if (t !== "wall") cancelWall();
             }} />
 
-          {/* Select several / Mirror copy: what's picked, then the mirror line's steps.
-              At the bottom; the line's two points can go anywhere along it
-              (it runs across the whole sheet), so nothing is out of reach. */}
-          {(picking || mirror) && !readOnly && (
-            <div data-mirror-bar="" className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 flex-wrap justify-center max-w-[calc(100%-180px)] bg-white dark:bg-[#16202B] rounded-2xl ring-1 ring-slate-200/70 dark:ring-[#2A3947] shadow-[0_10px_30px_-10px_rgba(16,28,40,0.22)] px-3 py-2 text-[12px]">
-              {!mirror ? (
-                <>
-                  <span className="font-semibold text-slate-800 dark:text-slate-100 tabular-nums">{pickedItems.length} selected</span>
-                  <span className="text-slate-500 dark:text-slate-400">Drag a box, or tap symbols.</span>
-                  <button type="button" onClick={pickAllOnFloor} className="px-2.5 py-1.5 rounded-lg ring-1 ring-slate-300 dark:ring-[#2A3947] text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/10 font-semibold">Select all on this floor</button>
-                  <button type="button" onClick={startMirror} disabled={!pickedItems.length}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)] disabled:opacity-40">
-                    <FlipHorizontal2 size={14}/> Mirror copy
-                  </button>
-                  <button type="button" onClick={stopPicking} className="px-2.5 py-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/10 font-semibold">Done</button>
-                </>
-              ) : (
-                <>
-                  <span className="text-slate-800 dark:text-slate-100 max-w-[420px]">
-                    {!mirror.a ? "Click a point on the mirror line, e.g. on the party wall's centre line."
-                      : !mirror.bRaw ? "Click a second point on the same line, further along."
-                      : mirrorPlan && mirrorPlan.outside ? `${mirrorPlan.outside === 1 ? "1 copy" : mirrorPlan.outside + " copies"} would land off the drawing area. Redraw the line.`
-                      : "Check where the faint copies land, then place them."}
-                  </span>
-                  <label className="flex items-center gap-1.5 text-slate-600 dark:text-slate-300 select-none cursor-pointer">
-                    <input type="checkbox" className="accent-[#2C97A8]" checked={!mirror.free} onChange={(e) => setMirror(m => ({ ...m, free: !e.target.checked }))}/>
-                    Straight line
-                  </label>
-                  {mirror.a && (
-                    <button type="button" onClick={() => setMirror(m => ({ ...m, a: null, bRaw: null, cursor: null }))} className="px-2.5 py-1.5 rounded-lg ring-1 ring-slate-300 dark:ring-[#2A3947] text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/10 font-semibold">Redraw line</button>
-                  )}
-                  <button type="button" onClick={placeMirrorCopies} disabled={!mirrorSet || !!(mirrorPlan && mirrorPlan.outside)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)] disabled:opacity-40">
-                    <FlipHorizontal2 size={14}/> Place {pickedItems.length === 1 ? "1 copy" : `${pickedItems.length} copies`}
-                  </button>
-                  <button type="button" onClick={() => setMirror(null)} className="px-2.5 py-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/10 font-semibold">Cancel</button>
-                </>
-              )}
-            </div>
-          )}
 
           {/* Floor Plan — opens the sketch for this drawing (round-trips back here) */}
           {(

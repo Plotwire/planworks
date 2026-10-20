@@ -18,13 +18,17 @@ to mirror across will do.
   the left): drag a box round symbols, or tap symbols one by one to add or
   take them out. **Select all on this floor** (or **Ctrl+A**) picks every
   symbol on the floor you're on. **Shift+click** with the normal Select tool
-  adds symbols too. A bar at the bottom says how many are picked.
-- **Mirror copy** (in that bar): click a point on the mirror line (for semis,
-  on the **party wall's centre line**), then a second point further along it.
-  The line shows as you move, and **faint copies** show where everything will
-  land. The line snaps **straight up-and-down or across**; untick **Straight
-  line** for any angle. **Place N copies** puts them down; **Redraw line**
-  starts the line again; **Cancel** (or **Esc**) stops.
+  adds symbols too.
+- While you're picking and mirroring, a **bright yellow bar** sits above the
+  drawing (the drawing moves down to make room: the bar never covers it). It
+  says in one line what to do next, with big buttons and a **Cancel**.
+- **Mirror copy** (in that bar): **click two points on the party wall** (on
+  its centre line, anywhere along it) to set the mirror line. The line shows
+  as you move, and **faint copies** show where everything will land. The line
+  snaps **straight up-and-down or across**; untick **Straight line** for any
+  angle. **Place N copies** puts them down and ends mirror copy (the bar
+  goes); **Redraw line** starts the line again; **Cancel** (or **Esc**) stops
+  and the bar goes.
 - The copies are **mirrored**: a switch beside a door in one house sits beside
   the matching door in the other, facing the other way. Text in a symbol
   (the "2" on a 2-gang switch, "USB-C", "S") is never back to front. The
@@ -48,9 +52,11 @@ layout, including:
 Save. Open **Quote** and note a few quantities (sockets, switches, lights).
 
 **A2. Pick the left house.** Press the **Select several** button (dashed box).
-Drag a box round the left house's symbols. The bar says e.g. **"9 selected"**
-and each picked symbol has an amber box. Tap one to take it out, tap it again
-to put it back.
+The yellow bar appears above the drawing: "Pick the symbols to copy…". Drag
+a box round the left house's symbols. The bar says e.g. **"9 symbols
+picked"** and each picked symbol has an amber box. Tap one to take it out, tap
+it again to put it back. Check every button in the bar is easy to hit and
+nothing of the drawing is hidden behind it.
 
 **A3. The mirror line.** Press **Mirror copy**. Zoom in on the party wall if
 you like (for the best accuracy). Click a point on the **centre of the party
@@ -58,7 +64,7 @@ wall**, move the pointer down the wall (the line follows, straight), and
 click a second point further down. Faint copies appear in the right house.
 Check they line up with the right house's walls and doors **before placing**.
 
-**A4. Place.** Press **Place N copies**. Check, zoomed in:
+**A4. Place.** Press **Place N copies**: the yellow bar goes. Check, zoomed in:
 - every copy sits on the **matching spot of the right house** (sockets' flat
   backs on the matching walls, switches beside the matching doors),
 - switches **face the other way**, as the doors do,
@@ -105,7 +111,9 @@ copies, tap **Place N copies**.
 
 **B3.** Check A4 by eye (pinch to zoom in), then **undo** once: they all go.
 
-**B4.** Tap **Done** to leave Select several.
+**B4.** Start again and press **Cancel** in the yellow bar: it goes, nothing
+changes. The bar never covers the drawing (the drawing sits below it), and its
+buttons are big enough for a finger.
 
 ## Notes
 
