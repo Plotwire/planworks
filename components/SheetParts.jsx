@@ -8,7 +8,7 @@ import {
   Palette as PaletteIcon, Ruler, Hand, Type, Printer, Settings, Search, Sun, Moon, Mail,
   ChevronRight, ChevronLeft, X, FileText, PanelLeftClose, PanelLeftOpen,
   Grid3x3, ChevronDown, Check, ClipboardList, Plus, Clock, LayoutPanelTop, ImagePlus, SlidersHorizontal, Building2, PencilRuler, Keyboard,
-  Crop, Info,
+  Crop, Info, BoxSelect,
 } from "lucide-react";
 import {
   SYMBOLS, SYMBOL_META, CATEGORY_COLOURS, VIEWBOX,
@@ -63,7 +63,43 @@ const TOOLS = {
   wire:   { icon: Cable,         label: "Wire",   hint: "W" },
   wall:   { icon: BrickWall,     label: "Wall",   hint: "" },
   note:   { icon: Type,          label: "Note",   hint: "N" },
+  // Pick several symbols (a box, or taps) for Mirror copy.
+  several: { icon: BoxSelect,    label: "Select several", hint: "" },
 };
+
+/* A mirror copy (lib/planMirror; item.flip): the symbol reflected across its
+ * own upright axis, with its text put back the right way round at the
+ * mirrored spot (anchor swapped), so it never reads backwards. data-anchor
+ * keeps the authored anchor for the PDF export (glyphToPrims), which mirrors
+ * the shapes and places the text itself (lib/symbolPdf drawSymbol). */
+const FLIPPED_GLYPHS = new Map();
+function unflipText(node) {
+  if (Array.isArray(node)) return node.map(unflipText);
+  if (!React.isValidElement(node)) return node;
+  if (typeof node.type === "function") {
+    try { return unflipText(node.type(node.props)); } catch { return node; }
+  }
+  if (node.type === "text") {
+    const x = Number(node.props.x) || 0;
+    const a = node.props.textAnchor || "start";
+    return React.cloneElement(node, {
+      transform: `matrix(-1 0 0 1 ${2 * x} 0)`,
+      textAnchor: a === "start" ? "end" : a === "end" ? "start" : a,
+      "data-anchor": a,
+    });
+  }
+  const kids = node.props && node.props.children;
+  return kids == null ? node : React.cloneElement(node, undefined, ...React.Children.toArray(kids).map(unflipText));
+}
+export function symbolGlyph(sym, flip) {
+  if (!flip) return sym.svg;
+  let g = FLIPPED_GLYPHS.get(sym.id);
+  if (!g) {
+    g = <g transform="matrix(-1 0 0 1 48 0)">{unflipText(sym.svg)}</g>;
+    FLIPPED_GLYPHS.set(sym.id, g);
+  }
+  return g;
+}
 
 /* ============================================================================
  * TOP BAR
@@ -819,6 +855,7 @@ export function Workspace({
   onFurnitureMouseDown, startFurnRotating, startFurnResizing,
   onWallMouseDown,
   startRotating,
+  multi = null, onViewportPointerDownCapture = null,
 }) {
   /* ------------------------------------------------------------------------
    * Symbols went blurry on zoom and never recovered.
@@ -877,6 +914,7 @@ export function Workspace({
         touchAction: "none",
         WebkitTouchCallout: "none",
       }}
+      onPointerDownCapture={onViewportPointerDownCapture || undefined}
       onPointerDown={onViewportMouseDown}
       onPointerMove={onViewportMouseMove}
       onPointerUp={onViewportMouseUp}
@@ -926,6 +964,7 @@ export function Workspace({
           onAnnotationBodyMouseDown={onAnnotationBodyMouseDown}
           onAnnotationAnchorMouseDown={onAnnotationAnchorMouseDown}
           startRotating={startRotating}
+          multi={multi}
         />
         </div>
       </div>
@@ -958,6 +997,7 @@ export function Sheet({
   onFurnitureMouseDown, startFurnRotating, startFurnResizing,
   onWallMouseDown,
   startRotating,
+  multi = null,
 }) {
   const { access = {} } = useApp();
   const trial = Boolean(access.isTry);
@@ -1027,6 +1067,7 @@ export function Sheet({
         onAnnotationBodyMouseDown={onAnnotationBodyMouseDown}
         onAnnotationAnchorMouseDown={onAnnotationAnchorMouseDown}
         startRotating={startRotating}
+        multi={multi}
       />
 
       {/* TITLE BLOCK */}
@@ -1713,6 +1754,10 @@ function DrawingArea({
   onFurnitureMouseDown, startFurnRotating, startFurnResizing,
   onWallMouseDown,
   startRotating,
+  // Select several / Mirror copy (components/ElectricalPlanTool): { selected
+  // (Set of symbol ids), box ({ x0, y0, x1, y1 }), line ({ a, b }), ghosts
+  // (the copies to come, bad: off the drawing area) }.
+  multi = null,
 }) {
   // tool + selection come straight from the store now — no longer threaded
   // down through Workspace → Sheet → DrawingArea.
@@ -1953,6 +1998,7 @@ function DrawingArea({
           if (!sym) return null;
           const isSel = item.id === selectedId;
           const isWireStart = item.id === wireStart;
+          const isPicked = !!(multi && multi.selected && multi.selected.has(item.id));
           const itemScale = item.scale ?? 1;
           const itemSize = symbolSize * itemScale;
           const half = itemSize / 2;
@@ -1965,7 +2011,7 @@ function DrawingArea({
           // never printed.
           const stairWarn = isSel && onStairs(bgImage, item.x, item.y);
           return (
-            <g key={item.id}>
+            <g key={item.id} data-sym-id={item.id}>
             {stairWarn && (
               <g pointerEvents="none" transform={`translate(${item.x} ${item.y + half + 10 + (item.label ? 12 : 0)})`}>
                 <rect x={-28} y={-8} width={56} height={15} rx={7.5} fill="#FEF3C7" stroke="#D97706" strokeWidth={1}/>
@@ -1974,9 +2020,9 @@ function DrawingArea({
               </g>
             )}
             <g transform={`translate(${item.x - half} ${item.y - half}) rotate(${item.rotation} ${half} ${half})`}>
-              {(isSel || isWireStart) && (
+              {(isSel || isWireStart || isPicked) && (
                 <>
-                  <rect x={-6} y={-6} width={itemSize+12} height={itemSize+12} rx={8}
+                  <rect x={-6} y={-6} width={itemSize+12} height={itemSize+12} rx={8} data-picked={isPicked ? "" : undefined}
                         fill={isWireStart ? "rgba(251,191,36,0.18)" : "rgba(251,191,36,0.10)"}/>
                   <rect x={-3} y={-3} width={itemSize+6} height={itemSize+6} rx={6}
                         fill="none" stroke="#d97706" strokeWidth={1.2}
@@ -1997,7 +2043,7 @@ function DrawingArea({
                      overflow: "visible", pointerEvents: "none",
                      cursor: tool === "wire" ? "crosshair" : (tool === "pan" || spacePressed) ? "grab" : "move",
                    }}>
-                {sym.svg}
+                {symbolGlyph(sym, item.flip)}
               </svg>
               {item.label && (
                 <text x={half} y={itemSize + 9} fontSize={9} textAnchor="middle"
@@ -2021,6 +2067,44 @@ function DrawingArea({
             </g>
           );
         })}
+
+        {/* Mirror copy: where the copies will land (faint; boxed red if off
+            the drawing area), the selection box, and the mirror line. */}
+        {multi && multi.ghosts && multi.ghosts.map(g => {
+          const gs = findSymbol(g.symbolId);
+          if (!gs) return null;
+          const size = symbolSize * (g.scale ?? 1), half = size / 2;
+          const gc = resolveColours(g.symbolId, colourMode);
+          return (
+            <g key={g.id} data-mirror-ghost={g.bad ? "off" : ""} opacity={0.5} style={{ pointerEvents: "none" }}
+               transform={`translate(${g.x - half} ${g.y - half}) rotate(${g.rotation} ${half} ${half})`}>
+              {g.bad && <rect x={-5} y={-5} width={size + 10} height={size + 10} rx={7} fill="rgba(220,38,38,0.12)" stroke="#dc2626" strokeWidth={1.5} vectorEffect="non-scaling-stroke"/>}
+              <svg x={0} y={0} width={size} height={size} viewBox={VIEWBOX} style={{ color: gc.body, "--feeder": gc.feeder, overflow: "visible" }}>
+                {symbolGlyph(gs, g.flip)}
+              </svg>
+            </g>
+          );
+        })}
+        {multi && multi.box && (() => {
+          const b = multi.box;
+          return <rect data-select-box="" x={Math.min(b.x0, b.x1)} y={Math.min(b.y0, b.y1)} width={Math.abs(b.x1 - b.x0)} height={Math.abs(b.y1 - b.y0)}
+                       fill="rgba(251,191,36,0.10)" stroke="#d97706" strokeWidth={1.5} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" style={{ pointerEvents: "none" }}/>;
+        })()}
+        {multi && multi.line && multi.line.a && (() => {
+          const { a, b } = multi.line;
+          const len = b ? Math.hypot(b.x - a.x, b.y - a.y) : 0;
+          const ux = len ? (b.x - a.x) / len : 0, uy = len ? (b.y - a.y) / len : 0;
+          const far = 5000;
+          return (
+            <g data-mirror-line="" style={{ pointerEvents: "none" }}>
+              {len > 0 && <line x1={a.x - ux * far} y1={a.y - uy * far} x2={a.x + ux * far} y2={a.y + uy * far}
+                                stroke="#d97706" strokeOpacity={0.45} strokeWidth={1} strokeDasharray="4 4" vectorEffect="non-scaling-stroke"/>}
+              {b && <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#d97706" strokeWidth={2} vectorEffect="non-scaling-stroke"/>}
+              <circle cx={a.x} cy={a.y} r={4} fill="#fbbf24" stroke="#d97706" strokeWidth={1.5} vectorEffect="non-scaling-stroke"/>
+              {b && <circle cx={b.x} cy={b.y} r={4} fill="#fbbf24" stroke="#d97706" strokeWidth={1.5} vectorEffect="non-scaling-stroke"/>}
+            </g>
+          );
+        })()}
 
         {/* Annotation text blocks (rendered last so they're on top) */}
         {annotations.map(a => {
@@ -3640,7 +3724,8 @@ function glyphToPrims(glyphEl) {
         text: el.textContent || "",
         x: num("x"), y: num("y"),
         fontSize: parseFloat(el.getAttribute("font-size")) || parseFloat(cs.fontSize) || 6,
-        anchor: el.getAttribute("text-anchor") || cs.textAnchor || "start",
+        // A mirror copy's text keeps its authored anchor here (symbolGlyph).
+        anchor: el.getAttribute("data-anchor") || el.getAttribute("text-anchor") || cs.textAnchor || "start",
         bold: weight >= 600,
       });
     }
@@ -3669,7 +3754,7 @@ function glyphToJob(glyphEl, DRAW, sx, sy, PAGE_H, clip = false) {
   if (clip && (localX + r < 0 || localY + r < 0 || localX - r > DRAW.w || localY - r > DRAW.h)) return null;
   const cx = (DRAW.x + localX) * sx;                  // → PDF points
   const cy = PAGE_H - (DRAW.y + localY) * sy;         // pdf-lib is bottom-left
-  return { prims: glyphToPrims(glyphEl), cx, cy, size: size * sx, rotationDeg: rot };
+  return { prims: glyphToPrims(glyphEl), cx, cy, size: size * sx, rotationDeg: rot, flip: glyphEl.hasAttribute("data-sym-flip") };
 }
 
 /* ============================================================================
@@ -3987,7 +4072,7 @@ export function PrintPreview({ project, legendItems, colourMode, wireStrength, s
     let scaleEl = null;
     let savedScaleTransform = null;
     try {
-      const [{ PDFDocument, StandardFonts, degrees, rgb }, h2cMod] = await Promise.all([import("pdf-lib"), import("html2canvas")]);
+      const [{ PDFDocument, StandardFonts, degrees, rgb, pushGraphicsState, popGraphicsState, concatTransformationMatrix }, h2cMod] = await Promise.all([import("pdf-lib"), import("html2canvas")]);
       const html2canvas = h2cMod.default;
       const pageEls = document.querySelectorAll("#print-root .print-page");
       // Preview is scaled to fit the screen (.pp-scale). html2canvas measures the
@@ -4154,7 +4239,7 @@ export function PrintPreview({ project, legendItems, colourMode, wireStrength, s
           // catch silently hid every missing <text> for as long as they were
           // unsupported; the next unhandled tag should be noisy.
           try {
-            drawSymbol(page, job, { rgb, degrees, font, fontBold });
+            drawSymbol(page, job, { rgb, degrees, font, fontBold, pushGraphicsState, popGraphicsState, concatTransformationMatrix });
           } catch (e) {
             console.warn("PDF export: skipped a symbol —", e && e.message, job && job.prims);
           }
@@ -4478,9 +4563,9 @@ function DrawingAreaStatic({ DRAW, bgImage, placed, wires, annotations, colourMo
           return (
             <g key={item.id}
                transform={`translate(${item.x - half} ${item.y - half}) rotate(${item.rotation} ${half} ${half})`}>
-              <svg data-sym-glyph="" x={0} y={0} width={itemSize} height={itemSize} viewBox={VIEWBOX}
+              <svg data-sym-glyph="" data-sym-flip={item.flip ? "" : undefined} x={0} y={0} width={itemSize} height={itemSize} viewBox={VIEWBOX}
                    style={{ color: cols.body, "--feeder": cols.feeder, overflow: "visible" }}>
-                {sym.svg}
+                {symbolGlyph(sym, item.flip)}
               </svg>
               {item.label && (
                 <text x={half} y={itemSize + 9} fontSize={9} textAnchor="middle"
