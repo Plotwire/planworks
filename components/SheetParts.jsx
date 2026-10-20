@@ -57,14 +57,15 @@ export function useProjectTitleBlock() {
  * Both live in lib/cad/sheet, the one copy of the sheet's numbers.
  * ========================================================================= */
 
+// tip: what the tool does, for the labelled toolbar's tooltip.
 const TOOLS = {
-  select: { icon: MousePointer2, label: "Select", hint: "V" },
+  select: { icon: MousePointer2, label: "Select", hint: "V", tip: "Select: click a symbol to move, turn or delete it" },
   pan:    { icon: Hand,          label: "Pan",    hint: "H" },
-  wire:   { icon: Cable,         label: "Wire",   hint: "W" },
+  wire:   { icon: Cable,         label: "Wire",   hint: "W", tip: "Wire: click two symbols to link them, e.g. a switch to its lights" },
   wall:   { icon: BrickWall,     label: "Wall",   hint: "" },
   note:   { icon: Type,          label: "Note",   hint: "N" },
   // Pick several symbols (a box, or taps) for Mirror copy.
-  several: { icon: BoxSelect,    label: "Select several", hint: "" },
+  several: { icon: BoxSelect,    label: "Select several", hint: "", tip: "Select several: pick symbols with a box or by tapping, then mirror copy them" },
 };
 
 /* A mirror copy (lib/planMirror; item.flip): the symbol reflected across its
@@ -2452,8 +2453,52 @@ export function Stat({ label, value }) {
  * ========================================================================= */
 // tools: the TOOLS keys to show, or [key, { icon, label, hint }] pairs (the
 // Sketch a plan tool passes its own Select and Pan).
-export function FloatingToolbar({ tool, setTool, tools = ["select", "wire"] }) {
+// labelled (the drawing editor): compact buttons, icon above a word, in the
+// standard solid teal so a new user can't miss them (still 44px tall, a
+// fingertip on iPad), straight on the grey with no panel behind them; the
+// tool in use goes dark navy with light-teal words, so it's never mistaken
+// for the others.
+// lead: one action button above the tools ({ label, icon, tip, onClick }),
+// the editor's Floor plan. Without labelled, the plain icon toolbar (the
+// Floor Plan sketch's).
+export function FloatingToolbar({ tool, setTool, tools = ["select", "wire"], labelled = false, lead = null }) {
   const list = tools.map((t) => (Array.isArray(t) ? t : [t, TOOLS[t]]));
+  if (labelled) {
+    const btn = "relative w-full min-h-[44px] rounded-lg flex flex-col items-center justify-center gap-[3px] px-0.5 py-1 text-[9.5px] font-semibold leading-[1.15] text-center transition-colors";
+    const idle = "bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)]";
+    const on = "bg-[#1A2530] text-[#5FD0E0] ring-2 ring-[#3FB7C9]";
+    return (
+      <div role="toolbar" aria-label="Tools" data-tools-labelled=""
+           className="absolute top-5 left-5 z-20 w-[44px] flex flex-col gap-[3px]">
+        {lead && (
+          <>
+            <button type="button" onClick={lead.onClick} title={lead.tip} aria-label={lead.label} className={`${btn} ${idle}`}>
+              <lead.icon size={15}/>
+              <span>{lead.label}</span>
+            </button>
+            <div aria-hidden="true" className="h-1.5"/>
+          </>
+        )}
+        {list.map(([key, info]) => {
+          const Icon = info.icon;
+          const active = tool === key;
+          return (
+            <button key={key} type="button" onClick={() => setTool(key)}
+              title={`${info.tip || info.label}${info.hint ? ` (${info.hint})` : ""}`}
+              aria-label={info.label} aria-pressed={active} aria-keyshortcuts={info.hint || undefined}
+              className={`${btn} ${active ? on : idle}`}>
+              <Icon size={15}/>
+              <span>{info.label}</span>
+              {SHOW_KBD && info.hint && (
+                <span aria-hidden className="hidden min-[1300px]:block absolute right-[3px] top-[2px] text-[7px] leading-none font-semibold opacity-70"
+                  style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>{info.hint}</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
   return (
     <div className="absolute top-4 left-4 z-20 flex flex-col bg-white dark:bg-[#16202B] rounded-2xl ring-1 ring-slate-200/70 dark:ring-[#2A3947] shadow-[0_10px_30px_-10px_rgba(16,28,40,0.22)] overflow-hidden">
       {list.map(([key, info]) => {
