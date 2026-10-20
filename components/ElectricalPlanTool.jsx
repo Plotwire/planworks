@@ -463,6 +463,15 @@ const TOUCH_GESTURES = [
 ];
 
 // ============================================================================
+// The Floor plan button's icon (a plan with two walls).
+function FloorPlanIcon({ size = 19 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="3" width="18" height="18" rx="1.5"/><path d="M3 9h6V3M21 15h-6v6"/>
+    </svg>
+  );
+}
+
 export default function ElectricalPlanTool({ initialTarget = null, onHome = null, theme = "light", onToggleTheme = null, onProjectId = null, onOpenFloorPlan = null, onOpenAsNew = null }) {
   // Project state
   const project = useEditor(s => s.project);
@@ -3218,7 +3227,10 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
           />
 
           {/* Floating tool toolbar */}
-          <FloatingToolbar tool={picking ? "several" : tool} tools={readOnly ? ["select", "wire"] : ["select", "wire", "several"]}
+          {/* Tools, labelled and big, with Floor plan (opens the sketch for
+              this drawing, round-tripping back here) at the top. */}
+          <FloatingToolbar labelled tool={picking ? "several" : tool} tools={readOnly ? ["select", "wire"] : ["select", "wire", "several"]}
+            lead={{ label: "Floor plan", icon: FloorPlanIcon, tip: "Floor plan: draw or edit this floor's plan, to scale", onClick: () => openFloorPlan(activeSheet?.sketchId) }}
             setTool={(t) => {
               if (t === "several") { startPicking(); return; }
               stopPicking();
@@ -3226,16 +3238,6 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
             }} />
 
 
-          {/* Floor Plan — opens the sketch for this drawing (round-trips back here) */}
-          {(
-            <button
-              onClick={() => openFloorPlan(activeSheet?.sketchId)}
-              title="Draw or edit the floor plan"
-              className="absolute top-4 left-16 z-20 flex items-center gap-1.5 h-9 px-3 bg-white dark:bg-[#16202B] rounded-xl ring-1 ring-slate-200/70 dark:ring-[#2A3947] shadow-[0_10px_30px_-10px_rgba(16,28,40,0.22)] text-[12px] font-semibold text-slate-700 dark:text-slate-200 hover:text-[#22808F] transition-colors">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="1.5"/><path d="M3 9h6V3M21 15h-6v6"/></svg>
-              Floor Plan
-            </button>
-          )}
 
           {/* Wall-type chooser — only while the wall tool is active */}
           {tool === "wall" && <WallTypeChooser value={wallType} onChange={setWallType} />}
