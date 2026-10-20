@@ -464,7 +464,7 @@ const TOUCH_GESTURES = [
 
 // ============================================================================
 // The Floor plan button's icon (a plan with two walls).
-function FloorPlanIcon({ size = 19 }) {
+function FloorPlanIcon({ size = 15 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <rect x="3" y="3" width="18" height="18" rx="1.5"/><path d="M3 9h6V3M21 15h-6v6"/>

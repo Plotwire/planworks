@@ -2453,28 +2453,29 @@ export function Stat({ label, value }) {
  * ========================================================================= */
 // tools: the TOOLS keys to show, or [key, { icon, label, hint }] pairs (the
 // Sketch a plan tool passes its own Select and Pan).
-// labelled (the drawing editor): big buttons, icon above a word, in the
-// standard solid teal so a new user can't miss them; the tool in use goes
-// dark navy with light-teal words, so it's never mistaken for the others.
+// labelled (the drawing editor): compact buttons, icon above a word, in the
+// standard solid teal so a new user can't miss them (still 44px tall, a
+// fingertip on iPad); the tool in use goes dark navy with light-teal words,
+// so it's never mistaken for the others.
 // lead: one action button above the tools ({ label, icon, tip, onClick }),
 // the editor's Floor plan. Without labelled, the plain icon toolbar (the
 // Floor Plan sketch's).
 export function FloatingToolbar({ tool, setTool, tools = ["select", "wire"], labelled = false, lead = null }) {
   const list = tools.map((t) => (Array.isArray(t) ? t : [t, TOOLS[t]]));
   if (labelled) {
-    const btn = "relative w-full min-h-[52px] rounded-xl flex flex-col items-center justify-center gap-1 px-1 py-1.5 text-[11.5px] font-semibold leading-tight text-center transition-colors";
+    const btn = "relative w-full min-h-[44px] rounded-lg flex flex-col items-center justify-center gap-[3px] px-0.5 py-1 text-[9.5px] font-semibold leading-[1.15] text-center transition-colors";
     const idle = "bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)]";
     const on = "bg-[#1A2530] text-[#5FD0E0] ring-2 ring-[#3FB7C9]";
     return (
       <div role="toolbar" aria-label="Tools" data-tools-labelled=""
-           className="absolute top-4 left-4 z-20 w-[84px] flex flex-col gap-1 p-1.5 bg-white dark:bg-[#16202B] rounded-2xl ring-1 ring-slate-200/70 dark:ring-[#2A3947] shadow-[0_10px_30px_-10px_rgba(16,28,40,0.22)]">
+           className="absolute top-4 left-4 z-20 w-[52px] flex flex-col gap-[3px] p-1 bg-white dark:bg-[#16202B] rounded-xl ring-1 ring-slate-200/70 dark:ring-[#2A3947] shadow-[0_10px_30px_-10px_rgba(16,28,40,0.22)]">
         {lead && (
           <>
             <button type="button" onClick={lead.onClick} title={lead.tip} aria-label={lead.label} className={`${btn} ${idle}`}>
-              <lead.icon size={19}/>
+              <lead.icon size={15}/>
               <span>{lead.label}</span>
             </button>
-            <div aria-hidden="true" className="h-px mx-1 my-0.5 bg-slate-200 dark:bg-[#2A3947]"/>
+            <div aria-hidden="true" className="h-px mx-1 my-px bg-slate-200 dark:bg-[#2A3947]"/>
           </>
         )}
         {list.map(([key, info]) => {
@@ -2485,10 +2486,10 @@ export function FloatingToolbar({ tool, setTool, tools = ["select", "wire"], lab
               title={`${info.tip || info.label}${info.hint ? ` (${info.hint})` : ""}`}
               aria-label={info.label} aria-pressed={active} aria-keyshortcuts={info.hint || undefined}
               className={`${btn} ${active ? on : idle}`}>
-              <Icon size={19}/>
+              <Icon size={15}/>
               <span>{info.label}</span>
               {SHOW_KBD && info.hint && (
-                <span aria-hidden className="hidden min-[1300px]:block absolute right-[5px] top-[3px] text-[8px] leading-none font-semibold opacity-70"
+                <span aria-hidden className="hidden min-[1300px]:block absolute right-[3px] top-[2px] text-[7px] leading-none font-semibold opacity-70"
                   style={{ fontFamily: "var(--font-jetbrains-mono), monospace" }}>{info.hint}</span>
               )}
             </button>
