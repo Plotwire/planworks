@@ -546,8 +546,13 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       }
     });
   };
+  // The quote's changes save themselves (onQuoteChangeRef, with the drawing's
+  // backups below).
+  const onQuoteChangeRef = useRef(null);
   const updateBoq = useCallback((boq) => {
+    const before = useEditor.getState().project?.boq;
     setProject(p => ({ ...p, boq }));
+    onQuoteChangeRef.current?.(before, boq);
   }, []);
   // Patch arbitrary fields (name, drawingNumber, …) on the active sheet.
   const setActiveSheet = useCallback((patch) => {
@@ -2247,6 +2252,11 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     versionsRef.current.set(id, version);
     lastTagRef.current = null;
     noteTag(tag);
+    // A new drawing on screen: nothing typed in its quote yet (the quote
+    // closes, and so saves, before another drawing can open).
+    quoteUnsavedRef.current = false;
+    clearTimeout(quoteTimer.current); quoteTimer.current = null;
+    setQuoteSave("idle");
     // Read now, before this drawing's own backup is written over the draft.
     const offer = initial ? draftOfferOnOpen(id, version, loaded) : null;
     // Bumped only when the project actually arrives: a save asked for before
@@ -2512,11 +2522,86 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const [recovery, setRecovery] = useState(null);
   const countPlaced = (p) => (p?.sheets || []).reduce((n, s) => n + ((s.placed && s.placed.length) || 0), 0);
 
+  // ---- The quote saves itself ---------------------------------------------
+  // What's typed in the quote is part of the drawing. A saved drawing is saved
+  // QUOTE_SAVE_MS after the quote stops changing, and at once when the quote
+  // closes. One never saved isn't (that would make a new drawing): the quote
+  // says so. With a save still to make when the page goes, it's started, the
+  // browser asks before leaving, and the backup is written at once
+  // (backupNow), so reopening offers it back (draftOfferOnOpen).
+  //   quoteSave: "idle" | "pending" | "saving" | "saved" | "failed" | "blocked"
+  const QUOTE_SAVE_MS = 1200;
+  const quoteTimer = useRef(null);
+  const quoteSavingRef = useRef(false);
+  // Typed in the quote since it was last saved (kept in the backup).
+  const quoteUnsavedRef = useRef(false);
+  const [quoteSave, setQuoteSave] = useState("idle");
+  const saveQuoteNow = async () => {
+    clearTimeout(quoteTimer.current); quoteTimer.current = null;
+    const id = currentProjectIdRef.current;
+    if (!id || readOnlyRef.current || openStateRef.current !== "ready") return;
+    // Try mode over the limit: the account would refuse it (and Save says why).
+    if (tryUsageRef.current.blocksSave(id)) { setQuoteSave("blocked"); return; }
+    quoteSavingRef.current = true;
+    setQuoteSave("saving");
+    let ok = false;
+    try { ok = (await saveProject()) !== false; } catch { ok = false; }
+    quoteSavingRef.current = false;
+    if (ok && !quoteTimer.current) quoteUnsavedRef.current = false;
+    // Typed again while that saved: its own save is on the way.
+    if (!quoteTimer.current) setQuoteSave(ok ? "saved" : "failed");
+  };
+  const saveQuoteNowRef = useRef(saveQuoteNow);
+  saveQuoteNowRef.current = saveQuoteNow;
+  onQuoteChangeRef.current = (before, after) => {
+    // Opening a drawing's first quote only builds it: nothing typed yet.
+    if (!before || before === after || JSON.stringify(before) === JSON.stringify(after)) return;
+    if (readOnlyRef.current) return;
+    quoteUnsavedRef.current = true;
+    if (!currentProjectIdRef.current) return; // never saved: the quote says so
+    setQuoteSave("pending");
+    clearTimeout(quoteTimer.current);
+    quoteTimer.current = setTimeout(() => saveQuoteNowRef.current(), QUOTE_SAVE_MS);
+  };
+  const closeQuote = () => {
+    setShowBoq(false);
+    if (quoteTimer.current) saveQuoteNow();
+  };
+  // The backup, written now (the debounced one below may not have run yet).
+  const backupNow = () => {
+    if (!didInit.current || openStateRef.current !== "ready") return;
+    const p = useEditor.getState().project;
+    if (!p || (countPlaced(p) === 0 && !(p.sheets || []).some(s => s && s.bgImage) && !p.boq)) return;
+    const draft = { savedAt: Date.now(), quoteUnsaved: quoteUnsavedRef.current, project: stripImagesForDraft(p) };
+    const id = currentProjectIdRef.current;
+    if (id) writeDraft(DRAFT_KEY, { projectId: id, version: versionsRef.current.get(id) ?? null, ...draft });
+    else writeDraft(NEW_DRAFT_KEY, { projectId: null, sessionKey: newKeyRef.current, ...draft });
+  };
+  const backupNowRef = useRef(backupNow);
+  backupNowRef.current = backupNow;
+  useEffect(() => {
+    const beforeUnload = (e) => {
+      if (!quoteTimer.current && !quoteSavingRef.current) return;
+      saveQuoteNowRef.current();
+      e.preventDefault(); e.returnValue = "";
+    };
+    const pageHide = () => backupNowRef.current();
+    const hidden = () => { if (document.visibilityState === "hidden") backupNowRef.current(); };
+    window.addEventListener("beforeunload", beforeUnload);
+    window.addEventListener("pagehide", pageHide);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      window.removeEventListener("beforeunload", beforeUnload);
+      window.removeEventListener("pagehide", pageHide);
+      document.removeEventListener("visibilitychange", hidden);
+    };
+  }, []);
+
   // Debounced local autosave — survives tab crashes / reloads (esp. on iPad).
   // Not while a drawing is opening: there is nothing of it to back up yet.
   useEffect(() => {
     if (!didInit.current || openState !== "ready") return;
-    if (countPlaced(project) === 0 && !bgImage) return;
+    if (countPlaced(project) === 0 && !bgImage && !project.boq) return;
     if (draftTimer.current) clearTimeout(draftTimer.current);
     draftTimer.current = setTimeout(() => {
       // Saved since this was scheduled: the next change backs it up by its id.
@@ -2525,7 +2610,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       // KB and reliably fits in localStorage — otherwise a freshly-imported
       // plan made the draft several MB, it silently failed, and a crash then
       // lost the user's work entirely.
-      const draft = { savedAt: Date.now(), project: stripImagesForDraft(project) };
+      const draft = { savedAt: Date.now(), quoteUnsaved: quoteUnsavedRef.current, project: stripImagesForDraft(project) };
       if (currentProjectId) {
         writeDraft(DRAFT_KEY, { projectId: currentProjectId, version: versionsRef.current.get(currentProjectId) ?? null, ...draft });
       } else {
@@ -2547,12 +2632,17 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const draftOfferOnOpen = (id, version, loaded) => {
     if (readOnlyRef.current) return null;
     const own = readDraft(DRAFT_KEY);
-    if (own && own.projectId === id && countPlaced(own.project) > countPlaced(loaded)) {
+    if (own && own.projectId === id) {
       const ownWork = (own.project._recordId ?? id) === id;
-      if (ownWork && own.version != null && own.version === version) {
-        return { kind: "restore", projectId: id, project: own.project, savedAt: own.savedAt };
+      const sameVersion = own.version != null && own.version === version;
+      const more = countPlaced(own.project) > countPlaced(loaded);
+      // Typed in the quote, and the page went before it saved.
+      const quote = ownWork && sameVersion && own.quoteUnsaved === true
+        && JSON.stringify(own.project.boq ?? null) !== JSON.stringify(loaded?.boq ?? null);
+      if (more || quote) {
+        if (ownWork && sameVersion) return { kind: "restore", projectId: id, project: own.project, savedAt: own.savedAt };
+        if (more && onOpenAsNew) return { kind: "new", project: own.project, savedAt: own.savedAt, fromUnsaved: false };
       }
-      if (onOpenAsNew) return { kind: "new", project: own.project, savedAt: own.savedAt, fromUnsaved: false };
     }
     const unsaved = onOpenAsNew ? readUnsavedDraft() : null;
     if (unsaved && countPlaced(unsaved.project) > 0) {
@@ -2658,6 +2748,16 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     if (syncState === "waiting" || syncState === "stuck" || syncState === "local") syncNow();
     setOpenNote(`${sync.text}. ${sync.detail.replace(/ Tap (to try now|for why)\.$/, "")}`);
   };
+  // The quote's own line (components/SheetParts BillOfQuantities): saving,
+  // then where the drawing's save is (the same words as the status bar), or
+  // why it isn't saved -- never nothing.
+  const quoteStatus = readOnly ? null
+    : !currentProjectId ? { tone: "amber", text: "Not saved yet", detail: "This drawing hasn't been saved yet, so its quote hasn't either. Save the drawing to keep it.", action: "Save drawing", onAction: () => saveProject() }
+    : quoteSave === "pending" || quoteSave === "saving" ? { tone: "amber", text: "Saving…", detail: "Saving this quote with the drawing." }
+    : quoteSave === "failed" ? { tone: "red", text: "Couldn't save", detail: "This quote couldn't be saved. What you typed is still here.", action: "Try again", onAction: () => saveQuoteNow() }
+    : quoteSave === "blocked" ? { tone: "red", text: "Not saved", detail: "This drawing is over the trial's symbol limit, so the quote can't be saved. What you typed is still here." }
+    : sync ? { ...sync, onClick: onSyncClick }
+    : null;
 
   // Try mode's Subscribe: save the drawing first (when the save is allowed) so
   // nothing is lost going through checkout, then open the Subscribe screen.
@@ -2715,7 +2815,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     // Still opening, or the open failed: there is no drawing here to keep.
     if (openStateRef.current !== "ready") { go(); return; }
     const p = useEditor.getState().project;
-    const hasWork = countPlaced(p) > 0 || (p?.sheets || []).some(s => s && s.bgImage);
+    const hasWork = countPlaced(p) > 0 || (p?.sheets || []).some(s => s && s.bgImage) || Boolean(p?.boq);
     if (readOnlyRef.current) { // lapsed: nothing can be saved
       if (lapsedWhileOpen.current && hasWork &&
           !confirm("Your account is now view-only, so any changes since your last save can't be saved. Download or print a copy from this screen first if you need them. Leave anyway?")) return;
@@ -3077,7 +3177,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
 
       {/* ==================== BILL OF QUANTITIES ==================== */}
       {showBoq && (
-        <BillOfQuantities project={project} updateBoq={updateBoq} onClose={() => setShowBoq(false)} readOnly={readOnly} />
+        <BillOfQuantities project={project} updateBoq={updateBoq} onClose={closeQuote} readOnly={readOnly} saveStatus={quoteStatus} />
       )}
 
       {/* ==================== TITLE BLOCK TEMPLATE ==================== */}
