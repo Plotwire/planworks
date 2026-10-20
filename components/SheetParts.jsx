@@ -8,7 +8,7 @@ import {
   Palette as PaletteIcon, Ruler, Hand, Type, Printer, Settings, Search, Sun, Moon, Mail,
   ChevronRight, ChevronLeft, X, FileText, PanelLeftClose, PanelLeftOpen,
   Grid3x3, ChevronDown, Check, ClipboardList, Plus, Clock, LayoutPanelTop, ImagePlus, SlidersHorizontal, Building2, PencilRuler, Keyboard,
-  Crop,
+  Crop, Info,
 } from "lucide-react";
 import {
   SYMBOLS, SYMBOL_META, CATEGORY_COLOURS, VIEWBOX,
@@ -2654,6 +2654,8 @@ export function ProjectManager({
 /* ============================================================================
  * BOQ TEMPLATE EDITOR — edit the default items/specs/sections saved per account.
  * ========================================================================= */
+// onClose({ changed, saved }): changed -- anything was changed this time;
+// saved -- resolves to { ok, error } once what was typed is kept.
 export function BoqTemplateEditor({ saved, savedPrefs, onSave, onClose }) {
   const [tpl, setTpl] = useState(() => templateForEditing(saved));
   const [vatOn, setVatOn] = useState(savedPrefs?.vatOn !== false);
@@ -2677,6 +2679,7 @@ export function BoqTemplateEditor({ saved, savedPrefs, onSave, onClose }) {
   const stored = useRef(null);
   if (stored.current === null) stored.current = snap(tpl, vatOn);
   const dirty = useRef(false), timer = useRef(null);
+  const changed = useRef(false), lastError = useRef(null);
   const saveNow = () => {
     clearTimeout(timer.current); timer.current = null;
     if (!dirty.current) return Promise.resolve(true);
@@ -2685,14 +2688,15 @@ export function BoqTemplateEditor({ saved, savedPrefs, onSave, onClose }) {
     const { tpl: t, vatOn: v } = latest.current;
     return Promise.resolve()
       .then(() => onSave(templateForSaving(t), { ...(savedPrefs || {}), vatOn: v }))
-      .then(() => { stored.current = snap(t, v); if (!dirty.current) setSave("saved"); setSaveError(null); return true; },
-        (e) => { dirty.current = true; setSave("failed"); setSaveError(e?.message || String(e)); return false; });
+      .then(() => { stored.current = snap(t, v); lastError.current = null; if (!dirty.current) setSave("saved"); setSaveError(null); return true; },
+        (e) => { dirty.current = true; lastError.current = e?.message || String(e); setSave("failed"); setSaveError(lastError.current); return false; });
   };
   const saveRef = useRef(saveNow);
   saveRef.current = saveNow;
   useEffect(() => {
     if (snap(tpl, vatOn) === stored.current) { dirty.current = false; clearTimeout(timer.current); setSave((v) => (v === "editing" ? "saved" : v)); return; }
     dirty.current = true;
+    changed.current = true;
     setSave("editing");
     clearTimeout(timer.current);
     timer.current = setTimeout(() => saveRef.current(), 600);
@@ -2712,7 +2716,10 @@ export function BoqTemplateEditor({ saved, savedPrefs, onSave, onClose }) {
       if (dirty.current) saveRef.current();
     };
   }, []);
-  const close = () => { saveNow(); onClose(); };
+  const close = () => {
+    const done = saveNow().then((ok) => ({ ok, error: lastError.current }));
+    onClose({ changed: changed.current, saved: done });
+  };
   const status = save === "failed"
     ? { tone: "red", text: "Couldn't save", detail: `Not saved: ${saveError || "unknown error"}. Your changes are still here. Press Save presets to try again.` }
     : save === "editing" || save === "saving" ? { tone: "amber", text: "Saving…", detail: "Saving your changes." }
@@ -2747,9 +2754,15 @@ export function BoqTemplateEditor({ saved, savedPrefs, onSave, onClose }) {
           </div>
           <button onClick={close} aria-label="Close" className="text-slate-300 hover:text-white"><X size={18}/></button>
         </div>
-        <div className="px-6 py-2.5 bg-[#ECF8FA] border-b border-[#3FB7C9]/30 text-[11px] text-[#22808F]">
+        <div className="px-6 pt-3.5 pb-3 shrink-0">
+          <div role="note" className="flex items-start gap-2.5 rounded-lg border border-sky-300 bg-sky-50 px-3.5 py-2.5 text-[13px] leading-snug text-sky-950">
+            <Info size={17} className="mt-px shrink-0 text-sky-700" aria-hidden="true"/>
+            <span><b>Presets are your starting template.</b> Changes apply to new quotes only. Quotes you’ve already started keep their own wording.</span>
+          </div>
+        </div>
+        <div className="px-6 py-2.5 bg-[#ECF8FA] border-y border-[#3FB7C9]/30 text-[11px] text-[#22808F]">
           Edit the standard items, specs and section names used every time a new quote is created. Items marked <b>auto</b> still pull their quantity from the drawing.
-          {" "}Changes save as you type. A quote already made keeps its own wording: change it in the quote, or use <b>Reset to presets</b> there.
+          {" "}Changes save as you type.
         </div>
         <div className="flex-1 overflow-y-auto px-6 py-4 text-slate-800">
           {tpl.map((sec, si) => (
@@ -2825,6 +2838,21 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
     return reconcileBoq(base, project, SYMBOL_META, findSymbol);
   });
   const [showTemplate, setShowTemplate] = useState(false);
+  // After the presets box closes with changes in it: "saved" (for a few
+  // seconds) or { error } -- never silent. The presets' upload, to say so if
+  // the account wouldn't take them.
+  const [presetNote, setPresetNote] = useState(null);
+  const [presetUpload, setPresetUpload] = useState({ state: "saved", error: null });
+  useEffect(() => watchSettingsUpload(setPresetUpload), []);
+  useEffect(() => {
+    if (presetNote !== "saved") return;
+    const t = setTimeout(() => setPresetNote(null), 7000);
+    return () => clearTimeout(t);
+  }, [presetNote]);
+  const closePresets = ({ changed = false, saved = null } = {}) => {
+    setShowTemplate(false);
+    if (changed && saved) saved.then((r) => setPresetNote(r.ok ? "saved" : { error: r.error || "unknown error" }));
+  };
 
   // Persist edits to the project (saved with the project on Save).
   useEffect(() => { updateBoq?.(boq); /* eslint-disable-next-line */ }, [boq]);
@@ -3010,6 +3038,22 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
             <button onClick={onClose} aria-label="Close" className="text-slate-300 hover:text-white"><X size={18}/></button>
           </div>
         </div>
+
+        {presetNote && (() => {
+          const refused = presetNote === "saved" && presetUpload.state === "failed";
+          const bad = presetNote !== "saved" || refused;
+          return (
+            <div role="status" className={`flex items-center gap-2 px-6 py-2 border-b text-[12px] shrink-0 ${bad ? "bg-red-50 border-red-200 text-red-900" : "bg-emerald-50 border-emerald-200 text-emerald-900"}`}>
+              <StatusIcon tone={bad ? "red" : "green"} size={16}/>
+              <span>{presetNote !== "saved"
+                ? `Presets couldn't be saved (${presetNote.error}). Open Presets and press Save presets to try again. This quote is unchanged.`
+                : refused
+                  ? "Presets saved on this device, but your account wouldn't take them yet. Plotwire keeps trying. This quote is unchanged."
+                  : "Presets saved. This quote is unchanged. Edit its lines directly if needed."}</span>
+              <button onClick={() => setPresetNote(null)} aria-label="Dismiss" className="ml-auto opacity-60 hover:opacity-100"><X size={14}/></button>
+            </div>
+          );
+        })()}
 
         {readOnly && (
           <div className="px-6 py-2 bg-amber-50 border-b border-amber-200 text-[11.5px] text-amber-900 shrink-0">
@@ -3264,7 +3308,7 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
           saved={boqTemplate}
           savedPrefs={boqPrefs}
           onSave={async (tpl, prefs) => { await saveBoqTemplate?.(tpl, prefs); }}
-          onClose={() => setShowTemplate(false)}
+          onClose={closePresets}
         />
       )}
     </div>

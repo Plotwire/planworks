@@ -462,12 +462,14 @@ function AppGates({ children }) {
     setTitleBlock(next);
   }, []);
 
-  // Presets = the item template plus BOQ preferences, saved together.
+  // Presets = the item template plus BOQ preferences, saved together. Shown
+  // at once, so if the save fails the presets box reopens with what was typed
+  // (and says it isn't saved) rather than losing it.
   const saveBoqTemplate = useCallback(async (tpl, prefs) => {
     settingsRef.current = { ...settingsRef.current, boqTemplate: tpl, ...(prefs ? { boqPrefs: prefs } : {}) };
-    await changeSettings(sessionUserIdRef.current, { boqTemplate: tpl, ...(prefs ? { boqPrefs: prefs } : {}) });
     setBoqTemplate(tpl);
     if (prefs) setBoqPrefs(prefs);
+    await changeSettings(sessionUserIdRef.current, { boqTemplate: tpl, ...(prefs ? { boqPrefs: prefs } : {}) });
   }, []);
 
   // One BOQ preference (e.g. the last quote export choice), merged in and saved

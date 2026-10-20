@@ -41,17 +41,27 @@ master, 7636bdc): it's not new.
   device. If the save didn't finish, reopening the drawing shows **Recovered
   unsaved work** with **Restore**, and Restore brings your typing back.
 - A quote is a copy of your presets made when it's first opened, so changing
-  presets doesn't change quotes already made. The presets box now says so:
-  change the wording in the quote itself, or use **Reset to presets** there.
+  presets doesn't change quotes already made. The presets box now says so at
+  the top, in a blue note: **"Presets are your starting template. Changes
+  apply to new quotes only. Quotes you've already started keep their own
+  wording."** When you close the presets after changing them, the quote shows
+  a short green note: **"Presets saved. This quote is unchanged. Edit its
+  lines directly if needed."** (in red if they couldn't be saved). There's
+  no button to push presets into existing quotes.
 
 ## Part A: presets (laptop)
 
-**A1.** Open a TEST drawing → **Quote** → **Presets**. Change the
+**A1.** Open a TEST drawing → **Quote** → **Presets**. At the top there's a
+blue note: "Presets are your starting template. Changes apply to new quotes
+only. Quotes you've already started keep their own wording." Change the
 **Spec / notes** of the first item. Watch the light at the bottom: **Saving…**
 then **Saved**.
 
 **A2.** Click outside the presets box. The presets close; **the quote window
-stays open**. Press **Presets** again: your text is there.
+stays open**, with a green note at the top: "Presets saved. This quote is
+unchanged. Edit its lines directly if needed." It goes after a few seconds
+(or press its ×). The quote's own lines haven't changed. Press **Presets**
+again: your text is there. Close it without changing anything: no note.
 
 **A3.** Change it again and press **X** straight away. Reopen: it's there.
 Again with **Close**: it's there.
