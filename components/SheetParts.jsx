@@ -38,6 +38,7 @@ import { hasTrueScale, scaleBarFor, validRect, SYMBOL_SCALE } from "@/lib/planCr
 import { onStairs } from "@/lib/cad/planScale";
 import { isMissingCode, NEEDS_SIGNAL_ALERT } from "@/components/NeedsSignal";
 import { StatusPill, StatusIcon } from "@/components/StatusMark";
+import { watchSettingsUpload } from "@/lib/device/account";
 
 // Per-project title block. The editor publishes the *effective* title block
 // (the project's own, falling back to the account default) through this context
@@ -2659,34 +2660,96 @@ export function BoqTemplateEditor({ saved, savedPrefs, onSave, onClose }) {
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState(false);
 
+  // Saved as it's typed: a moment after the last change, and at once however
+  // the box closes (X, Close, a click outside) or the page goes. It goes to
+  // this device first and up to the account from there (lib/device/account),
+  // so nothing typed is dropped, and the line at the bottom says where it is.
+  //   save: "saved" (nothing new typed), "editing", "saving", "failed"
+  const [save, setSave] = useState("saved");
+  const [saveError, setSaveError] = useState(null);
+  const [upload, setUpload] = useState({ state: "saved", error: null });
+  useEffect(() => watchSettingsUpload(setUpload), []);
+  const latest = useRef({ tpl, vatOn });
+  latest.current = { tpl, vatOn };
+  // What's stored, to tell a real change from none (typed and put back, or
+  // React running the effect twice).
+  const snap = (t, v) => JSON.stringify([templateForSaving(t), v]);
+  const stored = useRef(null);
+  if (stored.current === null) stored.current = snap(tpl, vatOn);
+  const dirty = useRef(false), timer = useRef(null);
+  const saveNow = () => {
+    clearTimeout(timer.current); timer.current = null;
+    if (!dirty.current) return Promise.resolve(true);
+    dirty.current = false;
+    setSave("saving");
+    const { tpl: t, vatOn: v } = latest.current;
+    return Promise.resolve()
+      .then(() => onSave(templateForSaving(t), { ...(savedPrefs || {}), vatOn: v }))
+      .then(() => { stored.current = snap(t, v); if (!dirty.current) setSave("saved"); setSaveError(null); return true; },
+        (e) => { dirty.current = true; setSave("failed"); setSaveError(e?.message || String(e)); return false; });
+  };
+  const saveRef = useRef(saveNow);
+  saveRef.current = saveNow;
+  useEffect(() => {
+    if (snap(tpl, vatOn) === stored.current) { dirty.current = false; clearTimeout(timer.current); setSave((v) => (v === "editing" ? "saved" : v)); return; }
+    dirty.current = true;
+    setSave("editing");
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => saveRef.current(), 600);
+  }, [tpl, vatOn]);
+  // Closed with the quote window, or the page going: whatever's typed goes now.
+  useEffect(() => {
+    const leaving = (e) => {
+      if (!dirty.current) return;
+      saveRef.current();
+      if (e.type === "beforeunload") { e.preventDefault(); e.returnValue = ""; }
+    };
+    window.addEventListener("beforeunload", leaving);
+    window.addEventListener("pagehide", leaving);
+    return () => {
+      window.removeEventListener("beforeunload", leaving);
+      window.removeEventListener("pagehide", leaving);
+      if (dirty.current) saveRef.current();
+    };
+  }, []);
+  const close = () => { saveNow(); onClose(); };
+  const status = save === "failed"
+    ? { tone: "red", text: "Couldn't save", detail: `Not saved: ${saveError || "unknown error"}. Your changes are still here. Press Save presets to try again.` }
+    : save === "editing" || save === "saving" ? { tone: "amber", text: "Saving…", detail: "Saving your changes." }
+    : upload.state === "failed" ? { tone: "red", text: "Not uploaded", detail: `Saved on this device, but your account wouldn't take it${upload.error ? ` (${upload.error})` : ""}. Plotwire keeps trying.` }
+    : upload.state === "waiting" ? { tone: "amber", text: "Saved on this device, will upload when signal returns", detail: "Saved on this device. It uploads by itself when there's signal." }
+    : upload.state === "uploading" ? { tone: "amber", text: "Saved on this device, uploading…", detail: "Saved on this device, and going up to your account now." }
+    : { tone: "green", text: "Saved", detail: "Saved to your account." };
+
   const setItem = (si, id, f, v) => setTpl(t => t.map((sec, i) => i !== si ? sec : ({ ...sec, items: sec.items.map(it => it.id === id ? { ...it, [f]: v } : it) })));
   const addItem = (si) => setTpl(t => t.map((sec, i) => i !== si ? sec : ({ ...sec, items: [...sec.items, newTemplateItem()] })));
   const removeItem = (si, id) => setTpl(t => t.map((sec, i) => i !== si ? sec : ({ ...sec, items: sec.items.filter(it => it.id !== id) })));
   const setTitle = (si, v) => setTpl(t => t.map((sec, i) => i !== si ? sec : ({ ...sec, title: v })));
 
+  // Save now (also the way to try again after a failure).
   const doSave = async () => {
     setBusy(true);
-    try {
-      await onSave(templateForSaving(tpl), { ...(savedPrefs || {}), vatOn });
-      setFlash(true); setTimeout(() => setFlash(false), 1800);
-    } catch (e) { alert("Couldn't save presets: " + (e?.message || e)); }
-    finally { setBusy(false); }
+    dirty.current = true;
+    const ok = await saveNow();
+    setBusy(false);
+    if (ok) { setFlash(true); setTimeout(() => setFlash(false), 1800); }
   };
 
   const cell = "w-full bg-transparent outline-none rounded px-1.5 py-1 focus:bg-[#ECF8FA] focus:ring-1 focus:ring-[#3FB7C9]/40";
 
   return (
-    <div className="fixed inset-0 z-[60] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[60] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={(e) => { e.stopPropagation(); close(); }}>
       <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-2xl ring-1 ring-slate-200 w-full max-w-3xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
         <div className="flex items-center justify-between px-6 h-14 bg-[#2C3E50] shrink-0">
           <div>
             <div className="text-[9px] tracking-[0.3em] uppercase text-[#9fd8e2]">Quote presets</div>
             <div className="text-white font-semibold text-[15px] -mt-0.5" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>Default items &amp; specifications</div>
           </div>
-          <button onClick={onClose} className="text-slate-300 hover:text-white"><X size={18}/></button>
+          <button onClick={close} aria-label="Close" className="text-slate-300 hover:text-white"><X size={18}/></button>
         </div>
         <div className="px-6 py-2.5 bg-[#ECF8FA] border-b border-[#3FB7C9]/30 text-[11px] text-[#22808F]">
           Edit the standard items, specs and section names used every time a new quote is created. Items marked <b>auto</b> still pull their quantity from the drawing.
+          {" "}Changes save as you type. A quote already made keeps its own wording: change it in the quote, or use <b>Reset to presets</b> there.
         </div>
         <div className="flex-1 overflow-y-auto px-6 py-4 text-slate-800">
           {tpl.map((sec, si) => (
@@ -2722,10 +2785,10 @@ export function BoqTemplateEditor({ saved, savedPrefs, onSave, onClose }) {
               <input type="checkbox" checked={vatOn} onChange={(e) => setVatOn(e.target.checked)} className="accent-[var(--action)]"/>
               Charge VAT (20%)
             </label>
-            <div className="text-[10px] text-slate-400">Presets apply to every new quote.</div>
+            <StatusPill tone={status.tone} text={status.text} title={status.detail} size="sm" />
           </div>
           <div className="flex gap-2">
-            <button onClick={onClose} className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-md text-[10px] uppercase tracking-wider">Close</button>
+            <button onClick={close} className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-md text-[10px] uppercase tracking-wider">Close</button>
             <button onClick={doSave} disabled={busy} className={`px-4 py-2 rounded-md text-[10px] uppercase tracking-wider font-semibold flex items-center gap-1.5 ${flash ? "bg-emerald-500 text-white" : "bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)]"}`}>
               {flash ? "Saved ✓" : busy ? "Saving…" : "Save presets"}
             </button>
@@ -2738,7 +2801,10 @@ export function BoqTemplateEditor({ saved, savedPrefs, onSave, onClose }) {
 
 // readOnly: a lapsed subscription's view -- nothing can be edited, but the
 // materials list and client quote can still be chosen and downloaded.
-export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false }) {
+// saveStatus: where the quote's save is ({ tone, text, detail, onClick?,
+// action?, onAction? }, components/ElectricalPlanTool quoteStatus), shown by
+// Close, so it's never left unsaid.
+export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false, saveStatus = null }) {
   const { boqTemplate, boqPrefs, saveBoqTemplate, saveBoqPrefs, companyBrand, access = {} } = useApp();
   const [customOpen, setCustomOpen] = useState(false);
   // Try mode: everything on screen works -- prices, totals, labour, VAT,
@@ -3170,7 +3236,15 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
               Reset to presets
             </button>
           </div>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
+            {saveStatus && (
+              <span className="flex items-center gap-1.5 min-w-0" data-quote-save={saveStatus.tone}>
+                <StatusPill tone={saveStatus.tone} text={saveStatus.text} title={saveStatus.detail} size="sm" onClick={saveStatus.onClick || null} />
+                {saveStatus.action && (
+                  <button onClick={saveStatus.onAction} className="px-2.5 py-1.5 rounded-md text-[10px] uppercase tracking-wider font-semibold bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)]">{saveStatus.action}</button>
+                )}
+              </span>
+            )}
             <button onClick={onClose} className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-md text-[10px] uppercase tracking-wider">Close</button>
             <button onClick={downloadCSV} className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-md text-[10px] uppercase tracking-wider font-semibold flex items-center gap-1.5"><Download size={12}/> CSV</button>
             <button onClick={downloadPDF} disabled={pdfBusy} style={pdfBusy ? { opacity: 0.6, cursor: "wait" } : undefined}
