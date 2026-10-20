@@ -2455,8 +2455,9 @@ export function Stat({ label, value }) {
 // Sketch a plan tool passes its own Select and Pan).
 // labelled (the drawing editor): compact buttons, icon above a word, in the
 // standard solid teal so a new user can't miss them (still 44px tall, a
-// fingertip on iPad); the tool in use goes dark navy with light-teal words,
-// so it's never mistaken for the others.
+// fingertip on iPad), straight on the grey with no panel behind them; the
+// tool in use goes dark navy with light-teal words, so it's never mistaken
+// for the others.
 // lead: one action button above the tools ({ label, icon, tip, onClick }),
 // the editor's Floor plan. Without labelled, the plain icon toolbar (the
 // Floor Plan sketch's).
@@ -2468,14 +2469,14 @@ export function FloatingToolbar({ tool, setTool, tools = ["select", "wire"], lab
     const on = "bg-[#1A2530] text-[#5FD0E0] ring-2 ring-[#3FB7C9]";
     return (
       <div role="toolbar" aria-label="Tools" data-tools-labelled=""
-           className="absolute top-4 left-4 z-20 w-[52px] flex flex-col gap-[3px] p-1 bg-white dark:bg-[#16202B] rounded-xl ring-1 ring-slate-200/70 dark:ring-[#2A3947] shadow-[0_10px_30px_-10px_rgba(16,28,40,0.22)]">
+           className="absolute top-5 left-5 z-20 w-[44px] flex flex-col gap-[3px]">
         {lead && (
           <>
             <button type="button" onClick={lead.onClick} title={lead.tip} aria-label={lead.label} className={`${btn} ${idle}`}>
               <lead.icon size={15}/>
               <span>{lead.label}</span>
             </button>
-            <div aria-hidden="true" className="h-px mx-1 my-px bg-slate-200 dark:bg-[#2A3947]"/>
+            <div aria-hidden="true" className="h-1.5"/>
           </>
         )}
         {list.map(([key, info]) => {
