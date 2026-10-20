@@ -12,7 +12,7 @@
  * Key specs are strings: "mod+shift+z", "e", "esc", "shift+drag". Tokens:
  *   mod (⌘ on Mac / iPad, Ctrl elsewhere), shift, alt, esc, enter, del,
  *   backspace, space, plus, minus, digits (0-9), any single character, and
- *   the mouse words drag / mdrag / wheel (shown as text, not as a key).
+ *   the mouse words drag / mdrag / wheel / click (shown as text, not as a key).
  * ========================================================================= */
 
 import React, { useEffect, useRef, useState, useCallback, useId } from "react";
@@ -40,7 +40,7 @@ const NAME = {
   space: "Space", plus: "+", minus: "-", digits: "0–9",
 };
 const ARIA = { mod: IS_MAC ? "Meta" : "Control", shift: "Shift", alt: "Alt", esc: "Escape", enter: "Enter", del: "Delete", backspace: "Backspace", space: "Space", plus: "+", minus: "-" };
-const MOUSE = { drag: "drag", mdrag: "middle-drag", wheel: "scroll wheel" };
+const MOUSE = { drag: "drag", mdrag: "middle-drag", wheel: "scroll wheel", click: "click" };
 const MODS = new Set(["mod", "shift", "alt"]);
 const name = (t) => NAME[t] || MOUSE[t] || t.toUpperCase();
 

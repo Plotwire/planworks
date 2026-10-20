@@ -1,12 +1,13 @@
 ﻿"use client";
 
-import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from "react";
 import {
   Upload, Trash2, Save, FolderOpen, Download, Undo2, Redo2,
   MousePointer2, Cable, RotateCw, ZoomIn, ZoomOut, Maximize2,
   Palette, Ruler, Hand, Sparkles, Type, Printer, Settings,
-  ChevronRight, X, FileText, Eye, EyeOff, Layers,
+  ChevronRight, X, FileText, Eye, EyeOff, Layers, FlipHorizontal2,
 } from "lucide-react";
+import { snapLine, lineOk, mirrorCopies, inBox } from "@/lib/planMirror";
 import { listProjects, getProjectData, getProjectRecord, deleteProjectRow, unreferencedPlanPaths } from "@/lib/db";
 import { defaultDrawingName } from "@/lib/drawingName";
 import { uploadPlanImage, signPlanImages, deletePlanImages, blobToDataUrl } from "@/lib/planImages";
@@ -413,6 +414,9 @@ const SHORTCUTS = [
     ["Rotate the selected symbol 15°", ["r"]],
     ["Rotate in 15° steps (drag the handle)", ["shift+drag"]],
     ["Delete the selected item", ["del", "backspace"]],
+    ["Select all symbols on this floor (for Mirror copy)", ["mod+a"]],
+    ["Add a symbol to the selection, or take it out", ["shift+click"]],
+    ["Place the mirror copies", ["enter"]],
     ["Undo", ["mod+z"]],
     ["Redo", ["mod+shift+z", "mod+y"]],
     ["Save", ["mod+s"]],
@@ -574,6 +578,14 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const tool = useEditor(s => s.tool);
   const setTool = useEditor(s => s.setTool);
   const [wireStart, setWireStart] = useState(null);
+  // Select several & Mirror copy (lib/planMirror): the symbols picked on this
+  // floor; picking on (a tap toggles a symbol, a drag draws a box); the box
+  // being drawn; and the mirror line while it's set ({ a, bRaw, cursor, free }:
+  // the second point as clicked, straightened unless free).
+  const [picking, setPicking] = useState(false);
+  const [picked, setPicked] = useState([]);
+  const [pickBox, setPickBox] = useState(null);
+  const [mirror, setMirror] = useState(null);
   const zoom = useEditor(s => s.zoom);
   const setZoom = useEditor(s => s.setZoom);
   const pan = useEditor(s => s.pan);
@@ -1403,6 +1415,13 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       }
       return;
     }
+    if (e.shiftKey && tool === "select") {
+      const keep = selectedId && selectedId !== item.id ? [selectedId] : [];
+      startPicking();
+      setSelectedId(null);
+      setPicked(ids => { const next = [...new Set([...ids, ...keep])]; return next.includes(item.id) ? next.filter(x => x !== item.id) : [...next, item.id]; });
+      return;
+    }
     setSelectedId(item.id);
     setSelectedAnnoId(null);
     setSelectedWireId(null);
@@ -1627,6 +1646,15 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
 
   const onViewportMouseMove = (e) => {
     if (pinchActiveRef.current) return;   // pinch-zoom owns the gesture
+    if (pickBox) {
+      const p = clientToDrawing(e.clientX, e.clientY);
+      setPickBox(b => (b ? { ...b, x1: p.x, y1: p.y } : b));
+      return;
+    }
+    if (mirror && mirror.a && !mirror.bRaw) {
+      const p = clientToDrawing(e.clientX, e.clientY);
+      setMirror(m => (m && !m.bRaw ? { ...m, cursor: p } : m));
+    }
     if (isPanning) {
       setPan({
         x: panStart.current.panX + (e.clientX - panStart.current.x),
@@ -1731,6 +1759,11 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   };
 
   const onViewportMouseUp = (e) => {
+    if (pickBox) {
+      const hits = inBox(placed, pickBox).map(p => p.id);
+      setPicked(ids => [...new Set([...ids, ...hits])]);
+      setPickBox(null);
+    }
     setDraggingPlacedId(null);
     setDraggingFurnId(null);
     setDraggingAnno(null);
@@ -1742,6 +1775,86 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   };
   const onViewportDoubleClick = (e) => {
     // Walls finish on the second click now, so nothing to do here.
+  };
+
+  // ---------- Select several & Mirror copy ----------
+  const pickedSet = useMemo(() => new Set(picked), [picked]);
+  const pickedItems = placed.filter(p => pickedSet.has(p.id));
+  const mirrorB = mirror && mirror.a ? snapLine(mirror.a, mirror.bRaw || mirror.cursor, mirror.free) : null;
+  const mirrorSet = Boolean(mirror && mirror.bRaw && lineOk(mirror.a, mirrorB));
+  let ghostN = 0;
+  const mirrorPlan = mirror && lineOk(mirror.a, mirrorB) && pickedItems.length
+    ? mirrorCopies(pickedItems, wires, mirror.a, mirrorB, DRAW, () => "ghost_" + (ghostN++), () => "")
+    : null;
+  const offDrawing = (c) => c.x < 0 || c.y < 0 || c.x > DRAW.w || c.y > DRAW.h;
+  const startPicking = () => {
+    setPicking(true); setMirror(null); setTool("select"); setWireStart(null);
+    setSelectedFurnId(null); setSelectedAnnoId(null); setSelectedWireId(null); setSelectedWallId(null);
+  };
+  const stopPicking = () => { setPicking(false); setPicked([]); setPickBox(null); setMirror(null); };
+  const togglePicked = (id) => setPicked(ids => (ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]));
+  const pickAllOnFloor = () => { startPicking(); setSelectedId(null); setPicked(placed.map(p => p.id)); };
+  const startMirror = () => { if (pickedItems.length) setMirror({ a: null, bRaw: null, cursor: null, free: false }); };
+  const placeMirrorPoint = (clientX, clientY) => {
+    const p = clientToDrawing(clientX, clientY);
+    setMirror(m => {
+      if (!m || m.bRaw) return m;
+      if (!m.a) return { ...m, a: p, cursor: p };
+      return lineOk(m.a, snapLine(m.a, p, m.free)) ? { ...m, bRaw: p } : m;
+    });
+  };
+  // The copies, in one change (one undo), picked afterwards. Wires joining two
+  // of the picked symbols come too. Never placed off the drawing area.
+  const placeMirrorCopies = () => {
+    if (!mirrorSet || !pickedItems.length) return;
+    let n = 0;
+    const stamp = Date.now();
+    const id = (k) => `${k}_${stamp}_${n++}_${Math.random().toString(36).slice(2, 6)}`;
+    const r = mirrorCopies(pickedItems, wires, mirror.a, mirrorB, DRAW, () => id("p"), () => id("w"));
+    if (r.outside) return;
+    snapshot();
+    updateProject({ placed: [...placed, ...r.copies], wires: [...wires, ...r.wires] });
+    // Mirror copy is done: the bar goes (the copies stay, not picked).
+    stopPicking();
+  };
+  const deletePicked = () => {
+    if (!pickedItems.length) return;
+    snapshot();
+    const gone = new Set(pickedItems.map(p => p.id));
+    updateProject({ placed: placed.filter(p => !gone.has(p.id)), wires: wires.filter(w => !gone.has(w.fromId) && !gone.has(w.toId)) });
+    setPicked([]);
+  };
+  // The bar above the drawing keeps the tallest height it has had while open,
+  // so the drawing below doesn't jump up and down from one step to the next.
+  const mirrorBarRef = useRef(null);
+  const mirrorBarMax = useRef(0);
+  useLayoutEffect(() => {
+    const el = mirrorBarRef.current;
+    if (!el) { mirrorBarMax.current = 0; return; }
+    const h = el.offsetHeight;
+    if (h > mirrorBarMax.current) { mirrorBarMax.current = h; el.style.minHeight = `${h}px`; }
+  });
+  // Another floor: nothing picked there yet.
+  useEffect(() => { setPicked([]); setPickBox(null); setMirror(null); }, [project.activeSheetId]);
+  // While the mirror line is being set, a press in the drawing area is one of
+  // its points (whatever is under it). While picking, a press on a symbol
+  // picks or unpicks it, and anywhere else in the drawing area starts a box.
+  const onViewportPointerDownCapture = (e) => {
+    if (!mirror && !picking) return;
+    if (e.button !== 0 || spacePressed || tool === "pan" || pinchActiveRef.current) return;
+    if (!e.target.closest?.("[data-drawing-bg]")) return;
+    if (mirror) {
+      if (mirror.bRaw) return;
+      e.stopPropagation(); e.preventDefault();
+      placeMirrorPoint(e.clientX, e.clientY);
+      return;
+    }
+    e.stopPropagation(); e.preventDefault();
+    const hit = e.target.closest?.("[data-sym-id]");
+    if (hit) { togglePicked(hit.getAttribute("data-sym-id")); return; }
+    const p = clientToDrawing(e.clientX, e.clientY);
+    setPickBox({ x0: p.x, y0: p.y, x1: p.x, y1: p.y });
+    try { viewportRef.current?.setPointerCapture?.(e.pointerId); } catch {}
   };
 
   // ---------- Symbol actions ----------
@@ -1852,6 +1965,11 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         return;
       }
       if (wallDraft && e.key === "Escape") { e.preventDefault(); cancelWall(); return; }
+      if (mirror && e.key === "Escape") { e.preventDefault(); stopPicking(); return; }
+      if (picking && e.key === "Escape") { e.preventDefault(); stopPicking(); return; }
+      if (mirror && e.key === "Enter") { e.preventDefault(); placeMirrorCopies(); return; }
+      if ((e.metaKey || e.ctrlKey) && (e.key || "").toLowerCase() === "a" && !readOnly) { e.preventDefault(); pickAllOnFloor(); return; }
+      if ((e.key === "Delete" || e.key === "Backspace") && pickedItems.length && !readOnly) { e.preventDefault(); deletePicked(); return; }
       if (e.key === "Delete" || e.key === "Backspace") deleteSelected();
       else if (e.key === "r" || e.key === "R") rotateSelected();
       else if (e.key === "Escape") { setSelectedId(null); setSelectedFurnId(null); setSelectedWallId(null); setSelectedAnnoId(null); setSelectedWireId(null); setWireStart(null); setTool("select"); setPrintPreview(false); setShowMeta(false); setShowBoq(false); setShowProjects(false); }
@@ -1865,10 +1983,11 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         if (tryUsageRef.current.enabled) tryPrompt.show(LOCKED.export); // Try mode: printing is locked
         else setPrintPreview(true);
       }
-      else if (e.key === "v" || e.key === "V") setTool("select");
-      else if (e.key === "w" || e.key === "W") setTool("wire");
-      else if (e.key === "h" || e.key === "H") setTool("pan");
-      else if (e.key === "n" || e.key === "N") setTool("note");
+      // A tool key leaves Select several (as choosing the tool on the bar does).
+      else if (e.key === "v" || e.key === "V") { stopPicking(); setTool("select"); }
+      else if (e.key === "w" || e.key === "W") { stopPicking(); setTool("wire"); }
+      else if (e.key === "h" || e.key === "H") { stopPicking(); setTool("pan"); }
+      else if (e.key === "n" || e.key === "N") { stopPicking(); setTool("note"); }
       else if (e.key === "+" || e.key === "=") {
         const r = viewportRef.current?.getBoundingClientRect();
         if (r) zoomAt(r.left + r.width/2, r.top + r.height/2, 1.2);
@@ -2998,6 +3117,56 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
             onRename={renameSheet}
             onDelete={deleteSheet}
           />
+          {/* Select several / Mirror copy: a bright bar of its own above the
+              drawing (the drawing area gets shorter, nothing is covered), with
+              what to do next in words, big buttons and an obvious Cancel. It
+              goes when mirror copy ends: placed, cancelled or Esc. */}
+          {(picking || mirror) && !readOnly && (() => {
+            const n = pickedItems.length;
+            const tapOr = TOUCH ? "Tap" : "Click";
+            const copies = n === 1 ? "1 copy" : `${n} copies`;
+            const off = mirrorPlan ? mirrorPlan.outside : 0;
+            const [title, tip] = !mirror
+              ? (n ? [`${n === 1 ? "1 symbol" : `${n} symbols`} picked. Add more, or press Mirror copy`, "Drag a box round symbols, or tap them, to add or take them out."]
+                   : ["Pick the symbols to copy: drag a box round them, or tap them", "Or press Select all on this floor."])
+              : !mirror.a ? [`${tapOr} two points on the party wall to set the mirror line`, "Anywhere along the party wall's centre line. Zoom in for accuracy."]
+              : !mirror.bRaw ? [`Now ${tapOr.toLowerCase()} a second point on the same line`, "Further along the party wall. The line stays straight unless you untick Straight line."]
+              : off ? [`${off === 1 ? "1 copy" : `${off} copies`} would land off the drawing area: redraw the line`, "Press Redraw line and set a different line."]
+              : [`Check where the faint copies land, then press Place ${copies}`, "The faint symbols show where the copies will go."];
+            const big = "min-h-[44px] px-3 lg:px-4 rounded-xl text-[14px] font-semibold flex items-center gap-2 whitespace-nowrap";
+            const plain = `${big} bg-white text-[#1A2530] ring-1 ring-[#1A2530]/25 hover:bg-amber-50 disabled:opacity-50`;
+            const main = `${big} bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)] shadow-sm disabled:opacity-45`;
+            return (
+              <div ref={mirrorBarRef} data-mirror-bar="" role="region" aria-label="Mirror copy"
+                   className="shrink-0 relative z-20 flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5 bg-amber-300 text-[#1A2530] border-b-2 border-amber-500 shadow-[0_8px_18px_-10px_rgba(16,28,40,0.45)]">
+                <div className="flex items-center gap-3 min-w-0 flex-1 basis-[280px] min-h-[44px]" title={tip}>
+                  <span className="shrink-0 w-10 h-10 rounded-xl bg-[#1A2530] text-amber-300 flex items-center justify-center" aria-hidden="true"><FlipHorizontal2 size={22}/></span>
+                  <div className="min-w-0 text-[15px] font-bold leading-snug" role="status">{title}</div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {!mirror ? (
+                    <>
+                      <button type="button" onClick={pickAllOnFloor} className={plain}>Select all on this floor</button>
+                      <button type="button" onClick={startMirror} disabled={!n} className={main}><FlipHorizontal2 size={18}/> Mirror copy</button>
+                    </>
+                  ) : (
+                    <>
+                      <label className={`${big} bg-white/70 ring-1 ring-[#1A2530]/20 cursor-pointer select-none`}>
+                        <input type="checkbox" className="w-5 h-5 accent-[#2C97A8]" checked={!mirror.free} onChange={(e) => setMirror(m => ({ ...m, free: !e.target.checked }))}/>
+                        Straight line
+                      </label>
+                      {/* Always there (off until a point is set), so the bar keeps its shape. */}
+                      <button type="button" disabled={!mirror.a} onClick={() => setMirror(m => ({ ...m, a: null, bRaw: null, cursor: null }))} className={plain}>Redraw line</button>
+                      <button type="button" onClick={placeMirrorCopies} disabled={!mirrorSet || !!off} className={main}>
+                        <FlipHorizontal2 size={18}/> Place {copies}
+                      </button>
+                    </>
+                  )}
+                  <button type="button" onClick={stopPicking} className={`${plain} ring-2 ring-[#1A2530]/60`}><X size={18}/> Cancel</button>
+                </div>
+              </div>
+            );
+          })()}
           <div className="relative flex-1 overflow-hidden" style={{ cursor: viewportCursor }}>
           <Workspace
             viewportRef={viewportRef}
@@ -3039,10 +3208,23 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
             onAnnotationBodyMouseDown={onAnnotationBodyMouseDown}
             onAnnotationAnchorMouseDown={onAnnotationAnchorMouseDown}
             startRotating={setRotatingId}
+            onViewportPointerDownCapture={onViewportPointerDownCapture}
+            multi={{
+              selected: pickedSet,
+              box: pickBox,
+              line: mirror && mirror.a ? { a: mirror.a, b: mirrorB } : null,
+              ghosts: mirrorPlan ? mirrorPlan.copies.map(c => ({ ...c, bad: offDrawing(c) })) : null,
+            }}
           />
 
           {/* Floating tool toolbar */}
-          <FloatingToolbar tool={tool} setTool={(t) => { setTool(t); setWireStart(null); if (t !== "wall") cancelWall(); }} />
+          <FloatingToolbar tool={picking ? "several" : tool} tools={readOnly ? ["select", "wire"] : ["select", "wire", "several"]}
+            setTool={(t) => {
+              if (t === "several") { startPicking(); return; }
+              stopPicking();
+              setTool(t); setWireStart(null); if (t !== "wall") cancelWall();
+            }} />
+
 
           {/* Floor Plan — opens the sketch for this drawing (round-trips back here) */}
           {(
