@@ -487,7 +487,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   activeSheetIdRef.current = project.activeSheetId;
 
   // Title block: per-project, falling back to the account default for new jobs.
-  const { titleBlock: accountTitleBlock, saveTitleBlock, access = {}, user } = useApp();
+  const { titleBlock: accountTitleBlock, saveTitleBlock, access = {}, user, noteSymbolUsed = () => {} } = useApp();
   // The signed-in account: this device's copies are kept under it (lib/device).
   const uidRef = useRef(user?.id || null);
   uidRef.current = user?.id || null;
@@ -1367,6 +1367,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       updateProject({ placed: [...startPlaced, newItem] });
       setSelectedId(newItem.id);
       setSelectedAnnoId(null);
+      noteSymbolUsed(symbolId); // to the front of the palette's Recent row
     };
     const up = (ev) => finish(ev, true);
     const cancel = (ev) => finish(ev, false);
@@ -1396,6 +1397,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     updateProject({ placed: [...placed, newItem] });
     setSelectedId(newItem.id);
     setSelectedAnnoId(null);
+    noteSymbolUsed(symbolId);
   };
 
   const onDrawingDragOver = (e) => {

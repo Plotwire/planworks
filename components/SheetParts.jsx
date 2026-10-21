@@ -535,10 +535,16 @@ export function Palette({ onPalettePointerDown, onFurniturePointerDown, symbolSc
   // The symbols this account ticked in its Symbol Library (by default the
   // Domestic starter: the picker exactly as it always was). Ticks only change
   // what is offered here; placed symbols always draw (findSymbol).
-  const { symbolLibrary } = useApp();
+  const { symbolLibrary, recentSymbols } = useApp();
   const [libraryOpen, setLibraryOpen] = useState(false);
   const groups = useMemo(() => pickerGroups(picksFromSettings(symbolLibrary)), [symbolLibrary]);
   const all = useMemo(() => groups.flatMap((g) => g.items), [groups]);
+  // Recent: the account's last symbols placed (lib/recentSymbols.js), newest
+  // first, of those this picker offers. None yet: no Recent row at all.
+  const recent = useMemo(() => {
+    const offered = new Map(all.map((i) => [i.sym.id, i]));
+    return (recentSymbols || []).map((e) => offered.get(e.id)).filter(Boolean);
+  }, [recentSymbols, all]);
   const q = query.trim().toLowerCase();
   const matches = ({ sym, meta }) =>
     (meta?.description || sym.name).toLowerCase().includes(q) ||
@@ -581,6 +587,27 @@ export function Palette({ onPalettePointerDown, onFurniturePointerDown, symbolSc
     );
   };
 
+  // A Recent tile: the symbol alone, small, four to a row; its name in the
+  // tooltip. Picked up and placed exactly like a tile in the list.
+  const RecentTile = ({ sym, meta }) => {
+    const cols = resolveColours(sym.id, colourMode || "colour");
+    const label = meta?.description || sym.name;
+    return (
+      <div
+        onPointerDown={(e) => onPalettePointerDown(e, sym.id)}
+        style={{ touchAction: "none" }}
+        title={label + (meta?.height ? ` · ${meta.height}` : "")}
+        aria-label={label}
+        data-recent-symbol={sym.id}
+        className="bg-white dark:bg-[#22303D] hover:bg-slate-50 dark:hover:bg-[#283643] rounded-lg ring-1 ring-slate-200 dark:ring-[#2A3947] hover:ring-[#3FB7C9]/40
+                   cursor-grab active:cursor-grabbing h-11 flex items-center justify-center select-none [&>*]:pointer-events-none transition-colors">
+        <svg viewBox={VIEWBOX} width="30" height="30" style={{ color: cols.body, "--feeder": cols.feeder, pointerEvents: "none" }}>
+          {sym.svg}
+        </svg>
+      </div>
+    );
+  };
+
   // Furniture tile (Floor Plan mode). Always navy, no colour modes.
   const FurnTile = ({ item }) => (
     <div
@@ -619,6 +646,17 @@ export function Palette({ onPalettePointerDown, onFurniturePointerDown, symbolSc
           )}
         </div>
       </div>
+      )}
+
+      {/* Recent: stays in view above the list (at most two rows of four), so
+          the symbol just used is never a scroll away. Not while searching. */}
+      {!floor && !q && recent.length > 0 && (
+        <div data-palette-recent className="px-3 pt-2.5 pb-3 border-b border-slate-200 dark:border-[#263441]">
+          <div className={`px-0.5 mb-1.5 ${SECTION_LABEL}`}>Recent</div>
+          <div className="grid grid-cols-4 gap-1.5">
+            {recent.map(({ sym, meta }) => <RecentTile key={sym.id} sym={sym} meta={meta} />)}
+          </div>
+        </div>
       )}
 
       <div data-palette-scroll className="flex-1 overflow-y-auto px-3 py-3
