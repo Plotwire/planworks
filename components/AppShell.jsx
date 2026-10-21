@@ -9,8 +9,9 @@ import BusinessInfo from "@/components/BusinessInfo";
 import { hasCompanyProfile, getCompanyProfile } from "@/lib/companyProfile";
 import { listCompanyLogos } from "@/lib/companyLogos";
 import { supabase, isConfigured } from "@/lib/supabase";
-import { readSettings, changeSettings, flushSettings, keptAccount, keepAccount } from "@/lib/device/account";
+import { readSettings, changeSettings, flushSettings, keptAccount, keepAccount, watchSettingsUpload, settingsOnServer } from "@/lib/device/account";
 import { settingsFromPicks } from "@/lib/symbolPicks";
+import { addRecent, mergeRecent, sameRecent } from "@/lib/recentSymbols";
 import { clearSignedOutDeviceData } from "@/lib/deviceData";
 import { DEFAULT_TITLEBLOCK, normaliseTitleBlock, companyProfileToTitleBlock, companyLogoFrom, mergeTitleBlocks } from "@/lib/titleBlock";
 import { useSubscription } from "@/lib/useSubscription";
@@ -140,6 +141,10 @@ function AppGates({ children }) {
   const [boqTemplate, setBoqTemplate] = useState(null); // null = use built-in default
   const [boqPrefs, setBoqPrefs] = useState(null);       // { vatOn } for new BOQs; null = defaults
   const [symbolLibrary, setSymbolLibrary] = useState(null); // saved Symbol Library ticks ({ picks }); null = not loaded or never saved
+  // The palette's Recent symbols ([{ id, at }], lib/recentSymbols.js); the
+  // ref is the same list, for placing several before React re-renders.
+  const [recentSymbols, setRecentSymbols] = useState([]);
+  const recentRef = useRef([]);
   const settingsRef = useRef({}); // latest full settings blob, so saves merge
 
   // --- Billing gate state ---
@@ -377,11 +382,22 @@ function AppGates({ children }) {
     }
   }, [beginCheckoutReturn]);
 
+  // Recent symbols: each list that arrives (this device's, the server's, and
+  // the stored one after an upload, which has the other devices' merged in)
+  // joins the one shown, so nothing just placed is lost to an older copy.
+  const showRecent = useCallback((list) => {
+    const next = mergeRecent(recentRef.current, list);
+    if (sameRecent(next, recentRef.current)) return;
+    recentRef.current = next;
+    setRecentSymbols(next);
+  }, []);
+
   // Load the account's saved settings (title block, quote items and rates,
   // quote preferences, Symbol Library ticks) once signed in: this device's
   // copy at once, then the server's (lib/device/account.js), so the quote and
   // title block have them with no signal too.
   useEffect(() => {
+    recentRef.current = []; setRecentSymbols([]); // never another account's
     if (!sessionUserId) { setTitleBlock(null); setBoqTemplate(null); setBoqPrefs(null); setSymbolLibrary(null); return; }
     let active = true;
     readSettings(sessionUserId, (s) => {
@@ -391,12 +407,65 @@ function AppGates({ children }) {
       setBoqTemplate(s?.boqTemplate || null);
       setBoqPrefs(s?.boqPrefs || null);
       setSymbolLibrary(s?.symbolLibrary || null);
+      showRecent(s?.recentSymbols);
+    });
+    const unwatch = watchSettingsUpload(async (u) => {
+      if (u.state !== "saved") return;
+      const kept = await keptAccount(sessionUserId, "settings");
+      if (active) showRecent(kept?.recentSymbols);
     });
     // Changes made without signal go up when it returns.
     const up = () => flushSettings(sessionUserId);
     window.addEventListener("online", up);
-    return () => { active = false; window.removeEventListener("online", up); };
-  }, [sessionUserId]);
+    return () => { active = false; unwatch(); window.removeEventListener("online", up); };
+  }, [sessionUserId, showRecent]);
+
+  // The other device's placements: settings load once per visit, so Recent
+  // is read again whenever a drawing opens and when the app comes back into
+  // view (switching back from the iPad, say). No signal: nothing changes.
+  const refreshRecent = useCallback(async () => {
+    const uid = sessionUserIdRef.current;
+    if (!uid) return;
+    const s = await settingsOnServer();
+    if (s && uid === sessionUserIdRef.current) showRecent(s.recentSymbols);
+  }, [showRecent]);
+  const inEditor = pathname === "/drawing" || pathname === "/new";
+  useEffect(() => { if (inEditor && sessionUserId) refreshRecent(); }, [inEditor, sessionUserId, refreshRecent]);
+  useEffect(() => {
+    const back = () => { if (document.visibilityState === "visible") refreshRecent(); };
+    document.addEventListener("visibilitychange", back);
+    return () => document.removeEventListener("visibilitychange", back);
+  }, [refreshRecent]);
+
+  // A symbol placed from the palette: to the front of Recent at once, kept
+  // on this device and sent to the account a moment later (one save for a
+  // run of placements; at once if the page is closing). With no signal it
+  // waits on the device and goes up later like any settings change.
+  const recentTimer = useRef(null);
+  const saveRecentNow = useCallback(() => {
+    if (!recentTimer.current) return;
+    clearTimeout(recentTimer.current); recentTimer.current = null;
+    const uid = sessionUserIdRef.current;
+    if (!uid) return;
+    changeSettings(uid, { recentSymbols: recentRef.current })
+      .catch((e) => console.warn("Recent symbols not saved:", e?.message || e));
+  }, []);
+  const noteSymbolUsed = useCallback((id) => {
+    if (!id) return;
+    const next = addRecent(recentRef.current, id);
+    recentRef.current = next;
+    setRecentSymbols(next);
+    clearTimeout(recentTimer.current);
+    recentTimer.current = setTimeout(saveRecentNow, 1500);
+  }, [saveRecentNow]);
+  useEffect(() => {
+    const hide = () => { if (document.visibilityState === "hidden") saveRecentNow(); };
+    window.addEventListener("pagehide", saveRecentNow);
+    document.addEventListener("visibilitychange", hide);
+    return () => { window.removeEventListener("pagehide", saveRecentNow); document.removeEventListener("visibilitychange", hide); };
+  }, [saveRecentNow]);
+  // Signed out or another account: a save still waiting is the old account's.
+  useEffect(() => () => { clearTimeout(recentTimer.current); recentTimer.current = null; }, [sessionUserId]);
 
   // Runs once per signed-in session, alongside the settings load above.
   useEffect(() => {
@@ -593,6 +662,9 @@ function AppGates({ children }) {
       // Symbol Library: the saved ticks, as stored. picksFromSettings()
       // (lib/symbolLibrary.js) turns them into the ids the picker offers.
       symbolLibrary, saveSymbolPicks,
+      // The palette's Recent row ([{ id, at }], newest first), and the call
+      // the editor makes when a symbol is placed from the palette.
+      recentSymbols, noteSymbolUsed,
       // Business information, for document headers: the company logo alone and
       // the profile's detail lines (name first).
       companyBrand: { logo: companyLogo, details: companyBlock?.details || [] },
