@@ -12,6 +12,7 @@ import { supabase, isConfigured } from "@/lib/supabase";
 import { readSettings, changeSettings, flushSettings, keptAccount, keepAccount, watchSettingsUpload, settingsOnServer } from "@/lib/device/account";
 import { settingsFromPicks } from "@/lib/symbolPicks";
 import { addRecent, mergeRecent, sameRecent } from "@/lib/recentSymbols";
+import { mergeGuide, sameGuide, withStep } from "@/lib/firstDrawing";
 import { clearSignedOutDeviceData } from "@/lib/deviceData";
 import { DEFAULT_TITLEBLOCK, normaliseTitleBlock, companyProfileToTitleBlock, companyLogoFrom, mergeTitleBlocks } from "@/lib/titleBlock";
 import { useSubscription } from "@/lib/useSubscription";
@@ -145,6 +146,9 @@ function AppGates({ children }) {
   // ref is the same list, for placing several before React re-renders.
   const [recentSymbols, setRecentSymbols] = useState([]);
   const recentRef = useRef([]);
+  // The first-drawing guide's progress (lib/firstDrawing.js); null = none.
+  const [firstDrawing, setFirstDrawing] = useState(null);
+  const guideRef = useRef(null);
   const settingsRef = useRef({}); // latest full settings blob, so saves merge
 
   // --- Billing gate state ---
@@ -392,12 +396,38 @@ function AppGates({ children }) {
     setRecentSymbols(next);
   }, []);
 
+  // The first-drawing guide, the same way: each copy that arrives joins the
+  // one shown (earliest time of each step, lib/firstDrawing mergeGuide), and
+  // a change goes to the device at once and up to the account after.
+  const showGuide = useCallback((g) => {
+    if (!g) return;
+    const next = mergeGuide(guideRef.current, g);
+    if (sameGuide(next, guideRef.current)) return;
+    guideRef.current = next;
+    setFirstDrawing(next);
+  }, []);
+  const updateGuide = useCallback((change) => {
+    const next = change(guideRef.current);
+    if (!next || sameGuide(next, guideRef.current)) return;
+    guideRef.current = next;
+    setFirstDrawing(next);
+    const uid = sessionUserIdRef.current;
+    if (uid) changeSettings(uid, { firstDrawing: next }).catch((e) => console.warn("Guide progress not saved:", e?.message || e));
+  }, []);
+  // A step done (lib/firstDrawing GUIDE_STEPS, or "downloadLocked"): kept,
+  // only for an account that started the guide on the new-account dashboard.
+  const markGuideStep = useCallback((step) => {
+    if (!guideRef.current?.started) return;
+    updateGuide((g) => withStep(g, step));
+  }, [updateGuide]);
+
   // Load the account's saved settings (title block, quote items and rates,
   // quote preferences, Symbol Library ticks) once signed in: this device's
   // copy at once, then the server's (lib/device/account.js), so the quote and
   // title block have them with no signal too.
   useEffect(() => {
     recentRef.current = []; setRecentSymbols([]); // never another account's
+    guideRef.current = null; setFirstDrawing(null);
     if (!sessionUserId) { setTitleBlock(null); setBoqTemplate(null); setBoqPrefs(null); setSymbolLibrary(null); return; }
     let active = true;
     readSettings(sessionUserId, (s) => {
@@ -408,27 +438,29 @@ function AppGates({ children }) {
       setBoqPrefs(s?.boqPrefs || null);
       setSymbolLibrary(s?.symbolLibrary || null);
       showRecent(s?.recentSymbols);
+      showGuide(s?.firstDrawing);
     });
     const unwatch = watchSettingsUpload(async (u) => {
       if (u.state !== "saved") return;
       const kept = await keptAccount(sessionUserId, "settings");
-      if (active) showRecent(kept?.recentSymbols);
+      if (active) { showRecent(kept?.recentSymbols); showGuide(kept?.firstDrawing); }
     });
     // Changes made without signal go up when it returns.
     const up = () => flushSettings(sessionUserId);
     window.addEventListener("online", up);
     return () => { active = false; unwatch(); window.removeEventListener("online", up); };
-  }, [sessionUserId, showRecent]);
+  }, [sessionUserId, showRecent, showGuide]);
 
-  // The other device's placements: settings load once per visit, so Recent
-  // is read again whenever a drawing opens and when the app comes back into
-  // view (switching back from the iPad, say). No signal: nothing changes.
+  // The other device's placements and guide ticks: settings load once per
+  // visit, so these are read again whenever a drawing opens and when the app
+  // comes back into view (switching back from the iPad, say). No signal:
+  // nothing changes.
   const refreshRecent = useCallback(async () => {
     const uid = sessionUserIdRef.current;
     if (!uid) return;
     const s = await settingsOnServer();
-    if (s && uid === sessionUserIdRef.current) showRecent(s.recentSymbols);
-  }, [showRecent]);
+    if (s && uid === sessionUserIdRef.current) { showRecent(s.recentSymbols); showGuide(s.firstDrawing); }
+  }, [showRecent, showGuide]);
   const inEditor = pathname === "/drawing" || pathname === "/new";
   useEffect(() => { if (inEditor && sessionUserId) refreshRecent(); }, [inEditor, sessionUserId, refreshRecent]);
   useEffect(() => {
@@ -665,6 +697,9 @@ function AppGates({ children }) {
       // The palette's Recent row ([{ id, at }], newest first), and the call
       // the editor makes when a symbol is placed from the palette.
       recentSymbols, noteSymbolUsed,
+      // The first-drawing guide (lib/firstDrawing.js, components/FirstDrawing.jsx):
+      // its progress, a change to it, and a step done.
+      firstDrawing, updateGuide, markGuideStep,
       // Business information, for document headers: the company logo alone and
       // the profile's detail lines (name first).
       companyBrand: { logo: companyLogo, details: companyBlock?.details || [] },

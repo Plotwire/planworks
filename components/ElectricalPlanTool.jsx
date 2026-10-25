@@ -32,6 +32,9 @@ import { applyPlanToSheet, scaleLabel, outsideNote, PLAN_PX } from "@/lib/cad/pl
 import { DEFAULT_TITLEBLOCK } from "@/lib/titleBlock";
 import { normaliseWireStrength, wireStrengthField } from "@/lib/wireStrength";
 import { useTryUsage, useTryPrompt, TryPill, TryPrompt, LOCKED, drawingSymbolCount, refusedPrompt } from "@/components/TryMode";
+import { FirstDrawingGuide } from "@/components/FirstDrawing";
+import { guideShown, withField, withHintOff } from "@/lib/firstDrawing";
+import { takePlan } from "@/lib/planHandoff";
 import { ShortcutsCard, StatusHint, TOUCH } from "@/components/Shortcuts";
 import dynamic from "next/dynamic";
 const CadSketchPanel = dynamic(() => import("@/components/cad/CadSketch"), { ssr: false });
@@ -487,7 +490,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   activeSheetIdRef.current = project.activeSheetId;
 
   // Title block: per-project, falling back to the account default for new jobs.
-  const { titleBlock: accountTitleBlock, saveTitleBlock, access = {}, user, noteSymbolUsed = () => {} } = useApp();
+  const { titleBlock: accountTitleBlock, saveTitleBlock, access = {}, user, noteSymbolUsed = () => {},
+    firstDrawing = null, updateGuide = () => {}, markGuideStep = () => {} } = useApp();
   // The signed-in account: this device's copies are kept under it (lib/device).
   const uidRef = useRef(user?.id || null);
   uidRef.current = user?.id || null;
@@ -1028,6 +1032,9 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     img.onerror = () => { cropLockRef.current = false; URL.revokeObjectURL(objectUrl); alert("Could not read image."); };
     img.src = objectUrl;
   };
+  // The latest handleFile, for a plan handed over from the dashboard.
+  const handleFileRef = useRef(handleFile);
+  handleFileRef.current = handleFile;
 
   // What a plan's picture and placement are: a change to any of these is a
   // different plan. (Its links and stored paths fill in in the background.)
@@ -1991,7 +1998,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       else if ((e.metaKey || e.ctrlKey) && e.key === "s") { e.preventDefault(); saveProject(); }
       else if ((e.metaKey || e.ctrlKey) && e.key === "p") {
         e.preventDefault();
-        if (tryUsageRef.current.enabled) tryPrompt.show(LOCKED.export); // Try mode: printing is locked
+        if (tryUsageRef.current.enabled) { tryPrompt.show(LOCKED.export); markGuideStep("downloadLocked"); } // Try mode: printing is locked
         else setPrintPreview(true);
       }
       // A tool key leaves Select several (as choosing the tool on the bar does).
@@ -2632,7 +2639,13 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     }
     newKeyRef.current = newSessionKey();
     if (t.category) setActiveCategory(t.category);
-    if (t.mode === "import") setTimeout(() => fileInputRef.current?.click(), 250);
+    // A plan already picked on the dashboard (lib/planHandoff): straight in.
+    // Otherwise the file picker, as always.
+    if (t.mode === "import") {
+      const picked = takePlan();
+      if (picked) setTimeout(() => handleFileRef.current(picked), 250);
+      else setTimeout(() => fileInputRef.current?.click(), 250);
+    }
     setTimeout(fitToScreen, 60);
     if (t.restoreUnsaved) openHandedBackup();
     else setRecovery(draftOfferOnNew());
@@ -2651,6 +2664,22 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const draftTimer = useRef(null);
   const [recovery, setRecovery] = useState(null);
   const countPlaced = (p) => (p?.sheets || []).reduce((n, s) => n + ((s.placed && s.placed.length) || 0), 0);
+
+  // ---- First-drawing guide (components/FirstDrawing.jsx) --------------------
+  // Its steps tick themselves from what is on the drawing, only for an
+  // account that started the guide (AppShell markGuideStep). Nothing here
+  // changes what the editor does.
+  const guideStarted = Boolean(firstDrawing?.started);
+  const hasPlanNow = (project.sheets || []).some((s) => s && s.bgImage);
+  const hasSymbolsNow = countPlaced(project) > 0;
+  const drawingReady = openState === "ready";
+  useEffect(() => { if (guideStarted && drawingReady && hasPlanNow) markGuideStep("plan"); }, [guideStarted, drawingReady, hasPlanNow]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (guideStarted && drawingReady && hasSymbolsNow) markGuideStep("symbol"); }, [guideStarted, drawingReady, hasSymbolsNow]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The quote, opened with something on the drawing to fill it in.
+  useEffect(() => { if (guideStarted && showBoq && hasSymbolsNow) markGuideStep("quote"); }, [guideStarted, showBoq, hasSymbolsNow]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Download pressed on a try account: shown that downloads come with a
+  // subscription (try mode, unchanged), which is step 4 for them.
+  const downloadLocked = () => { tryPrompt.show(LOCKED.export); markGuideStep("downloadLocked"); };
 
   // ---- The quote saves itself ---------------------------------------------
   // What's typed in the quote is part of the drawing. A saved drawing is saved
@@ -3038,7 +3067,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         syncView={sync} onSyncClick={onSyncClick}
         onShowProjects={() => { refreshProjectList(); setShowProjects(true); }}
         onExportJSON={access.isTry ? () => tryPrompt.show(LOCKED.saveFile) : exportJSON}
-        onPrint={access.isTry ? () => tryPrompt.show(LOCKED.export) : () => setPrintPreview(true)}
+        onPrint={access.isTry ? downloadLocked : () => setPrintPreview(true)}
         colourMode={colourMode}
         onToggleColour={() => setProject(p => ({ ...p, colourMode: ({ navy: "colour", colour: "red", red: "mono", mono: "navy" })[p.colourMode || "colour"] }))}
         wireStrength={wireStrength}
@@ -3285,6 +3314,21 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
               </button>
             </div>
           )}
+          {/* First-drawing guide: the checklist (bottom left, clear of the
+              tools) and one hint at a time; none while something is open
+              over the drawing. */}
+          {guideShown(firstDrawing) && !readOnly && drawingReady && (
+            <FirstDrawingGuide
+              guide={firstDrawing}
+              onHide={() => updateGuide((g) => withField(g, "hidden"))}
+              onClose={() => updateGuide((g) => withField(g, "closed"))}
+              onRealJob={() => { updateGuide((g) => withField(g, "closed")); leaveToDashboard(); }}
+              onHintOff={(h) => updateGuide((g) => withHintOff(g, h))}
+              hintsBlocked={showBoq || printPreview || floorPlanOpen || showMeta || showTitleBlock || showNotes || showProjects
+                || !!cropReq || planGone || shortcutsOpen || picking || !!tryPrompt.prompt || !!paletteGhost}
+              paletteShown={!sidebarHidden}
+            />
+          )}
           <StatusBar right={<><SyncStatus view={sync} onClick={onSyncClick} />SHEET A3 · {meta.scale}</>}>
             {/* The counts always show; the hint after them truncates. */}
             <StatusCount label="SYMBOLS" value={placed.length} />
@@ -3355,6 +3399,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
           DRAW={DRAW}
           onClose={readOnly ? leaveToDashboard : () => setPrintPreview(false)}
           onPrint={printSheet}
+          onOutput={() => markGuideStep("download")}
           notice={readOnly ? readOnlyNotice : null}
           onShowBoq={readOnly ? () => setShowBoq(true) : null}
           closeLabel={readOnly ? "Back to dashboard" : null}

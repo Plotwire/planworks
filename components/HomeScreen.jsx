@@ -16,6 +16,9 @@ import { TryPill } from "@/components/TryMode";
 import Turnstile, { TURNSTILE_SITE_KEY, captchaPending } from "@/components/Turnstile";
 import Toast from "@/components/Toast";
 import { StatusIcon, StatusPill } from "@/components/StatusMark";
+import { FirstDrawingPanel } from "@/components/FirstDrawing";
+import { withField } from "@/lib/firstDrawing";
+import { handOverPlan } from "@/lib/planHandoff";
 import { hasSignal, subscribeSignal, noteServer, looksLikeNoSignal } from "@/lib/device/connection";
 
 /* Sheet geometry — must match ElectricalPlanTool */
@@ -101,7 +104,7 @@ function PlanThumb({ project }) {
 }
 
 export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSketch, onPlanner, onBusiness, onSymbols, theme, onToggleTheme, user, onSignOut }) {
-  const { manageBilling, subscription, access = {} } = useApp();
+  const { manageBilling, subscription, access = {}, updateGuide } = useApp();
   // Try: 25 symbols across all saved drawings. Lapsed: read-only, so nothing
   // new can be started (lib/access.js).
   const isTry = Boolean(access.isTry);
@@ -351,6 +354,47 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
   const noSubscription = waiting.filter((e) => e.error && e.refused === "subscription");
   const stuck = waiting.filter((e) => e.error && !e.refused);
 
+  // No drawings at all (the list as the server gave it, or with no signal
+  // this device's): the first-drawing dashboard in place of the usual one
+  // (components/FirstDrawing.jsx). Not for a lapsed account, which can't
+  // start one. The guide starts for this account (lib/firstDrawing) only
+  // when the server says so twice running, with nothing of theirs waiting to
+  // upload: an old copy on this device, or one empty answer, can never start
+  // it for someone who has drawings.
+  const firstTime = Boolean(cards && cards.length === 0 && !loadError && !readOnly && (fromServer || fromDevice));
+  useEffect(() => {
+    if (!firstTime || !fromServer || !updateGuide) return;
+    let live = true;
+    (async () => {
+      try {
+        const again = await listProjects({ timeoutMs: 20000 });
+        const waits = await pendingSaves(uid);
+        if (!live || again.length || waits.length) return;
+      } catch { return; } // no answer: not now
+      const made = Date.parse(user?.created_at || "");
+      updateGuide((g) => {
+        const next = withField(g, "started");
+        return next.signup || !Number.isFinite(made) ? next : { ...next, signup: made };
+      });
+    })();
+    return () => { live = false; };
+  }, [firstTime, fromServer]); // eslint-disable-line react-hooks/exhaustive-deps -- once per arrival
+  const [sampleBusy, setSampleBusy] = useState(false);
+  const [sampleError, setSampleError] = useState("");
+  const uploadFirstPlan = (file) => { handOverPlan(file); onImport(); };
+  const openSample = async () => {
+    if (sampleBusy) return;
+    setSampleBusy(true); setSampleError("");
+    try {
+      const { createSampleDrawing } = await import("@/lib/sampleHouse");
+      onOpenProject(await createSampleDrawing());
+    } catch (err) {
+      console.error(err);
+      setSampleError("The sample house couldn't be set up just now. Try again in a moment.");
+      setSampleBusy(false);
+    }
+  };
+
   return (
     <div className="pw-home">
       <style>{CSS}</style>
@@ -477,6 +521,10 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
                 </div>
               </div>
             )}
+            {firstTime ? (
+              <FirstDrawingPanel onUploadFile={uploadFirstPlan} onSketch={onSketch} onSample={openSample}
+                sampleBusy={sampleBusy} sampleError={sampleError} />
+            ) : (<>
             <section className="hero">
               <div className="hero-glow"></div>
               <div className="hero-inner">
@@ -514,6 +562,7 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
               <h2>All drawings</h2>
               {cards && cards.length > 0 && <span className="muted-count">{cards.length} saved · newest first</span>}
             </div>
+            </>)}
 
             {/* Traffic-light status (components/StatusMark.jsx): amber clock
                 for saves waiting and no signal, red warning for saves not
@@ -574,7 +623,7 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
 
             <OfflinePanel />
 
-            {loadError ? (
+            {firstTime ? null : loadError ? (
               <div className="empty load-error" role="alert">
                 <strong>Your drawings couldn&rsquo;t be loaded.</strong>
                 <span> They haven&rsquo;t gone anywhere. This is usually the connection. Try again in a moment.</span>
@@ -641,7 +690,7 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
               <div className="empty">No drawings match &ldquo;{query.trim()}&rdquo;.</div>
             )}
 
-            {cards && cards.length === 0 && (
+            {cards && cards.length === 0 && !firstTime && (
               <div className="empty">No saved drawings yet — start a blank sheet or import a plan to get going.</div>
             )}
 

@@ -153,7 +153,7 @@ export function TopBar({
       <TbGroup label="Drawing">
         <TbButton onClick={onShowNotes} icon={Type} label="Installation notes" shortLabel="Notes" title="Installation notes" />
         <TbButton onClick={onShowTitleBlock} icon={LayoutPanelTop} label="Title block" shortLabel="Title" title="Title block" />
-        <TbButton onClick={onShowBoq} icon={ClipboardList} label="Quote" title="Quote: materials list and client quote" />
+        <TbButton onClick={onShowBoq} icon={ClipboardList} label="Quote" title="Quote: materials list and client quote" buttonProps={{ "data-guide": "quote" }} />
         {/* Only when this sheet's plan was drawn in Sketch a plan. Icon only
             under 1300px so the bar still fits one row at 1180px. */}
         {onEditFloorPlan && <TbButton onClick={onEditFloorPlan} icon={PencilRuler} label="Edit floor plan" title="Edit floor plan (opens the sketch this plan was drawn in)" collapse />}
@@ -4056,7 +4056,9 @@ function withFreshLinks(bg, links) {
 
 // notice / closeLabel: used when the preview is the whole view (a lapsed
 // subscription's read-only drawings) rather than a step from the editor.
-export function PrintPreview({ project, legendItems, colourMode, wireStrength, symbolScale = 1, DRAW, onClose, onPrint, notice = null, closeLabel = null, onShowBoq = null }) {
+// onOutput: called once the PDF has downloaded or Print was pressed (the
+// first-drawing guide's step 4).
+export function PrintPreview({ project, legendItems, colourMode, wireStrength, symbolScale = 1, DRAW, onClose, onPrint, notice = null, closeLabel = null, onShowBoq = null, onOutput = null }) {
   const { meta, notes } = project;
   const projectSheets = project.sheets && project.sheets.length
     ? project.sheets
@@ -4336,6 +4338,7 @@ export function PrintPreview({ project, legendItems, colourMode, wireStrength, s
       a.download = fileBase() + ".pdf";
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+      onOutput?.();
     } catch (e) {
       // The PDF maker's code not on this device yet, and no signal.
       alert(isMissingCode(e) ? NEEDS_SIGNAL_ALERT : "PDF export failed: " + (e?.message || e));
@@ -4408,7 +4411,7 @@ export function PrintPreview({ project, legendItems, colourMode, wireStrength, s
           )}
           <button onClick={downloadBackup} className="pp-btn pp-btn-ghost" title="Download a copy of this drawing's data for your records.">Data copy (.json)</button>
           <button onClick={emailClient} className="pp-btn pp-btn-email"><Mail size={12}/> Email client</button>
-          <button onClick={onPrint} className="pp-btn pp-btn-email"><Printer size={12}/> Print</button>
+          <button onClick={() => { onOutput?.(); onPrint(); }} className="pp-btn pp-btn-email"><Printer size={12}/> Print</button>
           <button onClick={downloadPDF} disabled={pdfBusy} className="pp-btn pp-btn-primary" style={pdfBusy ? { opacity: 0.6, cursor: "wait" } : undefined}>
             <Download size={12}/> {pdfBusy ? "Building…" : "Download PDF"}
           </button>
