@@ -4,6 +4,13 @@ import { alertError, alertMessage, flushAlerts } from "@/lib/alert";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// Read the database fresh on every run. This route only answers GET, and on
+// Next.js 14 "force-dynamic" alone doesn't stop Next caching the Supabase
+// reads: the check kept comparing today's Stripe with an old copy of
+// public.subscriptions (a false paid_locked on 4 Nov 2026). Stripe's calls
+// don't go through fetch, so they were always fresh.
+// tests/reconcile-route.test.mjs fails if this line is removed.
+export const fetchCache = "force-no-store";
 // Several Stripe list calls and a few single lookups; 60 s is within every
 // Vercel plan's limit. The comparison itself gives up after 35 s
 // (BUILD_DEADLINE_MS) so the "check failed" email still goes out in time.
