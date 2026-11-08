@@ -27,11 +27,17 @@ test("a job is tidied before saving, with a blank address left empty", () => {
   assert.equal(cleanJob({ ...job, site_address: " 1 Test Road " }).value.site_address, "1 Test Road");
 });
 
-test("a job needs a number, a name and a default work type", () => {
+test("a job needs a number and a name", () => {
   assert.equal(cleanJob({ ...job, job_number: "   " }).error, "Enter a job number.");
   assert.equal(cleanJob({ ...job, job_name: "" }).error, "Enter a job name.");
-  assert.equal(cleanJob({ ...job, default_work_type_id: "" }).error, "Choose a default work type.");
   assert.equal(cleanJob(null).error, "Enter a job number.");
+});
+
+test("a job's default work type is optional, and None saves as empty", () => {
+  assert.equal(cleanJob({ ...job, default_work_type_id: "" }).error, undefined);
+  assert.equal(cleanJob({ ...job, default_work_type_id: "" }).value.default_work_type_id, null);
+  assert.equal(cleanJob({ ...job, default_work_type_id: null }).value.default_work_type_id, null);
+  assert.equal(cleanJob(job).value.default_work_type_id, "type-1");
 });
 
 test("over-long job details are refused", () => {

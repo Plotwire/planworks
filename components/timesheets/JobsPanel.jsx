@@ -89,9 +89,9 @@ export default function JobsPanel({ ownerId, jobs, types, onSaved }) {
               onChange={(e) => set("site_address", e.target.value)}/>
           </label>
           <label className="ts-field is-wide">
-            <span className="ts-label">Default work type</span>
+            <span className="ts-label">Default work type (optional)</span>
             <select value={form.default_work_type_id || ""} disabled={busy} onChange={(e) => set("default_work_type_id", e.target.value)}>
-              <option value="">Choose a work type</option>
+              <option value="">None</option>
               {choices.map((t) => <option key={t.id} value={t.id}>{t.name}{t.active ? "" : " (archived)"}</option>)}
             </select>
           </label>
