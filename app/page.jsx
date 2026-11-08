@@ -28,6 +28,7 @@ export default function DashboardPage() {
       onPlanner={() => router.push("/planner")}
       onBusiness={() => router.push("/business")}
       onSymbols={() => router.push("/symbols")}
+      onTimesheets={() => router.push("/timesheets")}
       theme={theme}
       onToggleTheme={toggleTheme}
       user={user}

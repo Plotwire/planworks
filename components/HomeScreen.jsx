@@ -15,6 +15,7 @@ import { LEGAL_LINKS } from "@/lib/legal";
 import { TryPill } from "@/components/TryMode";
 import Turnstile, { TURNSTILE_SITE_KEY, captchaPending } from "@/components/Turnstile";
 import Toast from "@/components/Toast";
+import { useTimesheetsAddon } from "@/lib/timesheets/useTimesheetsAddon";
 import { StatusIcon, StatusPill } from "@/components/StatusMark";
 import { hasSignal, subscribeSignal, noteServer, looksLikeNoSignal } from "@/lib/device/connection";
 
@@ -100,8 +101,10 @@ function PlanThumb({ project }) {
   );
 }
 
-export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSketch, onPlanner, onBusiness, onSymbols, theme, onToggleTheme, user, onSignOut }) {
+export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSketch, onPlanner, onBusiness, onSymbols, onTimesheets, theme, onToggleTheme, user, onSignOut }) {
   const { manageBilling, subscription, access = {} } = useApp();
+  // The Timesheets rail item shows only for accounts with the add-on.
+  const timesheets = useTimesheetsAddon(user?.id);
   // Try: 25 symbols across all saved drawings. Lapsed: read-only, so nothing
   // new can be started (lib/access.js).
   const isTry = Boolean(access.isTry);
@@ -363,6 +366,7 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
           <div className="navitem" title="All drawings" onClick={showAllDrawings} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></div>
           <div className="navitem" title="Symbol library" onClick={onSymbols} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="7" cy="7" r="3.2"/><rect x="14" y="4" width="6" height="6" rx="1.4"/><path d="M4 15h6v6H4zM14 18h6"/><circle cx="17" cy="18" r="3.2"/></svg></div>
           <div className="navitem" title="Work planner" onClick={onPlanner} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M7 13h3M7 17h3M14 13h3"/></svg></div>
+          {timesheets.status === "on" && <div className="navitem" title="Timesheets" onClick={onTimesheets} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>}
           <div className="rail-spacer"></div>
           <HelpMenu />
           <div className="navitem" title="Edit business information" onClick={onBusiness} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 13a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 0 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9 2 2 0 0 1 0-4 1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 2.9-1.2 2 2 0 0 1 4 0 1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9 2 2 0 0 1 0 4 1.7 1.7 0 0 0-1.5 1z"/></svg></div>
