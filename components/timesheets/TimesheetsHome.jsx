@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useApp } from "@/components/AppShell";
 import { StatusIcon } from "@/components/StatusMark";
+import AppRailLinks from "@/components/AppRailLinks";
 import { useTimesheetsAddon } from "@/lib/timesheets/useTimesheetsAddon";
 import { listJobs, listWorkTypes } from "@/lib/timesheets/lists";
 import JobsPanel from "@/components/timesheets/JobsPanel";
@@ -66,6 +67,7 @@ export default function TimesheetsHome({ onClose, onNotAllowed }) {
           <button type="button" className="ts-nav" onClick={onClose} title="Dashboard" aria-label="Dashboard">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
           </button>
+          <AppRailLinks className="ts-nav" />
           <div className="ts-nav is-active" title="Timesheets" aria-current="page">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
           </div>
@@ -171,7 +173,7 @@ html.dark .pw-ts{--ink:#E7EDF3; --ink-2:#B6C2CE; --muted:#8595A3; --muted-2:#6B7
 .pw-ts .ts-rail::after{content:""; position:absolute; inset:0 0 0 auto; width:1px; background:rgba(255,255,255,.05)}
 .pw-ts .ts-brandmark{width:42px; height:42px; border:0; border-radius:12px; background:linear-gradient(150deg,var(--teal),var(--teal-700)); display:grid; place-items:center; margin-bottom:18px; box-shadow:0 6px 16px -4px rgba(63,183,201,.5); cursor:pointer}
 .pw-ts .ts-brandmark svg{width:22px; height:22px}
-.pw-ts .ts-nav{width:46px; height:46px; border:0; border-radius:12px; background:transparent; display:grid; place-items:center; color:#8190a0; cursor:pointer; transition:all .18s ease; position:relative}
+.pw-ts .ts-nav{width:46px; height:46px; border:0; border-radius:12px; background:transparent; display:grid; place-items:center; color:#8190a0; cursor:pointer; transition:all .18s ease; position:relative; text-decoration:none}
 .pw-ts .ts-nav svg{width:21px; height:21px}
 .pw-ts .ts-nav:hover{color:var(--navy); background:var(--teal-600)}
 .pw-ts .ts-nav.is-active,.pw-ts .ts-nav.is-active:hover{color:#fff; background:rgba(63,183,201,.16); cursor:default}
