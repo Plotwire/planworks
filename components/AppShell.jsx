@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import LoginScreen from "@/components/LoginScreen";
 import ComingSoon from "@/components/ComingSoon";
 import Paywall from "@/components/Paywall";
@@ -31,6 +31,8 @@ import { startDevice, pauseDevice, clearDevice, unsentCount } from "@/lib/device
 import { syncNow } from "@/lib/device/outbox";
 import { rememberGate, recallGate, forgetGate } from "@/lib/device/gates";
 import { keptSession } from "@/lib/authUser";
+import OperativeApp from "@/components/timesheets/OperativeApp";
+import { isOperativeUser, OPERATIVE_HOME } from "@/lib/timesheets/operative";
 
 const AppCtx = createContext(null);
 export const useApp = () => useContext(AppCtx) || {};
@@ -111,22 +113,30 @@ const isPublicPath = (pathname) =>
 // so turning the device never unmounts anything. Public pages don't get it.
 export default function AppShell({ children }) {
   const pathname = usePathname();
+  // Operatives have a simple screen that works upright: no "please rotate".
+  const [operative, setOperative] = useState(false);
   return (
     <>
-      <AppGates>{children}</AppGates>
-      {!isPublicPath(pathname) && <RotateNotice />}
+      <AppGates onOperative={setOperative}>{children}</AppGates>
+      {!isPublicPath(pathname) && !operative && <RotateNotice />}
     </>
   );
 }
 
-function AppGates({ children }) {
+function AppGates({ children, onOperative }) {
   const pathname = usePathname();
+  const router = useRouter();
   const isPublic = isPublicPath(pathname);
   const [theme, setTheme] = useState(() => {
     if (typeof window === "undefined") return "light";
     try { return localStorage.getItem("planworks:theme") || "light"; } catch { return "light"; }
   });
   const [session, setSession] = useState(null);
+  // A Timesheets operative is a login with no account of its own here: the
+  // terms, billing, company details, settings and device copies below are all
+  // for owners, and are given "nobody signed in" (ownerSession) for operatives.
+  const operative = isOperativeUser(session?.user);
+  const ownerSession = operative ? null : session;
   // Owner route past the Coming Soon page (COMING_SOON, above): the discreet
   // "Sign in" link, or ?login / #login.
   const [showLogin, setShowLogin] = useState(false);
@@ -153,14 +163,14 @@ function AppGates({ children }) {
   // (no gate), so a half-configured Stripe can never lock users out. Set
   // NEXT_PUBLIC_BILLING_ENABLED=true in Vercel once Stripe is live and tested.
   const BILLING_ENABLED = process.env.NEXT_PUBLIC_BILLING_ENABLED === "true";
-  const subscription = useSubscription(BILLING_ENABLED ? session : null);
+  const subscription = useSubscription(BILLING_ENABLED ? ownerSession : null);
   // Back from Stripe Checkout: "Confirming your payment…" until the webhook
   // has unlocked the account (lib/checkoutReturn.js). The return URL itself
   // grants nothing. If the webhook is late or lost, the server is asked to
   // check with Stripe itself (POST /api/billing/sync).
   const checkoutReturn = useCheckoutReturn({
     enabled: BILLING_ENABLED,
-    userId: session?.user?.id || null,
+    userId: ownerSession?.user?.id || null,
     ready: !subscription.loading,
     full: subscription.level === "full",
     refresh: subscription.refresh,
@@ -190,6 +200,13 @@ function AppGates({ children }) {
 
   // The app shell cache (public/sw.js): the app opens on a weak signal or none.
   useEffect(() => { registerServiceWorker(); }, []);
+
+  // An operative's screen shows at every address (below), so the address is
+  // tidied to match. Public pages and a password reset are left alone.
+  useEffect(() => { onOperative?.(operative); }, [operative, onOperative]);
+  useEffect(() => {
+    if (operative && !isPublic && !recovery && pathname !== OPERATIVE_HOME) router.replace(OPERATIVE_HOME);
+  }, [operative, isPublic, recovery, pathname, router]);
 
   useEffect(() => {
     if (!isConfigured || !supabase) { setChecking(false); setSession(false); return; }
@@ -233,7 +250,7 @@ function AppGates({ children }) {
   // it is still for that user: a slow check or accept for one account can
   // never let another account (signed in since, on the same device) through.
   const [terms, setTerms] = useState({ uid: null, step: "unknown", error: "" });
-  const sessionUserId = session?.user?.id || null;
+  const sessionUserId = ownerSession?.user?.id || null;
   const sessionUserIdRef = useRef(sessionUserId);
   sessionUserIdRef.current = sessionUserId;
   const termsStep = terms.uid === sessionUserId ? terms.step : "unknown";
@@ -267,7 +284,7 @@ function AppGates({ children }) {
   }, [sessionUserId]);
 
   useEffect(() => {
-    const user = session?.user;
+    const user = ownerSession?.user;
     // Accepted before, as the server confirmed on this device: straight in,
     // and checked again below. A weak signal never holds the app at the splash.
     const termsGate = "terms:" + LEGAL_VERSION;
@@ -469,7 +486,7 @@ function AppGates({ children }) {
 
   // Runs once per signed-in session, alongside the settings load above.
   useEffect(() => {
-    const uid = session?.user?.id;
+    const uid = ownerSession?.user?.id;
     if (!uid) { setProfileStep("unknown"); return; }
     let active = true;
     try {
@@ -484,7 +501,7 @@ function AppGates({ children }) {
       if (!known) setProfileStep(has ? "ok" : "needed");
     });
     return () => { active = false; };
-  }, [session]);
+  }, [ownerSession]);
 
   const skipOnboarding = useCallback(() => {
     const uid = session?.user?.id;
@@ -582,11 +599,15 @@ function AppGates({ children }) {
   if (!session) {
     // Back from Stripe but signed out (session expired, or another address):
     // straight to sign-in, never the holding page, then on to confirming.
-    const wantLogin = showLogin || checkoutReturn.awaitingSignIn ||
+    const wantLogin = showLogin || checkoutReturn.awaitingSignIn || pathname === OPERATIVE_HOME ||
       (typeof window !== "undefined" && /[?&#]login(=1)?\b/.test(window.location.search + window.location.hash));
     if (COMING_SOON && !wantLogin) return <ComingSoon onSignIn={() => setShowLogin(true)} />;
     return <LoginScreen notice={signedOutNote} />;
   }
+
+  // A Timesheets operative: their own screen and nothing else, before the
+  // customer terms, billing and company details.
+  if (operative) return <OperativeApp user={session.user} />;
 
   // Signed in — the terms come first, before the paywall and everything else.
   if (termsStep === "unknown") return <Splash />;

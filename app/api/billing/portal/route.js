@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { bearer, userFromToken, returnOrigin, isMissingCustomer } from "@/lib/billing";
+import { isOperativeUser, NOT_FOR_OPERATIVES } from "@/lib/timesheets/operative";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,6 +11,7 @@ export async function POST(req) {
   try {
     const user = await userFromToken(bearer(req));
     if (!user) return NextResponse.json({ error: "Please sign in again." }, { status: 401 });
+    if (isOperativeUser(user)) return NextResponse.json({ error: NOT_FOR_OPERATIVES }, { status: 403 });
 
     const { data } = await getSupabaseAdmin()
       .from("subscriptions")

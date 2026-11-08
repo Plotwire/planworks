@@ -1,6 +1,7 @@
 ﻿import { NextResponse } from "next/server";
 import { bearer, userFromToken, STRIPE_PRICE, returnOrigin, beginCheckout } from "@/lib/billing";
 import { rateCheck } from "@/lib/checkoutGuard";
+import { isOperativeUser, NOT_FOR_OPERATIVES } from "@/lib/timesheets/operative";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,12 +40,14 @@ function allowStart(userId) {
 //   409 { error, inProgress }          another checkout of theirs is being
 //                                      paid right now
 //   429 { error }                      too many attempts in a minute
+//   403 { error }                      a Timesheets operative's login
 //   401 / 400 / 500 { error }
 // The browser goes to url either way (lib/billingClient.js).
 export async function POST(req) {
   try {
     const user = await userFromToken(bearer(req));
     if (!user) return NextResponse.json({ error: "Please sign in again." }, { status: 401 });
+    if (isOperativeUser(user)) return NextResponse.json({ error: NOT_FOR_OPERATIVES }, { status: 403 });
 
     const price = STRIPE_PRICE;
     if (!price) return NextResponse.json({ error: "Billing isn't configured yet." }, { status: 400 });
