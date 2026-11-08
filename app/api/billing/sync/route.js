@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { bearer, userFromToken, refreshFromStripe } from "@/lib/billing";
 import { rateCheck } from "@/lib/checkoutGuard";
+import { isOperativeUser, NOT_FOR_OPERATIVES } from "@/lib/timesheets/operative";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,11 +33,13 @@ function allowSync(userId) {
 // sends is trusted, and nothing else is changed.
 //   200 { found, changed, status }  found: Stripe has a running subscription
 //                                   of theirs; changed: the row was updated
+//   403 { error }                   a Timesheets operative's login
 //   401 / 429 / 500 { error }
 export async function POST(req) {
   try {
     const user = await userFromToken(bearer(req));
     if (!user) return NextResponse.json({ error: "Please sign in again." }, { status: 401 });
+    if (isOperativeUser(user)) return NextResponse.json({ error: NOT_FOR_OPERATIVES }, { status: 403 });
 
     const allowed = allowSync(user.id);
     if (!allowed.ok) {
