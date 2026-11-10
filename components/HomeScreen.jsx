@@ -10,6 +10,7 @@ import { pendingSaves, subscribeOutbox, forgetSaves, syncNow } from "@/lib/devic
 import { forgetSymbolCount } from "@/lib/device/symbolCounts";
 import { warmUpOffline } from "@/lib/device/warmUp";
 import OfflinePanel, { HelpMenu } from "@/components/OfflinePanel";
+import { TourCard } from "@/components/HelpVideo";
 import { useApp } from "@/components/AppShell";
 import { LEGAL_LINKS } from "@/lib/legal";
 import { TryPill } from "@/components/TryMode";
@@ -502,6 +503,8 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
               </div>
             </section>
 
+            <TourCard />
+
             <div className="sec-head"><h2>Start something new</h2></div>
             <div className="templates"><div className="tpl" onClick={onPlanner}><div className="tpl-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M7 13h3M7 17h3M14 13h3"/></svg></div><div><div className="t">Work planner</div><div className="s">Plan your team&apos;s week</div></div></div><div className="tpl" onClick={onSketch}><div className="tpl-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M14 6l4 4"/></svg></div><div><div className="t">Sketch a floor plan</div><div className="s">Draw the building, then add electrics</div></div></div>
               <div className="tpl" onClick={() => onNewProject()}>
@@ -958,6 +961,39 @@ html.dark .pw-home .offline-strip[data-tone=red]{background:#2E1A1A; border-colo
 .pw-home .help-note b{color:var(--ink); font-weight:600}
 .pw-home .help-note .help-why{font-size:12.5px; color:var(--muted)}
 @media (max-width:720px){.pw-home .help-menu{width:230px}}
+/* The how-to video (components/HelpVideo.jsx) and its dashboard card */
+.pw-home .help-video{max-width:1240px; padding:16px 18px 18px}
+.pw-home .help-video-head{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px}
+.pw-home .help-video-head .pw-modal-title{margin:0}
+.pw-home .help-video-close{width:36px; height:36px; flex:none; display:grid; place-items:center; border:0; border-radius:10px; background:var(--action); color:var(--action-ink); cursor:pointer}
+.pw-home .help-video-close:hover{background:var(--action-hover)}
+.pw-home .help-video-close svg{width:18px; height:18px}
+/* the video, with the index beside it on an iPad or laptop and under it on a narrow screen */
+.pw-home .help-video-body{display:grid; grid-template-columns:minmax(0,1fr) 270px; gap:14px; align-items:start}
+.pw-home .help-video-player{display:block; width:100%; aspect-ratio:16/9; max-height:72vh; background:#0b1117; border-radius:10px}
+.pw-home .help-video-failed{display:grid; place-items:center; aspect-ratio:16/9; max-height:72vh; padding:20px; text-align:center; font-size:14px; color:var(--ink-2); background:var(--paper); border:1px dashed var(--line); border-radius:10px}
+.pw-home .help-video-index{max-height:min(72vh, calc((min(1240px, 100vw - 40px) - 36px - 284px) * 9 / 16)); overflow-y:auto; overscroll-behavior:contain; padding-right:2px}
+.pw-home .help-video-chapter{margin-bottom:10px}
+.pw-home .help-video-chapter-head{display:flex; align-items:baseline; justify-content:space-between; gap:8px; width:100%; padding:4px 2px; border:0; background:transparent; color:var(--ink); font:600 13px var(--font-inter),system-ui,sans-serif; text-align:left; cursor:pointer}
+.pw-home .help-video-chapter-head:hover:not(:disabled){color:var(--teal-700)}
+.pw-home .help-video-topics{display:flex; flex-wrap:wrap; gap:5px; margin-top:3px}
+.pw-home .help-video-topic{padding:5px 9px; border:1px solid var(--line); border-radius:999px; background:var(--surface); color:var(--ink-2); font:500 12px var(--font-inter),system-ui,sans-serif; cursor:pointer}
+.pw-home .help-video-topic:hover:not(:disabled){border-color:var(--teal); color:var(--ink)}
+.pw-home .help-video-topic.is-now{background:rgba(63,183,201,.16); border-color:var(--teal); color:var(--ink)}
+.pw-home .help-video-chapter-head:disabled,.pw-home .help-video-topic:disabled{opacity:.5; cursor:not-allowed}
+.pw-home .help-video-time{font-family:var(--font-jetbrains-mono),monospace; font-size:11px; font-weight:500; color:var(--teal-700)}
+html.dark .pw-home .help-video-time{color:#5FD0E0}
+@media (max-width:860px){.pw-home .help-video-body{grid-template-columns:1fr}.pw-home .help-video-index{max-height:34vh}}
+.pw-home .tour-card{display:flex; align-items:center; gap:14px; margin:22px 0 8px; padding:14px 14px 14px 16px; background:var(--surface); border:1px solid var(--line); border-radius:14px}
+.pw-home .tour-play{width:46px; height:46px; flex:none; display:grid; place-items:center; border:0; border-radius:12px; background:var(--action); color:var(--action-ink); cursor:pointer}
+.pw-home .tour-play:hover{background:var(--action-hover)}
+.pw-home .tour-play svg{width:22px; height:22px}
+.pw-home .tour-text{flex:1; min-width:0; cursor:pointer}
+.pw-home .tour-text .t{font-size:14.5px; font-weight:600; color:var(--ink)}
+.pw-home .tour-text .s{font-size:12.5px; color:var(--muted); margin-top:2px}
+.pw-home .tour-close{width:32px; height:32px; flex:none; display:grid; place-items:center; border:0; border-radius:9px; background:var(--action); color:var(--action-ink); cursor:pointer}
+.pw-home .tour-close:hover{background:var(--action-hover)}
+.pw-home .tour-close svg{width:16px; height:16px}
 .pw-home .sync-banner{background:#FFFBEB; border-color:#FBBF24}
 html.dark .pw-home .sync-banner{background:#33290f; border-color:#F59E0B}
 .pw-home .card-body{padding:14px 16px 15px; transition:background .2s cubic-bezier(.2,.7,.3,1)}

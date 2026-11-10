@@ -226,7 +226,9 @@ function skip(url, request) {
   if (request.method !== "GET") return true;
   if (url.origin !== self.location.origin) return !LIBS.some((prefix) => url.href.startsWith(prefix));
   const p = url.pathname;
-  return p.startsWith("/api/") || p.startsWith("/auth/") || p.startsWith("/monitoring") || p === "/sw.js";
+  // /help/: the how-to video and its poster. Too big to keep, and a kept copy
+  // can't answer the range requests Safari plays video with.
+  return p.startsWith("/api/") || p.startsWith("/auth/") || p.startsWith("/monitoring") || p.startsWith("/help/") || p === "/sw.js";
 }
 
 self.addEventListener("fetch", (event) => {

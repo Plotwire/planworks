@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { subscribeLibrary, libraryStatus, updateLibrary, appReady } from "@/lib/device/library";
 import { StatusIcon } from "@/components/StatusMark";
+import HelpVideo from "@/components/HelpVideo";
 
 // The dashboard's line about the offline library (lib/device/library.js):
 // how many drawings are kept on this device for working without signal, and,
@@ -99,15 +100,16 @@ export default function OfflinePanel() {
   );
 }
 
-// Help, in the dashboard's side menu: a short menu of help items, each
-// opening a short note. Only one so far: working offline on an iPad (adding
+// Help, in the dashboard's side menu: a short menu of help items. "How to
+// use Plotwire" opens the 2-minute video (components/HelpVideo.jsx). The
+// other opens a short note on working offline on an iPad (adding
 // Plotwire to the Home Screen opens it full screen, and keeps what it stores
 // for working without signal: Safari clears a website's storage after about
 // a week of not being used, but not a Home Screen app's). Styles: .help-* in
 // components/HomeScreen.jsx.
 export function HelpMenu() {
   const [open, setOpen] = useState(false);
-  const [topic, setTopic] = useState(null); // "ipad" while its note shows
+  const [topic, setTopic] = useState(null); // "ipad" while its note shows, "video" while the video plays
   const ref = useRef(null);
   useEffect(() => {
     if (!open) return;
@@ -133,12 +135,17 @@ export function HelpMenu() {
       {open && (
         <div className="help-menu" role="menu" aria-label="Help">
           <div className="help-head">Help</div>
-          <button type="button" role="menuitem" className="help-item" autoFocus onClick={() => { setOpen(false); setTopic("ipad"); }}>
+          <button type="button" role="menuitem" className="help-item" autoFocus onClick={() => { setOpen(false); setTopic("video"); }}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden><rect x="2.5" y="4.5" width="19" height="15" rx="2.5"/><path d="M10 9.2v5.6l4.6-2.8z"/></svg>
+            How to use Plotwire (2 min video)
+          </button>
+          <button type="button" role="menuitem" className="help-item" onClick={() => { setOpen(false); setTopic("ipad"); }}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden><rect x="4.5" y="2.5" width="15" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>
             Using Plotwire offline on iPad
           </button>
         </div>
       )}
+      {topic === "video" && <HelpVideo onClose={() => setTopic(null)} />}
       {topic === "ipad" && (
         <div className="pw-modal-back" onClick={() => setTopic(null)}>
           <div className="pw-modal help-note" role="dialog" aria-modal="true" aria-labelledby="help-ipad-title" onClick={(e) => e.stopPropagation()}>

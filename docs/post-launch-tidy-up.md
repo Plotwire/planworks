@@ -336,3 +336,34 @@ None of these lose work.
   `lib/device/outbox.js`). The status bar still says "Saved on this device",
   but they're lost if the tab is closed before signal returns. To fix, show a
   distinct status for memory-only saves and warn before the tab closes.
+
+## Found while making the how-to video (10 Nov 2026)
+
+A check of every feature against the code on master ed182a7, then the real app
+in the demo copy. None of these block anything; the video works round them.
+
+- **View → Colours: "Navy" looks the same as "Colour".** `resolveColours`
+  (`lib/symbols.jsx`) has no navy branch, so the cycle has four names but three
+  looks. Either draw Navy or drop it from the cycle.
+- **The View menu runs off the right edge at iPad width (1180px).** The Wire
+  lines "Bold" button and the current colour name are cut off, so Bold can't be
+  tapped on an iPad in landscape. The menu needs to open leftwards or clamp to
+  the window.
+- **No way to delete a group on an iPad.** Select several picks symbols for
+  Mirror copy, but deleting the picked group is keyboard-only (Delete).
+  A "Delete" button in the amber Select several bar would do it.
+- **No way to add an on-plan note on an iPad.** The Note tool is the N key only;
+  the floating toolbar has Floor plan, Select, Wire and Select several.
+- **"Save As" can't be reached.** The "Save & open jobs" panel with Save As is
+  still in `components/SheetParts.jsx`, but the top bar takes `onShowProjects`
+  and never shows a button for it. People asking to "duplicate a drawing" have
+  no way to. A "Duplicate" on the dashboard card would be clearer than bringing
+  the old panel back.
+- **The view-only planner link with no signal says "This link isn't working".**
+  The share page can't load without signal, and its error path shows the
+  broken-link message instead of a no-signal one.
+- **Quote: preset lines with no symbol link sit next to auto lines.** A placed
+  "2-Way Switch" becomes its own auto line ("2-Way Light Switch") while the
+  preset "2-way light switch" line stays empty, which reads like a duplicate.
+- **The scale bar only shows for PDFs with a known scale.** Plans from the
+  Floor plan tool are true to scale but get no scale bar on the sheet.
