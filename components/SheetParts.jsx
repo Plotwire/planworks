@@ -2924,18 +2924,19 @@ export function BoqTemplateEditor({ saved, savedPrefs, onSave, onClose }) {
         <div className="flex items-center justify-between px-6 h-14 bg-[#2C3E50] shrink-0">
           <div>
             <div className="text-[9px] tracking-[0.3em] uppercase text-[#9fd8e2]">Quote presets</div>
-            <div className="text-white font-semibold text-[15px] -mt-0.5" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>Default items &amp; specifications</div>
+            <div className="text-white font-semibold text-[15px] -mt-0.5" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>Default items, specs &amp; prices</div>
           </div>
           <button onClick={close} aria-label="Close" className="text-slate-300 hover:text-white"><X size={18}/></button>
         </div>
         <div className="px-6 pt-3.5 pb-3 shrink-0">
           <div role="note" className="flex items-start gap-2.5 rounded-lg border border-sky-300 bg-sky-50 px-3.5 py-2.5 text-[13px] leading-snug text-sky-950">
             <Info size={17} className="mt-px shrink-0 text-sky-700" aria-hidden="true"/>
-            <span><b>Presets are your starting template.</b> Changes apply to new quotes only. Quotes you’ve already started keep their own wording.</span>
+            <span><b>Presets are your starting template.</b> Changes apply to new quotes only. Quotes you’ve already started keep their own wording and prices.</span>
           </div>
         </div>
         <div className="px-6 py-2.5 bg-[#ECF8FA] border-y border-[#3FB7C9]/30 text-[11px] text-[#22808F]">
-          Edit the standard items, specs and section names used every time a new quote is created. Items marked <b>auto</b> still pull their quantity from the drawing.
+          Edit the standard items, specs, prices and section names used every time a new quote is created. Items marked <b>auto</b> still pull their quantity from the drawing.
+          {" "}A <b>unit rate</b> here (your selling price, before VAT) fills in on every new quote, and you can still change it on any quote. Leave it blank for none.
           {" "}Changes save as you type.
         </div>
         <div className="flex-1 overflow-y-auto px-6 py-4 text-slate-800">
@@ -2947,7 +2948,7 @@ export function BoqTemplateEditor({ saved, savedPrefs, onSave, onClose }) {
                 <thead>
                   <tr className="text-left text-slate-400 uppercase tracking-wider text-[8.5px] border-b border-slate-200">
                     <th className="py-1.5 w-6">#</th><th className="py-1.5 pr-2">Item</th><th className="py-1.5 pr-2">Specification / Notes</th>
-                    <th className="py-1.5 w-12 text-center">Qty</th><th className="w-6"></th>
+                    <th className="py-1.5 w-12 text-center">Qty</th><th className="py-1.5 w-[88px] pr-1 text-right">Unit rate</th><th className="w-6"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2957,6 +2958,14 @@ export function BoqTemplateEditor({ saved, savedPrefs, onSave, onClose }) {
                       <td className="py-0.5 pr-1"><input value={it.item} onChange={(e) => setItem(si, it.id, "item", e.target.value)} className={`${cell} text-[12px] font-medium text-slate-800`} placeholder="Item"/></td>
                       <td className="py-0.5 pr-1"><input value={it.spec} onChange={(e) => setItem(si, it.id, "spec", e.target.value)} className={`${cell} text-[11px] text-slate-500`} placeholder="Spec / notes"/></td>
                       <td className="py-0.5 text-center">{it.sf ? <span title="Quantity auto-fills from the drawing" className="text-[8px] uppercase tracking-wider text-[#22808F] bg-[#3FB7C9]/15 rounded px-1.5 py-0.5">auto</span> : <span className="text-slate-300 text-[10px]">—</span>}</td>
+                      <td className="py-0.5 pr-1">
+                        <div className="flex items-center gap-0.5">
+                          <span className="text-[11px] text-slate-400">£</span>
+                          <NumField value={it.rate} keepBlank onChange={(v) => setItem(si, it.id, "rate", v)} aria-label={`Unit rate for ${it.item || "this line"}`}
+                            title={parseNum(it.rate).bad ? "Not a number, so it won't be saved" : "Your selling price for one, before VAT. Blank for none."}
+                            className={`${cell} text-[12px] text-right tabular-nums${parseNum(it.rate).bad ? " ring-1 ring-amber-400 bg-amber-50" : ""}`} placeholder="—"/>
+                        </div>
+                      </td>
                       <td className="py-0.5 text-center"><button onClick={() => removeItem(si, it.id)} aria-label="Delete line" className="opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 text-slate-300 hover:text-red-500"><X size={12}/></button></td>
                     </tr>
                   ))}
@@ -3106,7 +3115,7 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
     setBoq(b => reconcileBoq(b, project, SYMBOL_META, findSymbol, { overrideTyped: true }));
   };
   const resetToTemplate = () => {
-    if (!window.confirm("Rebuild this quote from your saved presets and the current drawing? Quantities re-pull from the drawing and any rates you've typed will be cleared.")) return;
+    if (!window.confirm("Rebuild this quote from your saved presets and the current drawing? Quantities re-pull from the drawing, and every price goes back to your preset price (blank where a preset line has none).")) return;
     setBoq(buildInitialBoq(project, SYMBOL_META, findSymbol, boqTemplate, boqPrefs));
   };
 
