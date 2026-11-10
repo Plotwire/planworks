@@ -21,11 +21,13 @@ import {
 import { findFurniture, furnitureScale, FURNITURE_VIEWBOX, FURNITURE_COLOUR } from "@/lib/furniture.jsx";
 import {
   TopBar, Palette as PalettePanel, Workspace, Inspector,
-  FloatingToolbar, ZoomControls, WallTypeChooser, StatusBar, StatusCount, CollapsedPanel, MetaEditor, PrintPreview, BillOfQuantities,
+  FloatingToolbar, ZoomControls, WallTypeChooser, LineChooser, StatusBar, StatusCount, CollapsedPanel, MetaEditor, PrintPreview, BillOfQuantities,
   ProjectManager, SheetTabs, TitleBlockEditor, NotesEditor,
   ProjectTitleBlockContext,
 } from "@/components/SheetParts";
 import { useApp } from "@/components/AppShell";
+import { lineFields, withLine } from "@/lib/lineTypes";
+import { FLOOR_LINK_UP, FLOOR_LINK_DOWN, floorLinkPartner } from "@/lib/symbolDrafts/marks";
 import { openSketch } from "@/lib/device/sketches";
 import { SHEET, DRAW } from "@/lib/cad/sheet";
 import { applyPlanToSheet, scaleLabel, outsideNote, PLAN_PX } from "@/lib/cad/planScale";
@@ -599,6 +601,13 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const lastTileTapRef = useRef(null); // the last tap on a palette tile, to spot a double-tap
   const lastStampRef = useRef(null);   // the id of the symbol stamped last
   useEffect(() => { if (tool !== "stamp" && stampId) setStampId(null); }, [tool, stampId]);
+  // The Wire tool's next line (lib/lineTypes.js): a wire or a duct, and its
+  // arrowheads, chosen in the LineChooser beside the tool bar.
+  const [lineKind, setLineKind] = useState("wire");
+  const [lineEnds, setLineEnds] = useState("none");
+  // A floor link just placed: the offer to put its partner on the next floor
+  // ({ symbolId, x, y, target: { id, name } | null, from, up }).
+  const [linkOffer, setLinkOffer] = useState(null);
   // Select several & Mirror copy (lib/planMirror): the symbols picked on this
   // floor; picking on (a tap toggles a symbol, a drag draws a box); the box
   // being drawn; and the mirror line while it's set ({ a, bRaw, cursor, free }:
@@ -793,7 +802,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   // ---------- Sheets (floors) ----------
   const switchSheet = useCallback((id) => {
     setProject(p => ({ ...p, activeSheetId: id }));
-    setSelectedId(null); setSelectedAnnoId(null); setWireStart(null);
+    setSelectedId(null); setSelectedAnnoId(null); setWireStart(null); setLinkOffer(null);
     setHistory([]); setFuture([]);
     setTimeout(fitToScreen, 60);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1376,12 +1385,13 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       snapshot();
       const newItem = {
         id: "p_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
-        symbolId, x: snap(x), y: snap(y), rotation: 0, scale: 1, label: "",
+        symbolId, x: snap(x), y: snap(y), rotation: 0, scale: 1, label: linkLabel(symbolId),
       };
       updateProject({ placed: [...startPlaced, newItem] });
       setSelectedId(newItem.id);
       setSelectedAnnoId(null);
       noteSymbolUsed(symbolId); // to the front of the palette's Recent row
+      offerFloorLink(newItem);
     };
     const up = (ev) => finish(ev, true);
     const cancel = (ev) => finish(ev, false);
@@ -1415,13 +1425,43 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     const last = placed.find(p => p.id === lastStampRef.current);
     const newItem = {
       id: "p_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
-      symbolId: stampId, x: snap(x), y: snap(y), rotation: last ? last.rotation || 0 : 0, scale: 1, label: "",
+      symbolId: stampId, x: snap(x), y: snap(y), rotation: last ? last.rotation || 0 : 0, scale: 1, label: linkLabel(stampId),
     };
     updateProject({ placed: [...placed, newItem] });
     lastStampRef.current = newItem.id;
     setSelectedId(newItem.id);
     setSelectedAnnoId(null);
     noteSymbolUsed(stampId);
+    offerFloorLink(newItem);
+  };
+
+  // ---------- Floor links ----------
+  // An up link (lib/symbolDrafts/marks.jsx) points to the floor above (the next
+  // tab), a down link to the one below. A new one is labelled with that floor
+  // ("To First floor"), and placing it offers to put its partner there at the
+  // same spot, labelled back ("To Ground floor"). Its label is the inspector's
+  // Label / Reference, so it can be changed like any other.
+  const linkFloor = (symbolId) => {
+    const i = sheets.findIndex(s => s.id === activeSheet.id);
+    return (symbolId === FLOOR_LINK_UP ? sheets[i + 1] : symbolId === FLOOR_LINK_DOWN ? sheets[i - 1] : null) || null;
+  };
+  const linkLabel = (symbolId) => { const t = linkFloor(symbolId); return t ? `To ${t.name}` : ""; };
+  const offerFloorLink = (item) => {
+    const partner = floorLinkPartner(item.symbolId);
+    if (!partner || readOnly) return;
+    const t = linkFloor(item.symbolId);
+    setLinkOffer({ symbolId: partner, x: item.x, y: item.y, target: t ? { id: t.id, name: t.name } : null, from: activeSheet.name, up: item.symbolId === FLOOR_LINK_UP });
+  };
+  const placeLinkPartner = () => {
+    const o = linkOffer;
+    setLinkOffer(null);
+    if (!o || !o.target || readOnly) return;
+    if (!tryUsageRef.current.canAdd(1)) { tryPrompt.show(LOCKED.limit); return; } // Try mode: at the limit
+    const partner = {
+      id: "p_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
+      symbolId: o.symbolId, x: o.x, y: o.y, rotation: 0, scale: 1, label: `To ${o.from}`,
+    };
+    setProject(p => ({ ...p, sheets: p.sheets.map(s => s.id === o.target.id ? { ...s, placed: [...(s.placed || []), partner] } : s) }));
   };
   const stampLabel = stampId ? (SYMBOL_META[stampId]?.description || findSymbol(stampId)?.name || "symbol") : "";
 
@@ -1441,12 +1481,13 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     snapshot();
     const newItem = {
       id: "p_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
-      symbolId, x: snap(x), y: snap(y), rotation: 0, scale: 1, label: "",
+      symbolId, x: snap(x), y: snap(y), rotation: 0, scale: 1, label: linkLabel(symbolId),
     };
     updateProject({ placed: [...placed, newItem] });
     setSelectedId(newItem.id);
     setSelectedAnnoId(null);
     noteSymbolUsed(symbolId);
+    offerFloorLink(newItem);
   };
 
   const onDrawingDragOver = (e) => {
@@ -1468,7 +1509,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         setWireStart(item.id);
       } else if (wireStart !== item.id) {
         snapshot();
-        updateProject({ wires: [...wires, { id: "w_" + Date.now(), fromId: wireStart, toId: item.id }] });
+        updateProject({ wires: [...wires, { id: "w_" + Date.now(), fromId: wireStart, toId: item.id, ...lineFields(lineKind, lineEnds) }] });
         setWireStart(null);
       } else {
         setWireStart(null);
@@ -3261,6 +3302,32 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
               </div>
             );
           })()}
+          {/* A floor link just placed: put its partner on the other floor? */}
+          {linkOffer && !readOnly && (() => {
+            const arrow = linkOffer.up ? "↓" : "↑";
+            const plain = "min-h-[40px] px-3 rounded-xl text-[13px] font-semibold flex items-center gap-2 whitespace-nowrap bg-white text-[#1A2530] ring-1 ring-[#1A2530]/25 hover:bg-slate-50";
+            return (
+              <div role="region" aria-label="Floor link"
+                   className="shrink-0 relative z-20 flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2 bg-[#E6F6F8] text-[#1A2530] border-b border-[#3FB7C9]/50">
+                <div className="min-w-0 flex-1 basis-[260px] text-[14px] font-semibold leading-snug" role="status">
+                  {linkOffer.target
+                    ? `Put the matching ${arrow} on ${linkOffer.target.name}, in the same spot?`
+                    : `There's no floor ${linkOffer.up ? "above" : "below"} this one yet. Add one with + Add floor, then place its partner there.`}
+                </div>
+                <div className="flex items-center gap-2">
+                  {linkOffer.target && (
+                    <button type="button" onClick={placeLinkPartner}
+                            className="min-h-[40px] px-3 rounded-xl text-[13px] font-semibold flex items-center gap-2 whitespace-nowrap bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)] shadow-sm">
+                      <Check size={16}/> Place it
+                    </button>
+                  )}
+                  <button type="button" onClick={() => setLinkOffer(null)} className={plain}>
+                    {linkOffer.target ? "No thanks" : "OK"}
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
           <div className="relative flex-1 overflow-hidden" style={{ cursor: viewportCursor }}>
           <Workspace
             viewportRef={viewportRef}
@@ -3326,6 +3393,12 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
 
           {/* Wall-type chooser — only while the wall tool is active */}
           {tool === "wall" && <WallTypeChooser value={wallType} onChange={setWallType} />}
+          {tool === "wire" && !readOnly && (
+            // bottom middle: up top it would run under the zoom buttons on an iPad
+            <LineChooser type={lineKind} arrows={lineEnds} onType={setLineKind} onArrows={setLineEnds}
+              className="bottom-11 left-1/2 -translate-x-1/2 max-w-[calc(100%-120px)]"
+              hint={TOUCH ? "tap a symbol, then another" : "click a symbol, then another"} />
+          )}
 
           {/* Floating zoom toolbar */}
           <ZoomControls
@@ -3388,6 +3461,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
               selectedItem={selectedItem}
               selectedAnno={selectedAnno}
               wireSelected={!!selectedWireId}
+              selectedWire={selectedWireId ? wires.find(w => w.id === selectedWireId) || null : null}
+              onLine={readOnly ? null : (type, arrows) => { snapshot(); updateProject({ wires: wires.map(w => w.id === selectedWireId ? withLine(w, type, arrows) : w) }); }}
               updateLabel={updateLabel}
               updateAnnoText={updateAnnoText}
               setRotation={setRotation}

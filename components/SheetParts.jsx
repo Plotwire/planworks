@@ -19,6 +19,8 @@ import SymbolLibrary from "@/components/SymbolLibrary";
 import { findFurniture, FURNITURE, FURNITURE_VIEWBOX, FURNITURE_COLOUR } from "@/lib/furniture.jsx";
 import { drawSymbol } from "@/lib/symbolPdf";
 import { WIRE_STRENGTHS, normaliseWireStrength, wireStyle } from "@/lib/wireStrength";
+import { LINE_TYPES, LINE_ARROWS, lineType, lineArrows, lineLook, arrowHeads, symbolGap, linesUsed } from "@/lib/lineTypes";
+import { FLOOR_LINKS } from "@/lib/symbolDrafts/marks";
 import { buildInitialBoq, addMissingLabour, reconcileBoq, hasTypedDrawingQtys, isDrawingLinked, newBoqItem, templateForEditing, templateForSaving, newTemplateItem } from "@/lib/boqTemplate";
 import { useApp } from "@/components/AppShell";
 import { DEFAULT_TITLEBLOCK, resizeImageToDataUrl } from "@/lib/titleBlock";
@@ -61,7 +63,7 @@ export function useProjectTitleBlock() {
 const TOOLS = {
   select: { icon: MousePointer2, label: "Select", hint: "V", tip: "Select: click a symbol to move, turn or delete it" },
   pan:    { icon: Hand,          label: "Pan",    hint: "H" },
-  wire:   { icon: Cable,         label: "Wire",   hint: "W", tip: "Wire: click two symbols to link them, e.g. a switch to its lights" },
+  wire:   { icon: Cable,         label: "Wire",   hint: "W", tip: "Wire: click two symbols to link them with a wire (e.g. a switch to its lights) or a duct" },
   wall:   { icon: BrickWall,     label: "Wall",   hint: "" },
   note:   { icon: Type,          label: "Note",   hint: "N" },
   // Pick several symbols (a box, or taps) for Mirror copy.
@@ -537,7 +539,16 @@ export function Palette({ onPalettePointerDown, onFurniturePointerDown, symbolSc
   // what is offered here; placed symbols always draw (findSymbol).
   const { symbolLibrary, recentSymbols } = useApp();
   const [libraryOpen, setLibraryOpen] = useState(false);
-  const groups = useMemo(() => pickerGroups(picksFromSettings(symbolLibrary)), [symbolLibrary]);
+  // After the ticked symbols, the floor links (drawing marks,
+  // lib/symbolDrafts/marks.jsx): offered to every account, without a tick,
+  // unless they're ticked already (then they're in the Drawing marks group).
+  const groups = useMemo(() => {
+    const ticked = pickerGroups(picksFromSettings(symbolLibrary));
+    const have = new Set(ticked.flatMap((g) => g.items.map((i) => i.sym.id)));
+    const links = FLOOR_LINKS.filter((id) => !have.has(id))
+      .map((id) => ({ sym: findSymbol(id), meta: SYMBOL_META[id] || {}, category: "marks" })).filter((i) => i.sym);
+    return links.length ? [...ticked, { label: "Floor links", items: links }] : ticked;
+  }, [symbolLibrary]);
   const all = useMemo(() => groups.flatMap((g) => g.items), [groups]);
   // Recent: the account's last symbols placed (lib/recentSymbols.js), newest
   // first, of those this picker offers. None yet: no Recent row at all.
@@ -1085,7 +1096,7 @@ export function Sheet({
       }}/>
 
       {/* LEGEND COLUMN */}
-      <LegendColumn legendItems={legendItems} colourMode={colourMode} />
+      <LegendColumn legendItems={legendItems} colourMode={colourMode} wires={wires} wireStrength={wireStrength} />
 
       {/* NOTES COLUMN */}
       <NotesColumn notes={notes} updateNotes={updateNotes} />
@@ -1160,7 +1171,31 @@ function notesToHtml(n) {
 /* ----------------------------------------------------------------------------
  * LEGEND COLUMN — auto-generated from placed symbols
  * ------------------------------------------------------------------------- */
-function LegendColumn({ legendItems, colourMode }) {
+// The line kinds the drawing uses (wires, ducts: lib/lineTypes.js), after the
+// symbols in both legends, each with a sample of the line as it prints.
+const LEGEND_ROW = { display: "grid", gridTemplateColumns: "26px 1fr", alignItems: "center", gap: 6, padding: "3px 0", borderBottom: "0.5px solid #e5e5e5" };
+function LegendLines({ wires, colourMode, wireStrength }) {
+  return linesUsed(wires).map(({ type, arrows }) => {
+    const look = lineLook({ type }, wireStrength, colourMode);
+    return (
+      <div key={type} style={LEGEND_ROW}>
+        <svg viewBox="0 0 22 22" width={22} height={22} style={{ flexShrink: 0 }}>
+          <LineMark a={{ x: 1, y: 11 }} b={{ x: 21, y: 11 }} w={{ arrows: arrows ? "end" : "none" }} look={look} stroke={look.colour} width={look.width}/>
+        </svg>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 9, fontWeight: 600, color: "#171717", lineHeight: 1.2 }}>{type === "duct" ? "Duct" : "Wire"}</div>
+          {arrows && (
+            <div style={{ fontSize: 8, color: "#525252", marginTop: 1 }}>
+              {type === "duct" ? "Arrow shows the airflow direction" : "Arrow shows the direction"}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  });
+}
+
+function LegendColumn({ legendItems, colourMode, wires = [], wireStrength }) {
   return (
     <div style={{
       position: "absolute",
@@ -1210,6 +1245,7 @@ function LegendColumn({ legendItems, colourMode }) {
               </div>
             );
           })}
+          <LegendLines wires={wires} colourMode={colourMode} wireStrength={wireStrength} />
         </div>
       )}
     </div>
@@ -1788,6 +1824,20 @@ function PlanBackground({ bgImage, imageDisplay, viewportRef }) {
 // overlay is captured from the print sheet, so screen, print and PDF match.
 // Hovered (Select tool) or selected in the editor, a line shows at full
 // strength. Saved wires are unchanged.
+// A line can instead be a duct, and either can carry arrowheads
+// (lib/lineTypes.js): LineMark draws one, with its arrowheads stopping at the
+// edge of the symbols they point at, for the editor and the print sheet alike.
+function LineMark({ a, b, w, look, stroke, width, gapA, gapB }) {
+  const heads = arrowHeads(a, b, lineArrows(w), look.width, gapA, gapB);
+  return (
+    <>
+      <line x1={a.x} y1={a.y} x2={b.x} y2={b.y}
+        stroke={stroke} strokeWidth={width} strokeDasharray={look.dash} strokeLinecap="butt"
+        style={{ pointerEvents: "none" }}/>
+      {heads.map((pts, i) => <polygon key={i} points={pts} fill={stroke} style={{ pointerEvents: "none" }}/>)}
+    </>
+  );
+}
 
 function DrawingArea({
   drawingAreaRef, DRAW, bgImage, placed, wires, annotations,
@@ -1891,6 +1941,8 @@ function DrawingArea({
           const isSel = w.id === selectedWireId;
           const selectable = tool === "select";
           const full = selectable && w.id === hoverWireId; // hovered: full strength
+          const look = lineLook(w, wireStrength, colourMode);
+          const isDuct = lineType(w) === "duct";
           return (
             <g key={w.id}>
               {/* Wide invisible hit area so the thin line is easy to click/tap */}
@@ -1905,18 +1957,14 @@ function DrawingArea({
               {isSel && (
                 <line
                   x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-                  stroke="#3FB7C9" strokeWidth={5} strokeLinecap="round"
+                  stroke="#3FB7C9" strokeWidth={isDuct ? 7 : 5} strokeLinecap="round"
                   opacity={0.55} style={{ pointerEvents: "none" }}
                 />
               )}
-              <line
-                x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-                stroke={isSel ? "#22808F" : full ? wireLook.hoverColour : wireLook.colour}
-                strokeWidth={isSel ? 1.8 : full ? wireLook.hoverWidth : wireLook.width}
-                strokeDasharray={wireLook.dash}
-                strokeLinecap="butt"
-                style={{ pointerEvents: "none" }}
-              />
+              <LineMark a={a} b={b} w={w} look={look}
+                stroke={isSel ? "#22808F" : full ? look.hoverColour : look.colour}
+                width={isSel ? Math.max(1.8, look.width) : full ? look.hoverWidth : look.width}
+                gapA={symbolGap(symbolSize * (a.scale ?? 1))} gapB={symbolGap(symbolSize * (b.scale ?? 1))}/>
             </g>
           );
         })}
@@ -2279,7 +2327,7 @@ function TitleBlock({ meta, updateMeta, onSheetField }) {
  * INSPECTOR (right sidebar)
  * ========================================================================= */
 export function Inspector({
-  selectedItem, selectedAnno, wireSelected,
+  selectedItem, selectedAnno, wireSelected, selectedWire = null, onLine = null,
   updateLabel, updateAnnoText, setRotation, setItemScale,
   rotateSelected, deleteSelected, placed, onCollapse, onEditFloorPlan = null,
 }) {
@@ -2302,7 +2350,7 @@ export function Inspector({
           deleteSelected={deleteSelected}
         />
       ) : wireSelected ? (
-        <WireInspector deleteSelected={deleteSelected} />
+        <WireInspector wire={selectedWire} onLine={onLine} deleteSelected={deleteSelected} />
       ) : (
         <EmptyInspector placed={placed} onEditFloorPlan={onEditFloorPlan} />
       )}
@@ -2424,18 +2472,69 @@ function AnnoInspector({ anno, updateAnnoText, deleteSelected }) {
   );
 }
 
-function WireInspector({ deleteSelected }) {
+// Wire or duct, and its arrowheads (lib/lineTypes.js): a row of choices, used
+// by the inspector for a selected line and by LineChooser while drawing them.
+function LineOptions({ options, value, onChange, label, size = "panel" }) {
+  const on = "bg-[#3FB7C9]/15 text-[#1C6E7B] dark:text-[#5FD0E0] ring-1 ring-[#3FB7C9]/45";
+  const off = size === "panel"
+    ? "bg-slate-50 dark:bg-[#22303D] ring-1 ring-slate-200 dark:ring-[#2A3947] text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-[#283643]"
+    : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/10";
+  return (
+    <div role="radiogroup" aria-label={label} className="flex gap-1">
+      {options.map((o) => (
+        <button key={o.value} type="button" role="radio" aria-checked={value === o.value} onClick={() => onChange(o.value)}
+          className={`${size === "panel" ? "flex-1 px-2 py-1.5 rounded-md text-[10.5px]" : "px-2.5 py-1.5 rounded-lg text-[11px] uppercase tracking-wide"} font-semibold transition-colors ${value === o.value ? on : off}`}>
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// While the Wire tool is on: the kind of line and the arrowheads the next
+// lines get, beside the tool bar (like the wall chooser in the Floor plan tool).
+export function LineChooser({ type, arrows, onType, onArrows, hint = "tap a symbol, then another", className = "top-4 left-44" }) {
+  return (
+    <div className={`absolute ${className} z-20 flex flex-wrap items-center gap-1 bg-white dark:bg-[#16202B] rounded-xl ring-1 ring-slate-200/70 dark:ring-[#2A3947] shadow-[0_10px_30px_-10px_rgba(16,28,40,0.22)] p-1`}>
+      <LineOptions options={LINE_TYPES} value={type} onChange={onType} label="Line" size="bar"/>
+      <div className="w-px h-5 bg-slate-200 dark:bg-[#2A3947] mx-0.5"/>
+      <span className="px-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Arrows</span>
+      <LineOptions options={LINE_ARROWS} value={arrows} onChange={onArrows} label="Arrowheads" size="bar"/>
+      <div className="w-px h-5 bg-slate-200 dark:bg-[#2A3947] mx-0.5"/>
+      <span className="px-1.5 text-[10px] text-slate-500 dark:text-slate-400 whitespace-nowrap">{hint}</span>
+    </div>
+  );
+}
+
+function WireInspector({ wire, onLine, deleteSelected }) {
+  const type = lineType(wire), arrows = lineArrows(wire);
+  const name = type === "duct" ? "Duct" : "Wire";
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-4">
       <div>
-        <div className={`${PANEL_LABEL} mb-2`}>Wire</div>
+        <div className={`${PANEL_LABEL} mb-2`}>{name}</div>
         <div className="text-[10px] text-slate-600 dark:text-slate-300 leading-relaxed mb-3">
           This line connects two symbols. Remove it below, or press Delete / Backspace.
         </div>
       </div>
+      {wire && onLine && (
+        <>
+          <div>
+            <div className={`${PANEL_LABEL} mb-1.5`}>Line</div>
+            <LineOptions options={LINE_TYPES} value={type} onChange={(t) => onLine(t, arrows)} label="Line"/>
+          </div>
+          <div>
+            <div className={`${PANEL_LABEL} mb-1.5`}>Arrowheads</div>
+            <LineOptions options={LINE_ARROWS} value={arrows} onChange={(a) => onLine(type, a)} label="Arrowheads"/>
+            <div className="mt-1.5 text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
+              The start is the symbol tapped first.{type === "duct" ? " On a duct, the arrow shows which way the air goes." : ""}
+            </div>
+          </div>
+        </>
+      )}
       <button onClick={deleteSelected}
         className={`w-full ${PANEL_BTN_DANGER}`}>
-        <Trash2 size={12}/> Delete Wire
+        <Trash2 size={12}/> Delete {name}
       </button>
     </div>
   );
@@ -4518,7 +4617,7 @@ function PrintSheet({ meta, notes, bgImage, placed, wires, annotations, legendIt
         height: SHEET.height - SHEET.margin*2,
         border: "1px solid #0a0a0a",
       }}/>
-      <LegendColumnStatic legendItems={legendItems} colourMode={colourMode} />
+      <LegendColumnStatic legendItems={legendItems} colourMode={colourMode} wires={wires} wireStrength={wireStrength} />
       <NotesColumnStatic notes={notes} />
       <DrawingAreaStatic
         DRAW={DRAW}
@@ -4534,7 +4633,7 @@ function PrintSheet({ meta, notes, bgImage, placed, wires, annotations, legendIt
   );
 }
 
-function LegendColumnStatic({ legendItems, colourMode }) {
+function LegendColumnStatic({ legendItems, colourMode, wires = [], wireStrength }) {
   return (
     <div style={{
       position: "absolute",
@@ -4571,6 +4670,7 @@ function LegendColumnStatic({ legendItems, colourMode }) {
           </div>
         );
       })}
+      <LegendLines wires={wires} colourMode={colourMode} wireStrength={wireStrength} />
     </div>
   );
 }
@@ -4622,11 +4722,10 @@ function DrawingAreaStatic({ DRAW, bgImage, placed, wires, annotations, colourMo
           const a = placed.find(p => p.id === w.fromId);
           const b = placed.find(p => p.id === w.toId);
           if (!a || !b) return null;
+          const look = lineLook(w, wireStrength, colourMode);
           return (
-            <line key={w.id}
-              x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-              stroke={wireLook.colour}
-              strokeWidth={wireLook.width} strokeDasharray={wireLook.dash} strokeLinecap="butt"/>
+            <LineMark key={w.id} a={a} b={b} w={w} look={look} stroke={look.colour} width={look.width}
+              gapA={symbolGap(48 * symbolScale * (a.scale ?? 1))} gapB={symbolGap(48 * symbolScale * (b.scale ?? 1))}/>
           );
         })}
         {annotations.map(a => {
