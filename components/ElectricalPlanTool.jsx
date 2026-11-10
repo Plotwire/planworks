@@ -5,7 +5,7 @@ import {
   Upload, Trash2, Save, FolderOpen, Download, Undo2, Redo2,
   MousePointer2, Cable, RotateCw, ZoomIn, ZoomOut, Maximize2,
   Palette, Ruler, Hand, Sparkles, Type, Printer, Settings,
-  ChevronRight, X, FileText, Eye, EyeOff, Layers, FlipHorizontal2,
+  ChevronRight, X, FileText, Eye, EyeOff, Layers, FlipHorizontal2, Check,
 } from "lucide-react";
 import { snapLine, lineOk, mirrorCopies, inBox } from "@/lib/planMirror";
 import { listProjects, getProjectData, getProjectRecord, deleteProjectRow, unreferencedPlanPaths } from "@/lib/db";
@@ -405,6 +405,7 @@ const TOOLS = {
 // gestures the drawing handles. Keep them in step with the handlers.
 const SHORTCUTS = [
   { title: "Draw", items: [
+    ["Stamp: a symbol in the palette, then click the drawing for each one", ["double-click"]],
     ["Wire tool: link two symbols", ["w"]],
     ["Note tool", ["n"]],
     ["Stop: back to Select, clear the selection", ["esc"]],
@@ -440,6 +441,7 @@ const SHORTCUTS = [
 const TOUCH_GESTURES = [
   { title: "Draw", items: [
     ["Add a symbol", "Drag it from the palette onto the drawing"],
+    ["Add the same symbol again and again", "Double-tap it in the palette, then tap the drawing for each one"],
     ["Scroll the palette", "Swipe up or down on it"],
     ["Wire two symbols", "Wire tool, then tap one symbol and the other"],
   ] },
@@ -587,6 +589,16 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const tool = useEditor(s => s.tool);
   const setTool = useEditor(s => s.setTool);
   const [wireStart, setWireStart] = useState(null);
+  // Stamp mode (tool "stamp"): a double-tap on a palette tile keeps that
+  // symbol on the finger, and every tap on the drawing places another
+  // (stampAt). It stops when a tile is tapped again, Done is pressed, another
+  // tool is picked, or Esc. Each stamp turns the way the last one was turned,
+  // so sockets along one wall only need turning once.
+  const [stampId, setStampId] = useState(null);
+  const stampTapRef = useRef(null);    // a press on the drawing that may be a stamp: { id, x, y, at }
+  const lastTileTapRef = useRef(null); // the last tap on a palette tile, to spot a double-tap
+  const lastStampRef = useRef(null);   // the id of the symbol stamped last
+  useEffect(() => { if (tool !== "stamp" && stampId) setStampId(null); }, [tool, stampId]);
   // Select several & Mirror copy (lib/planMirror): the symbols picked on this
   // floor; picking on (a tap toggles a symbol, a drag draws a box); the box
   // being drawn; and the mirror line while it's set ({ a, bRaw, cursor, free }:
@@ -1224,6 +1236,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
           rectLeft: rect.left, rectTop: rect.top,
         };
         pinchActiveRef.current = true;
+        stampTapRef.current = null; // a pinch, not a stamp
         // Cancel any pan/drag the first finger may have begun.
         setIsPanning(false); setDraggingPlacedId(null); setDraggingFurnId(null); setDraggingAnno(null); setRotatingId(null); setRotatingFurnId(null); setResizingFurnId(null);
         try { el.setPointerCapture(e.pointerId); } catch {}
@@ -1354,6 +1367,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       if (ev.pointerId !== pointerId) return;
       const mode = state.mode;
       cleanup();
+      if (place && mode === "idle") { tapTile(symbolId); return; } // a tap, not a drag: stamp mode
       if (!place || mode !== "drag" || !findSymbol(symbolId)) return;
       if (loadGenRef.current !== startGen || openStateRef.current !== "ready") return;
       const { x, y } = clientToDrawing(ev.clientX, ev.clientY);
@@ -1375,6 +1389,41 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     window.addEventListener("pointerup", up);
     window.addEventListener("pointercancel", cancel);
   };
+
+  // ---------- Stamp mode ----------
+  // A tap on a tile while stamping stops it; two taps on the same tile within
+  // a moment start stamping that symbol (the double-click on a laptop).
+  const tapTile = (symbolId) => {
+    if (readOnly || !findSymbol(symbolId)) return;
+    const now = Date.now(), last = lastTileTapRef.current;
+    lastTileTapRef.current = { symbolId, at: now };
+    if (tool === "stamp") { setTool("select"); return; }
+    if (last && last.symbolId === symbolId && now - last.at < 450) {
+      lastTileTapRef.current = null;
+      if (picking || mirror) stopPicking();
+      setWireStart(null);
+      lastStampRef.current = null;
+      setStampId(symbolId);
+      setTool("stamp");
+    }
+  };
+  const stampAt = ({ x, y }) => {
+    if (!stampId || !findSymbol(stampId) || readOnly || openStateRef.current !== "ready") return;
+    if (x < 0 || y < 0 || x > DRAW.w || y > DRAW.h) return; // off the drawing area
+    if (!tryUsageRef.current.canAdd(1)) { tryPrompt.show(LOCKED.limit); return; } // Try mode: at the limit
+    snapshot();
+    const last = placed.find(p => p.id === lastStampRef.current);
+    const newItem = {
+      id: "p_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
+      symbolId: stampId, x: snap(x), y: snap(y), rotation: last ? last.rotation || 0 : 0, scale: 1, label: "",
+    };
+    updateProject({ placed: [...placed, newItem] });
+    lastStampRef.current = newItem.id;
+    setSelectedId(newItem.id);
+    setSelectedAnnoId(null);
+    noteSymbolUsed(stampId);
+  };
+  const stampLabel = stampId ? (SYMBOL_META[stampId]?.description || findSymbol(stampId)?.name || "symbol") : "";
 
   // Drop onto the drawing area
   const onDrawingDrop = (e) => {
@@ -1625,6 +1674,10 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
 
     if (wantPan) {
       e.preventDefault();
+      // Stamp mode: a press on the drawing that comes up where it went down
+      // places a symbol (onViewportMouseUp); one that moves was a pan.
+      stampTapRef.current = tool === "stamp" && !explicitPan && e.button === 0 && e.target.closest?.("[data-drawing-bg]")
+        ? { id: e.pointerId, x: e.clientX, y: e.clientY, at: clientToDrawing(e.clientX, e.clientY) } : null;
       setIsPanning(true);
       panStart.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
       try { viewportRef.current?.setPointerCapture?.(e.pointerId); } catch {}
@@ -1770,6 +1823,10 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   };
 
   const onViewportMouseUp = (e) => {
+    const tap = stampTapRef.current;
+    stampTapRef.current = null;
+    if (tap && tool === "stamp" && e && e.pointerId === tap.id && !pinchActiveRef.current
+        && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) < (e.pointerType === "mouse" ? 5 : 10)) stampAt(tap.at);
     if (pickBox) {
       const hits = inBox(placed, pickBox).map(p => p.id);
       setPicked(ids => [...new Set([...ids, ...hits])]);
@@ -2922,6 +2979,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     tool === "wire" ? "crosshair" :
     tool === "wall" ? "crosshair" :
     tool === "note" ? "text" :
+    tool === "stamp" ? "copy" :
     "default";
 
   // The list of distinct symbol IDs used in the current sheet (for the legend)
@@ -3004,6 +3062,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     : tool === "wall" ? (wallDraft ? [`${act} to set the end point`, !TOUCH && ["shift", "any angle"], !TOUCH && ["esc", "cancel"]] : [`${act} to start a wall`, !TOUCH && ["esc", "exit"]])
     : tool === "wire" ? [wireStart ? `${act} the symbol to link it to` : `${act} a symbol to start a wire`, !TOUCH && ["esc", "stop"]]
     : tool === "note" ? [`${act} the drawing to add a note`, !TOUCH && ["esc", "cancel"]]
+    : tool === "stamp" ? [`${act} the drawing to place another`, `${act.toLowerCase()} the tile again to stop`, !TOUCH && ["esc", "stop"]]
     : tool === "pan" ? (TOUCH ? ["Drag to pan", "pinch to zoom"] : ["Drag to pan", ["wheel", "to zoom"], ["v", "select"]])
     : selectedId ? (TOUCH ? ["Drag to move it", "drag the round handle to rotate"] : ["Drag to move it", ["r", "rotate 15°"], ...deselect])
     : selectedFurnId ? ["Drag to move it", TOUCH ? "drag its handles to rotate or resize" : null, ...deselect]
@@ -3111,6 +3170,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         {!sidebarHidden && (
           <PalettePanel
             onPalettePointerDown={onPalettePointerDown}
+            stampId={tool === "stamp" ? stampId : null}
             onFurniturePointerDown={onFurniturePointerDown}
             symbolScale={symbolScale}
             setSymbolScale={setSymbolScale}
@@ -3175,6 +3235,29 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
                   )}
                   <button type="button" onClick={stopPicking} className={`${plain} ring-2 ring-[#1A2530]/60`}><X size={18}/> Cancel</button>
                 </div>
+              </div>
+            );
+          })()}
+          {/* Stamp mode: the same bright bar, saying what's being placed, with
+              a big Done (the tile again, another tool or Esc stop it too). */}
+          {tool === "stamp" && stampId && !readOnly && (() => {
+            const sym = findSymbol(stampId);
+            const cols = resolveColours(stampId, colourMode || "colour");
+            return (
+              <div role="region" aria-label="Stamp mode"
+                   className="shrink-0 relative z-20 flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5 bg-amber-300 text-[#1A2530] border-b-2 border-amber-500 shadow-[0_8px_18px_-10px_rgba(16,28,40,0.45)]">
+                <div className="flex items-center gap-3 min-w-0 flex-1 basis-[280px] min-h-[44px]">
+                  <span className="shrink-0 w-10 h-10 rounded-xl bg-white flex items-center justify-center" aria-hidden="true">
+                    <svg viewBox={VIEWBOX} width="30" height="30" style={{ color: cols.body, "--feeder": cols.feeder }}>{sym?.svg}</svg>
+                  </span>
+                  <div className="min-w-0 text-[15px] font-bold leading-snug" role="status">
+                    Stamping {stampLabel}. {TOUCH ? "Tap" : "Click"} the drawing to place each one.
+                  </div>
+                </div>
+                <button type="button" onClick={() => setTool("select")}
+                        className="min-h-[44px] px-3 lg:px-4 rounded-xl text-[14px] font-semibold flex items-center gap-2 whitespace-nowrap bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)] shadow-sm">
+                  <Check size={18}/> Done
+                </button>
               </div>
             );
           })()}

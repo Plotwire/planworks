@@ -529,7 +529,7 @@ export function SheetTabs({ sheets, activeId, onSwitch, onAdd, onRename, onDelet
 /* ============================================================================
  * PALETTE (left sidebar)
  * ========================================================================= */
-export function Palette({ onPalettePointerDown, onFurniturePointerDown, symbolScale, setSymbolScale, colourMode }) {
+export function Palette({ onPalettePointerDown, onFurniturePointerDown, symbolScale, setSymbolScale, colourMode, stampId = null }) {
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState("electrical"); // "electrical" | "floor"
   // The symbols this account ticked in its Symbol Library (by default the
@@ -563,6 +563,11 @@ export function Palette({ onPalettePointerDown, onFurniturePointerDown, symbolSc
     </button>
   );
 
+  // A double-tap (double-click) on a tile starts stamp mode with it
+  // (components/ElectricalPlanTool.jsx); that tile gets a thick teal ring.
+  const stampRing = (id) => (id === stampId ? " ring-[3px] !ring-[#2C97A8] bg-[#3FB7C9]/10" : "");
+  const tileTitle = (label, meta) => label + (meta?.height ? ` · ${meta.height}` : "") + " · double-tap to place one after another";
+
   const Tile = ({ sym, meta }) => {
     const cols = resolveColours(sym.id, colourMode || "colour");
     const label = meta?.description || sym.name;
@@ -570,10 +575,11 @@ export function Palette({ onPalettePointerDown, onFurniturePointerDown, symbolSc
       <div
         onPointerDown={(e) => onPalettePointerDown(e, sym.id)}
         style={{ touchAction: "none" }}
-        title={label + (meta?.height ? ` · ${meta.height}` : "")}
-        className="group relative bg-white dark:bg-[#22303D] hover:bg-slate-50 dark:hover:bg-[#283643] rounded-xl ring-1 ring-slate-200 dark:ring-[#2A3947] hover:ring-[#3FB7C9]/40 hover:shadow-sm
+        title={tileTitle(label, meta)}
+        aria-pressed={sym.id === stampId ? true : undefined}
+        className={`group relative bg-white dark:bg-[#22303D] hover:bg-slate-50 dark:hover:bg-[#283643] rounded-xl ring-1 ring-slate-200 dark:ring-[#2A3947] hover:ring-[#3FB7C9]/40 hover:shadow-sm
                    cursor-grab active:cursor-grabbing p-3 flex flex-col items-center gap-2 select-none [&>*]:pointer-events-none
-                   transition-all duration-200 hover:-translate-y-0.5">
+                   transition-all duration-200 hover:-translate-y-0.5${stampRing(sym.id)}`}>
         <svg viewBox={VIEWBOX} width="46" height="46"
              style={{ color: cols.body, "--feeder": cols.feeder, filter: `drop-shadow(0 0 5px ${cols.body}30)`, pointerEvents: "none" }}
              className="relative z-10 transition-transform duration-200 group-hover:scale-110">
@@ -596,11 +602,12 @@ export function Palette({ onPalettePointerDown, onFurniturePointerDown, symbolSc
       <div
         onPointerDown={(e) => onPalettePointerDown(e, sym.id)}
         style={{ touchAction: "none" }}
-        title={label + (meta?.height ? ` · ${meta.height}` : "")}
+        title={tileTitle(label, meta)}
         aria-label={label}
+        aria-pressed={sym.id === stampId ? true : undefined}
         data-recent-symbol={sym.id}
-        className="bg-white dark:bg-[#22303D] hover:bg-slate-50 dark:hover:bg-[#283643] rounded-lg ring-1 ring-slate-200 dark:ring-[#2A3947] hover:ring-[#3FB7C9]/40
-                   cursor-grab active:cursor-grabbing h-11 flex items-center justify-center select-none [&>*]:pointer-events-none transition-colors">
+        className={`bg-white dark:bg-[#22303D] hover:bg-slate-50 dark:hover:bg-[#283643] rounded-lg ring-1 ring-slate-200 dark:ring-[#2A3947] hover:ring-[#3FB7C9]/40
+                   cursor-grab active:cursor-grabbing h-11 flex items-center justify-center select-none [&>*]:pointer-events-none transition-colors${stampRing(sym.id)}`}>
         <svg viewBox={VIEWBOX} width="30" height="30" style={{ color: cols.body, "--feeder": cols.feeder, pointerEvents: "none" }}>
           {sym.svg}
         </svg>
