@@ -63,3 +63,47 @@ test("floor links never add a line to the quote", () => {
   const again = reconcileBoq(boq, drawing, meta, () => null);
   assert.equal(again.sections.flatMap((s) => s.items).some((i) => /floor (above|below)/i.test(i.item)), false);
 });
+
+// ---- runs: lines that start, bend and end anywhere ----
+import { lineFromNodes, linePoints, runArrowHeads, linesAfterDelete, lineSymbolIds } from "../lib/lineTypes.js";
+import { mirrorCopies } from "../lib/planMirror.js";
+
+test("a straight symbol-to-symbol line is saved exactly as before; anything else as a run", () => {
+  assert.deepEqual(lineFromNodes("w1", [{ id: "a" }, { id: "b" }], "wire", "none"), { id: "w1", fromId: "a", toId: "b" });
+  const duct = lineFromNodes("w2", [{ id: "fan" }, { x: 10.04, y: 20 }], "duct", "end");
+  assert.deepEqual(duct, { id: "w2", pts: [{ id: "fan" }, { x: 10, y: 20 }], type: "duct", arrows: "end" });
+  const bent = lineFromNodes("w3", [{ id: "a" }, { x: 5, y: 5 }, { id: "b" }], "wire", "none");
+  assert.deepEqual(bent.pts.length, 3);
+  assert.deepEqual(lineSymbolIds(bent), ["a", "b"]);
+});
+
+test("a run's points follow its symbols, free points stay put; arrowheads on free ends touch the point", () => {
+  const byId = new Map([["sw", { id: "sw", x: 0, y: 0 }]]);
+  const run = { id: "w", pts: [{ id: "sw" }, { x: 100, y: 0 }, { x: 100, y: 50 }], arrows: "end" };
+  const pts = linePoints(run, byId, () => 10);
+  assert.deepEqual(pts, [{ x: 0, y: 0, gap: 10 }, { x: 100, y: 0, gap: 0 }, { x: 100, y: 50, gap: 0 }]);
+  const [end] = runArrowHeads(pts, "end", 1);
+  assert.equal(end.split(" ")[0], "100,50"); // the tip right on the free end
+  const [start] = runArrowHeads(pts, "start", 1);
+  assert.equal(start.split(" ")[0], "10,0"); // stops at the switch's edge
+  assert.equal(linePoints({ pts: [{ id: "gone" }, { x: 1, y: 1 }] }, byId, () => 0), null);
+});
+
+test("deleting a symbol: a straight line on it goes, as always; a run keeps its shape", () => {
+  const byId = new Map([["a", { id: "a", x: 10, y: 20 }], ["b", { id: "b", x: 30, y: 40 }]]);
+  const wires = [{ id: "w1", fromId: "a", toId: "b" }, { id: "w2", pts: [{ id: "a" }, { x: 50, y: 50 }] }, { id: "w3", pts: [{ id: "b" }, { x: 5, y: 5 }] }];
+  const left = linesAfterDelete(wires, new Set(["a"]), byId);
+  assert.deepEqual(left.map((w) => w.id), ["w2", "w3"]);
+  assert.deepEqual(left[0].pts, [{ x: 10, y: 20 }, { x: 50, y: 50 }]);
+});
+
+test("Mirror copy takes a run whose symbols are all copied, its free points mirrored", () => {
+  const items = [{ id: "fan", x: 10, y: 10, rotation: 0 }];
+  const wires = [{ id: "d", pts: [{ id: "fan" }, { x: 2, y: 10 }], type: "duct", arrows: "end" }, { id: "x", pts: [{ id: "other" }, { x: 0, y: 0 }] }];
+  let n = 0;
+  const out = mirrorCopies(items, wires, { x: 20, y: 0 }, { x: 20, y: 100 }, { w: 500, h: 500 }, () => "c" + n++, () => "cw" + n++);
+  assert.equal(out.wires.length, 1);
+  assert.equal(out.wires[0].pts[0].id, out.copies[0].id);
+  assert.deepEqual(out.wires[0].pts[1], { x: 38, y: 10 });
+  assert.equal(out.wires[0].type, "duct");
+});

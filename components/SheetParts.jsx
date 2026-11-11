@@ -8,7 +8,7 @@ import {
   Palette as PaletteIcon, Ruler, Hand, Type, Printer, Settings, Search, Sun, Moon, Mail,
   ChevronRight, ChevronLeft, X, FileText, PanelLeftClose, PanelLeftOpen,
   Grid3x3, ChevronDown, Check, ClipboardList, Plus, Clock, LayoutPanelTop, ImagePlus, SlidersHorizontal, Building2, PencilRuler, Keyboard,
-  Crop, Info, BoxSelect,
+  Crop, Info, BoxSelect, AirVent,
 } from "lucide-react";
 import {
   SYMBOLS, SYMBOL_META, CATEGORY_COLOURS, VIEWBOX,
@@ -19,7 +19,7 @@ import SymbolLibrary from "@/components/SymbolLibrary";
 import { findFurniture, FURNITURE, FURNITURE_VIEWBOX, FURNITURE_COLOUR } from "@/lib/furniture.jsx";
 import { drawSymbol } from "@/lib/symbolPdf";
 import { WIRE_STRENGTHS, normaliseWireStrength, wireStyle } from "@/lib/wireStrength";
-import { LINE_TYPES, LINE_ARROWS, lineType, lineArrows, lineLook, arrowHeads, symbolGap, linesUsed } from "@/lib/lineTypes";
+import { LINE_TYPES, LINE_ARROWS, lineType, lineArrows, lineLook, runArrowHeads, linePoints, symbolGap, linesUsed } from "@/lib/lineTypes";
 import { FLOOR_LINKS } from "@/lib/symbolDrafts/marks";
 import { buildInitialBoq, addMissingLabour, reconcileBoq, hasTypedDrawingQtys, isDrawingLinked, newBoqItem, templateForEditing, templateForSaving, newTemplateItem } from "@/lib/boqTemplate";
 import { useApp } from "@/components/AppShell";
@@ -63,7 +63,9 @@ export function useProjectTitleBlock() {
 const TOOLS = {
   select: { icon: MousePointer2, label: "Select", hint: "V", tip: "Select: click a symbol to move, turn or delete it" },
   pan:    { icon: Hand,          label: "Pan",    hint: "H" },
-  wire:   { icon: Cable,         label: "Wire",   hint: "W", tip: "Wire: click two symbols to link them with a wire (e.g. a switch to its lights) or a duct" },
+  // Wire and Duct draw a run: click points (or symbols), double-click to finish.
+  wire:   { icon: Cable,         label: "Wire",   hint: "W", tip: "Wire: click points or symbols to draw a run (e.g. a switch to its lights), double-click to finish" },
+  duct:   { icon: AirVent,       label: "Duct",   hint: "D", tip: "Duct: click points to draw a duct run (e.g. an extractor to the outside wall), double-click to finish" },
   wall:   { icon: BrickWall,     label: "Wall",   hint: "" },
   note:   { icon: Type,          label: "Note",   hint: "N" },
   // Pick several symbols (a box, or taps) for Mirror copy.
@@ -912,7 +914,7 @@ export function Workspace({
   onFurnitureMouseDown, startFurnRotating, startFurnResizing,
   onWallMouseDown,
   startRotating,
-  multi = null, onViewportPointerDownCapture = null,
+  multi = null, onViewportPointerDownCapture = null, lineDraft = null,
 }) {
   /* ------------------------------------------------------------------------
    * Symbols went blurry on zoom and never recovered.
@@ -1022,6 +1024,7 @@ export function Workspace({
           onAnnotationAnchorMouseDown={onAnnotationAnchorMouseDown}
           startRotating={startRotating}
           multi={multi}
+          lineDraft={lineDraft}
         />
         </div>
       </div>
@@ -1054,7 +1057,7 @@ export function Sheet({
   onFurnitureMouseDown, startFurnRotating, startFurnResizing,
   onWallMouseDown,
   startRotating,
-  multi = null,
+  multi = null, lineDraft = null,
 }) {
   const { access = {} } = useApp();
   const trial = Boolean(access.isTry);
@@ -1125,6 +1128,7 @@ export function Sheet({
         onAnnotationAnchorMouseDown={onAnnotationAnchorMouseDown}
         startRotating={startRotating}
         multi={multi}
+        lineDraft={lineDraft}
       />
 
       {/* TITLE BLOCK */}
@@ -1180,7 +1184,7 @@ function LegendLines({ wires, colourMode, wireStrength }) {
     return (
       <div key={type} style={LEGEND_ROW}>
         <svg viewBox="0 0 22 22" width={22} height={22} style={{ flexShrink: 0 }}>
-          <LineMark a={{ x: 1, y: 11 }} b={{ x: 21, y: 11 }} w={{ arrows: arrows ? "end" : "none" }} look={look} stroke={look.colour} width={look.width}/>
+          <LineMark pts={[{ x: 1, y: 11, gap: 0 }, { x: 21, y: 11, gap: 0 }]} w={{ arrows: arrows ? "end" : "none" }} look={look} stroke={look.colour} width={look.width}/>
         </svg>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 9, fontWeight: 600, color: "#171717", lineHeight: 1.2 }}>{type === "duct" ? "Duct" : "Wire"}</div>
@@ -1827,14 +1831,17 @@ function PlanBackground({ bgImage, imageDisplay, viewportRef }) {
 // A line can instead be a duct, and either can carry arrowheads
 // (lib/lineTypes.js): LineMark draws one, with its arrowheads stopping at the
 // edge of the symbols they point at, for the editor and the print sheet alike.
-function LineMark({ a, b, w, look, stroke, width, gapA, gapB }) {
-  const heads = arrowHeads(a, b, lineArrows(w), look.width, gapA, gapB);
+// pts: the points the line runs through ([{ x, y, gap }], lib/lineTypes.js
+// linePoints): two for a straight line, more where it bends.
+const ptsAttr = (pts) => pts.map((p) => `${p.x},${p.y}`).join(" ");
+function LineMark({ pts, w, look, stroke, width }) {
+  const heads = runArrowHeads(pts, lineArrows(w), look.width);
   return (
     <>
-      <line x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-        stroke={stroke} strokeWidth={width} strokeDasharray={look.dash} strokeLinecap="butt"
+      <polyline points={ptsAttr(pts)} fill="none"
+        stroke={stroke} strokeWidth={width} strokeDasharray={look.dash} strokeLinecap="butt" strokeLinejoin="round"
         style={{ pointerEvents: "none" }}/>
-      {heads.map((pts, i) => <polygon key={i} points={pts} fill={stroke} style={{ pointerEvents: "none" }}/>)}
+      {heads.map((h, i) => <polygon key={i} points={h} fill={stroke} style={{ pointerEvents: "none" }}/>)}
     </>
   );
 }
@@ -1854,7 +1861,10 @@ function DrawingArea({
   // (Set of symbol ids), box ({ x0, y0, x1, y1 }), line ({ a, b }), ghosts
   // (the copies to come, bad: off the drawing area) }.
   multi = null,
+  // The Wire / Duct tool's run being drawn: { pts: [{ x, y }], cursor, type }.
+  lineDraft = null,
 }) {
+  const placedById = useMemo(() => new Map(placed.map((p) => [p.id, p])), [placed]);
   // tool + selection come straight from the store now — no longer threaded
   // down through Workspace → Sheet → DrawingArea.
   const tool = useEditor(s => s.tool);
@@ -1933,41 +1943,58 @@ function DrawingArea({
 
       <svg width={DRAW.w} height={DRAW.h}
            style={{ position: "absolute", left: 0, top: 0, pointerEvents: "none", overflow: "visible" }}>
-        {/* Wires */}
+        {/* Wires and ducts: straight between two symbols, or a run with free
+            ends and bends (lib/lineTypes.js linePoints) */}
         {wires.map(w => {
-          const a = placed.find(p => p.id === w.fromId);
-          const b = placed.find(p => p.id === w.toId);
-          if (!a || !b) return null;
+          const pts = linePoints(w, placedById, (s) => symbolGap(symbolSize * (s.scale ?? 1)));
+          if (!pts) return null;
           const isSel = w.id === selectedWireId;
           const selectable = tool === "select";
           const full = selectable && w.id === hoverWireId; // hovered: full strength
           const look = lineLook(w, wireStrength, colourMode);
           const isDuct = lineType(w) === "duct";
+          const points = ptsAttr(pts);
           return (
             <g key={w.id}>
               {/* Wide invisible hit area so the thin line is easy to click/tap */}
-              <line
-                x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-                stroke="transparent" strokeWidth={14} strokeLinecap="round"
+              <polyline
+                points={points} fill="none"
+                stroke="transparent" strokeWidth={14} strokeLinecap="round" strokeLinejoin="round"
                 style={{ cursor: selectable ? "pointer" : "default", pointerEvents: selectable ? "stroke" : "none" }}
                 onPointerDown={(e) => { if (selectable) { e.stopPropagation(); onWireSelect?.(w.id); } }}
                 onPointerEnter={() => setHoverWireId(w.id)}
                 onPointerLeave={() => setHoverWireId((h) => (h === w.id ? null : h))}
               />
               {isSel && (
-                <line
-                  x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-                  stroke="#3FB7C9" strokeWidth={isDuct ? 7 : 5} strokeLinecap="round"
+                <polyline
+                  points={points} fill="none"
+                  stroke="#3FB7C9" strokeWidth={isDuct ? 7 : 5} strokeLinecap="round" strokeLinejoin="round"
                   opacity={0.55} style={{ pointerEvents: "none" }}
                 />
               )}
-              <LineMark a={a} b={b} w={w} look={look}
+              <LineMark pts={pts} w={w} look={look}
                 stroke={isSel ? "#22808F" : full ? look.hoverColour : look.colour}
-                width={isSel ? Math.max(1.8, look.width) : full ? look.hoverWidth : look.width}
-                gapA={symbolGap(symbolSize * (a.scale ?? 1))} gapB={symbolGap(symbolSize * (b.scale ?? 1))}/>
+                width={isSel ? Math.max(1.8, look.width) : full ? look.hoverWidth : look.width}/>
             </g>
           );
         })}
+        {/* The run being drawn with the Wire or Duct tool: its points so far,
+            and a stretch to the pointer */}
+        {lineDraft && lineDraft.pts.length > 0 && (() => {
+          const look = lineLook({ type: lineDraft.type }, wireStrength, colourMode);
+          const shown = lineDraft.cursor ? [...lineDraft.pts, lineDraft.cursor] : lineDraft.pts;
+          return (
+            <g style={{ pointerEvents: "none" }}>
+              {shown.length > 1 && (
+                <polyline points={ptsAttr(shown)} fill="none" stroke={look.hoverColour} strokeWidth={look.width}
+                  strokeDasharray={look.dash} strokeLinejoin="round" opacity={0.85}/>
+              )}
+              {lineDraft.pts.map((p, i) => (
+                <circle key={i} cx={p.x} cy={p.y} r={i === 0 ? 3.2 : 2.4} fill="#ffffff" stroke={look.hoverColour} strokeWidth={1.2}/>
+              ))}
+            </g>
+          );
+        })()}
 
         {/* Annotations (leader lines first so they're behind text) */}
         {annotations.map(a => {
@@ -2473,7 +2500,7 @@ function AnnoInspector({ anno, updateAnnoText, deleteSelected }) {
 }
 
 // Wire or duct, and its arrowheads (lib/lineTypes.js): a row of choices, used
-// by the inspector for a selected line and by LineChooser while drawing them.
+// by the inspector for a selected line.
 function LineOptions({ options, value, onChange, label, size = "panel" }) {
   const on = "bg-[#3FB7C9]/15 text-[#1C6E7B] dark:text-[#5FD0E0] ring-1 ring-[#3FB7C9]/45";
   const off = size === "panel"
@@ -2491,21 +2518,6 @@ function LineOptions({ options, value, onChange, label, size = "panel" }) {
   );
 }
 
-// While the Wire tool is on: the kind of line and the arrowheads the next
-// lines get, beside the tool bar (like the wall chooser in the Floor plan tool).
-export function LineChooser({ type, arrows, onType, onArrows, hint = "tap a symbol, then another", className = "top-4 left-44" }) {
-  return (
-    <div className={`absolute ${className} z-20 flex flex-wrap items-center gap-1 bg-white dark:bg-[#16202B] rounded-xl ring-1 ring-slate-200/70 dark:ring-[#2A3947] shadow-[0_10px_30px_-10px_rgba(16,28,40,0.22)] p-1`}>
-      <LineOptions options={LINE_TYPES} value={type} onChange={onType} label="Line" size="bar"/>
-      <div className="w-px h-5 bg-slate-200 dark:bg-[#2A3947] mx-0.5"/>
-      <span className="px-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Arrows</span>
-      <LineOptions options={LINE_ARROWS} value={arrows} onChange={onArrows} label="Arrowheads" size="bar"/>
-      <div className="w-px h-5 bg-slate-200 dark:bg-[#2A3947] mx-0.5"/>
-      <span className="px-1.5 text-[10px] text-slate-500 dark:text-slate-400 whitespace-nowrap">{hint}</span>
-    </div>
-  );
-}
-
 function WireInspector({ wire, onLine, deleteSelected }) {
   const type = lineType(wire), arrows = lineArrows(wire);
   const name = type === "duct" ? "Duct" : "Wire";
@@ -2514,7 +2526,7 @@ function WireInspector({ wire, onLine, deleteSelected }) {
       <div>
         <div className={`${PANEL_LABEL} mb-2`}>{name}</div>
         <div className="text-[10px] text-slate-600 dark:text-slate-300 leading-relaxed mb-3">
-          This line connects two symbols. Remove it below, or press Delete / Backspace.
+          This line runs between symbols or points on the plan. Remove it below, or press Delete / Backspace.
         </div>
       </div>
       {wire && onLine && (
@@ -2527,7 +2539,7 @@ function WireInspector({ wire, onLine, deleteSelected }) {
             <div className={`${PANEL_LABEL} mb-1.5`}>Arrowheads</div>
             <LineOptions options={LINE_ARROWS} value={arrows} onChange={(a) => onLine(type, a)} label="Arrowheads"/>
             <div className="mt-1.5 text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
-              The start is the symbol tapped first.{type === "duct" ? " On a duct, the arrow shows which way the air goes." : ""}
+              The start is where the line was begun.{type === "duct" ? " On a duct, the arrow shows which way the air goes." : ""}
             </div>
           </div>
         </>
@@ -4718,16 +4730,15 @@ function DrawingAreaStatic({ DRAW, bgImage, placed, wires, annotations, colourMo
       <ScaleBar bg={bgImage} />
       <svg width={DRAW.w} height={DRAW.h}
            style={{ position: "absolute", left: 0, top: 0, overflow: "visible" }}>
-        {wires.map(w => {
-          const a = placed.find(p => p.id === w.fromId);
-          const b = placed.find(p => p.id === w.toId);
-          if (!a || !b) return null;
-          const look = lineLook(w, wireStrength, colourMode);
-          return (
-            <LineMark key={w.id} a={a} b={b} w={w} look={look} stroke={look.colour} width={look.width}
-              gapA={symbolGap(48 * symbolScale * (a.scale ?? 1))} gapB={symbolGap(48 * symbolScale * (b.scale ?? 1))}/>
-          );
-        })}
+        {(() => {
+          const byId = new Map(placed.map((p) => [p.id, p]));
+          return wires.map(w => {
+            const pts = linePoints(w, byId, (s) => symbolGap(48 * symbolScale * (s.scale ?? 1)));
+            if (!pts) return null;
+            const look = lineLook(w, wireStrength, colourMode);
+            return <g key={w.id}><LineMark pts={pts} w={w} look={look} stroke={look.colour} width={look.width}/></g>;
+          });
+        })()}
         {annotations.map(a => {
           const stroke = colourMode === "mono" ? "#0a0a0a" : "#dc2626";
           const dx = a.anchorX - a.x;

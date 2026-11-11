@@ -115,7 +115,7 @@ export interface Project {
   activeSheetId: ID;
 }
 
-export type Tool = 'select' | 'pan' | 'wire' | 'note' | 'wall' | 'stamp';
+export type Tool = 'select' | 'pan' | 'wire' | 'duct' | 'note' | 'wall' | 'stamp';
 
 /** What's currently selected (runtime UI state, never persisted). */
 export type Selection =
