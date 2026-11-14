@@ -4,8 +4,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { authFailure, authErrorCode, NOT_CONFIRMED_MESSAGE } from "../lib/authMessages.js";
-import { detectInAppBrowser, isInAppBridgeNoise, openInBrowserLabel } from "../lib/inAppBrowser.js";
+import { authFailure, authErrorCode, authReportExtra, NOT_CONFIRMED_MESSAGE } from "../lib/authMessages.js";
+import { detectInAppBrowser, inAppBrowserTag, isInAppBridgeNoise, openInBrowserLabel } from "../lib/inAppBrowser.js";
 
 const read = (file) => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
 
@@ -166,4 +166,73 @@ test("the sign-in screen shows the banner and never Supabase's raw message", () 
   assert.match(src, /<InAppBrowserBanner \/>/);
   assert.doesNotMatch(src, /error\.message/);
   assert.match(src, /supabase\.auth\.resend\(/);
+});
+
+test("Sentry gets a report for email not confirmed, no connection and unmapped errors", () => {
+  const reported = [
+    apiError("email_not_confirmed", "Email not confirmed"),
+    { name: "AuthRetryableFetchError", message: "Failed to fetch", status: 0 },
+    apiError("request_timeout", "Processing this request timed out", 504),
+    apiError("otp_expired", "Token has expired or is invalid", 403),
+    apiError("something_new", "Some new server wording"),
+    { message: "" },
+  ];
+  for (const err of reported) {
+    for (const step of ["signin", "signup", "reset", "resend", "newpassword"]) {
+      assert.equal(authFailure(err, step).report, true, `${err.code || err.name} / ${step}`);
+    }
+  }
+});
+
+test("a wrong password, and every other known refusal, sends no report", () => {
+  const quiet = [
+    apiError("invalid_credentials", "Invalid login credentials"),
+    { message: "Invalid login credentials", status: 400 }, // old server, no code
+    apiError("captcha_failed", "captcha protection: request disallowed"),
+    apiError("over_request_rate_limit", "Request rate limit reached", 429),
+    apiError("over_email_send_rate_limit", "email rate limit exceeded", 429),
+    apiError("user_already_exists", "User already registered", 422),
+    apiError("weak_password", "Password is known to be weak", 422),
+    apiError("email_address_invalid", "Email address is invalid"),
+    apiError("validation_failed", "Unable to validate email address: invalid format"),
+    apiError("user_banned", "User is banned"),
+    { name: "AuthRetryableFetchError", message: "Bad gateway", status: 502 },
+  ];
+  for (const err of quiet) {
+    for (const step of ["signin", "signup", "reset", "resend", "newpassword"]) {
+      assert.equal(authFailure(err, step).report, false, `${err.code || err.message} / ${step}`);
+    }
+  }
+});
+
+test("a report never carries an email address", () => {
+  const extra = authReportExtra(apiError("something_new", 'Account "jo.bloggs+test@example.co.uk" needs attention', 400));
+  assert.equal(extra.message, 'Account "[email]" needs attention');
+  assert.equal(extra.error_name, "AuthApiError");
+  assert.equal(extra.status, 400);
+  assert.doesNotMatch(JSON.stringify(authReportExtra({ message: "a@b.com and c.d@e.org.uk" })), /@/);
+  assert.equal(authReportExtra(null).message, "");
+
+  // The sign-in screen's report sends only the code, step and browser type,
+  // plus the redacted details: never what was typed in.
+  const src = read("components/LoginScreen.jsx");
+  const call = src.slice(src.indexOf("Sentry.captureMessage("), src.indexOf("});", src.indexOf("Sentry.captureMessage(")));
+  assert.match(call, /auth_reason: code/);
+  assert.match(call, /in_app_browser: inAppBrowserTag\(/);
+  assert.match(call, /extra: authReportExtra\(err\)/);
+  assert.doesNotMatch(call, /\bemail\b|sentTo|password/);
+});
+
+test("the in_app_browser tag", () => {
+  assert.equal(inAppBrowserTag(UA.instagramAndroid), "instagram");
+  assert.equal(inAppBrowserTag(UA.messengerAndroid), "messenger");
+  assert.equal(inAppBrowserTag(UA.tiktokIos), "tiktok");
+  assert.equal(inAppBrowserTag(UA.chromeAndroid), "no");
+  assert.equal(inAppBrowserTag(""), "no");
+});
+
+test("the Coming Soon page doesn't call Plotwire a design tool", () => {
+  const src = read("components/ComingSoon.jsx");
+  assert.doesNotMatch(src, /design/i);
+  assert.match(src, /Electrical layouts &amp; quoting/);
 });

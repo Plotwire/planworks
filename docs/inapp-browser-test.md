@@ -21,6 +21,16 @@ preview where the security check works).
   `in_app_browser` tag (`instagram`, `facebook`, `messenger`, `tiktok` or
   `no`), and failed sign-ins leave a line in the report's trail saying why
   (for example `signin refused: email_not_confirmed`, never the email).
+- **Sentry reports for failed sign-ins.** A report of its own (a warning,
+  titled like *Sign-in screen: signin refused (email_not_confirmed)*) for
+  three things only: email not confirmed, no connection, and any error the
+  screen has no plain message for. Never for a wrong password. Tagged
+  `auth_reason` (the reason), `auth_step` (signin, signup, reset, resend or
+  newpassword) and `in_app_browser`. One Sentry issue per step and reason.
+  The email typed in is never sent; an unmapped error's own message is,
+  with any email address in it replaced by `[email]`.
+- **Coming Soon page.** Headline now reads *Electrical layouts & quoting,
+  built for electricians.* (was *Electrical design & quoting…*).
 - **Google sign-in.** Plotwire doesn't offer it, so there's nothing to hide.
 - **Phones.** The sign-in page now scrolls if it's taller than the screen.
 
@@ -66,11 +76,25 @@ Use a spare email address you own for a new account.
 15. Afterwards, delete the spare test account in Supabase (Authentication >
     Users) if you don't want to keep it.
 
-## Sentry (after it's live)
+## Sentry
 
-16. New reports from the site have an `in_app_browser` tag.
-17. No new "Java object is gone" reports arrive. The old issue can be marked
+16. After step 8 (wrong password): no new Sentry issue.
+17. After step 12 (email not confirmed): a new warning issue *Sign-in
+    screen: signin refused (email_not_confirmed)*, tagged
+    `auth_reason: email_not_confirmed`, `auth_step: signin` and
+    `in_app_browser` (`no` on a normal browser). The spare email address
+    appears nowhere in it.
+18. After step 14 (flight mode): *Sign-in screen: signin refused (network)*.
+    It's sent when the signal comes back, so it may take a moment.
+19. New reports from the site have an `in_app_browser` tag.
+20. No new "Java object is gone" reports arrive. The old issue can be marked
     resolved.
+
+## Coming Soon page
+
+21. Open the site signed out, without `?login=1`, while the Coming Soon page
+    is on. The headline reads *Electrical layouts & quoting, built for
+    electricians.*
 
 ## Checks already run
 

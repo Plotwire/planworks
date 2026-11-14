@@ -6,7 +6,8 @@ import { supabase, isConfigured } from "@/lib/supabase";
 import TermsCheckboxes from "@/components/TermsCheckboxes";
 import { LEGAL_LINKS } from "@/lib/legal";
 import { signupTermsMetadata } from "@/lib/termsAcceptance";
-import { authFailure } from "@/lib/authMessages";
+import { authFailure, authReportExtra } from "@/lib/authMessages";
+import { inAppBrowserTag } from "@/lib/inAppBrowser";
 import Turnstile, { TURNSTILE_SITE_KEY, captchaPending } from "@/components/Turnstile";
 import { StatusIcon } from "@/components/StatusMark";
 import InAppBrowserBanner from "@/components/InAppBrowserBanner";
@@ -45,9 +46,24 @@ export default function LoginScreen({ recovery = false, onRecovered, notice = ""
   // Every refusal gets a plain message (lib/authMessages.js). Supabase's error
   // code -- never the email or password -- goes into Sentry's trail, so any
   // later report from this page shows why sign-in was refused.
+  // Email not confirmed, no connection and unmapped errors also send a Sentry
+  // report of their own, tagged auth_reason (the code), auth_step and
+  // in_app_browser; one Sentry issue per step + reason. A wrong password never
+  // does: that's a typo. An unmapped error's message goes too, with any email
+  // address taken out (authReportExtra); the email typed in never does.
   const fail = (err, step) => {
-    const { code, message, resend } = authFailure(err, step);
-    try { Sentry.addBreadcrumb({ category: "auth", level: "warning", message: `${step} refused: ${code}` }); } catch {}
+    const { code, message, resend, report } = authFailure(err, step);
+    try {
+      Sentry.addBreadcrumb({ category: "auth", level: "warning", message: `${step} refused: ${code}` });
+      if (report) {
+        Sentry.captureMessage(`Sign-in screen: ${step} refused (${code})`, {
+          level: "warning",
+          tags: { auth_reason: code, auth_step: step, in_app_browser: inAppBrowserTag(navigator.userAgent) },
+          fingerprint: ["auth-refused", step, code],
+          extra: authReportExtra(err),
+        });
+      }
+    } catch { /* Sentry must never get in the way of the message */ }
     setError(message);
     setCanResend(resend);
   };
