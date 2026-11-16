@@ -5,7 +5,7 @@ import {
   Upload, Trash2, Save, FolderOpen, Download, Undo2, Redo2,
   MousePointer2, Cable, RotateCw, ZoomIn, ZoomOut, Maximize2,
   Palette, Ruler, Hand, Sparkles, Type, Printer, Settings,
-  ChevronRight, X, FileText, Eye, EyeOff, Layers, FlipHorizontal2,
+  ChevronRight, X, FileText, Eye, EyeOff, Layers, FlipHorizontal2, Check, AirVent,
 } from "lucide-react";
 import { snapLine, lineOk, mirrorCopies, inBox } from "@/lib/planMirror";
 import { listProjects, getProjectData, getProjectRecord, deleteProjectRow, unreferencedPlanPaths } from "@/lib/db";
@@ -26,6 +26,8 @@ import {
   ProjectTitleBlockContext,
 } from "@/components/SheetParts";
 import { useApp } from "@/components/AppShell";
+import { withLine, lineFromNodes, linesAfterDelete, symbolGap } from "@/lib/lineTypes";
+import { FLOOR_LINK_UP, FLOOR_LINK_DOWN, floorLinkPartner } from "@/lib/symbolDrafts/marks";
 import { openSketch } from "@/lib/device/sketches";
 import { SHEET, DRAW } from "@/lib/cad/sheet";
 import { applyPlanToSheet, scaleLabel, outsideNote, PLAN_PX } from "@/lib/cad/planScale";
@@ -403,9 +405,17 @@ const TOOLS = {
 // The shortcuts card (components/Shortcuts.jsx, "?" or the Shortcuts button):
 // every key the keyboard handler in ElectricalPlanTool takes, and the touch
 // gestures the drawing handles. Keep them in step with the handlers.
+// How far a press on the drawing may wobble and still be a tap (stamp mode,
+// the Wire and Duct tools), in screen pixels: a little more on touch.
+const TAP_SLOP = 10, TAP_SLOP_TOUCH = 16;
+
 const SHORTCUTS = [
   { title: "Draw", items: [
-    ["Wire tool: link two symbols", ["w"]],
+    ["Stamp: a symbol in the palette, then click the drawing for each one", ["double-click"]],
+    ["Wire tool: click points or symbols, double-click to finish", ["w"]],
+    ["Duct tool: the same, for a duct run", ["d"]],
+    ["Finish the wire or duct being drawn", ["enter"]],
+    ["Take the last point off it", ["backspace"]],
     ["Note tool", ["n"]],
     ["Stop: back to Select, clear the selection", ["esc"]],
   ] },
@@ -440,8 +450,9 @@ const SHORTCUTS = [
 const TOUCH_GESTURES = [
   { title: "Draw", items: [
     ["Add a symbol", "Drag it from the palette onto the drawing"],
+    ["Add the same symbol again and again", "Double-tap it in the palette, then tap the drawing for each one"],
     ["Scroll the palette", "Swipe up or down on it"],
-    ["Wire two symbols", "Wire tool, then tap one symbol and the other"],
+    ["Draw a wire or a duct", "Wire or Duct, then tap each point (or symbol) along the run, double-tap to finish"],
   ] },
   { title: "Edit", items: [
     ["Select", "Tap a symbol, note, wire or furniture piece"],
@@ -587,6 +598,31 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const tool = useEditor(s => s.tool);
   const setTool = useEditor(s => s.setTool);
   const [wireStart, setWireStart] = useState(null);
+  // Stamp mode (tool "stamp"): a double-tap on a palette tile keeps that
+  // symbol on the finger, and every tap on the drawing places another
+  // (stampAt). It stops when a tile is tapped again, Done is pressed, another
+  // tool is picked, or Esc. Each stamp turns the way the last one was turned,
+  // so sockets along one wall only need turning once.
+  const [stampId, setStampId] = useState(null);
+  // A press on the drawing that's a tap, not a drag, so far (stamp mode and the
+  // Wire / Duct tools): { id, x, y, at, touch }. It only becomes a pan once it
+  // has clearly moved (TAP_SLOP), so a fast or wobbly click always counts.
+  const tapRef = useRef(null);
+  const lastTileTapRef = useRef(null); // the last tap on a palette tile, to spot a double-tap
+  const lastStampRef = useRef(null);   // the id of the symbol stamped last
+  useEffect(() => { if (tool !== "stamp" && stampId) setStampId(null); }, [tool, stampId]);
+  // The Wire and Duct tools (lib/lineTypes.js): a run drawn a point at a time.
+  // Each click (or tap) adds a point: on a symbol when it's close to one (the
+  // run then follows the symbol), else a free point. The same point twice (a
+  // double-click), Enter or Done finishes it; Esc throws it away. lineEnds:
+  // the arrowheads for the next runs, chosen in the bar above the drawing.
+  const [lineEnds, setLineEnds] = useState("none");
+  const lineDraftRef = useRef(null);                 // { nodes: [{ id } | { x, y }], type }
+  const [lineDraft, setLineDraft] = useState(null);  // the same, plus cursor, to draw it
+  const drawingLine = tool === "wire" || tool === "duct";
+  // A floor link just placed: the offer to put its partner on the next floor
+  // ({ symbolId, x, y, target: { id, name } | null, from, up }).
+  const [linkOffer, setLinkOffer] = useState(null);
   // Select several & Mirror copy (lib/planMirror): the symbols picked on this
   // floor; picking on (a tap toggles a symbol, a drag draws a box); the box
   // being drawn; and the mirror line while it's set ({ a, bRaw, cursor, free }:
@@ -781,7 +817,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   // ---------- Sheets (floors) ----------
   const switchSheet = useCallback((id) => {
     setProject(p => ({ ...p, activeSheetId: id }));
-    setSelectedId(null); setSelectedAnnoId(null); setWireStart(null);
+    setSelectedId(null); setSelectedAnnoId(null); setWireStart(null); setLinkOffer(null);
     setHistory([]); setFuture([]);
     setTimeout(fitToScreen, 60);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1224,6 +1260,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
           rectLeft: rect.left, rectTop: rect.top,
         };
         pinchActiveRef.current = true;
+        tapRef.current = null; // a pinch, not a tap
         // Cancel any pan/drag the first finger may have begun.
         setIsPanning(false); setDraggingPlacedId(null); setDraggingFurnId(null); setDraggingAnno(null); setRotatingId(null); setRotatingFurnId(null); setResizingFurnId(null);
         try { el.setPointerCapture(e.pointerId); } catch {}
@@ -1354,6 +1391,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       if (ev.pointerId !== pointerId) return;
       const mode = state.mode;
       cleanup();
+      if (place && mode === "idle") { tapTile(symbolId); return; } // a tap, not a drag: stamp mode
       if (!place || mode !== "drag" || !findSymbol(symbolId)) return;
       if (loadGenRef.current !== startGen || openStateRef.current !== "ready") return;
       const { x, y } = clientToDrawing(ev.clientX, ev.clientY);
@@ -1362,12 +1400,13 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       snapshot();
       const newItem = {
         id: "p_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
-        symbolId, x: snap(x), y: snap(y), rotation: 0, scale: 1, label: "",
+        symbolId, x: snap(x), y: snap(y), rotation: 0, scale: 1, label: linkLabel(symbolId),
       };
       updateProject({ placed: [...startPlaced, newItem] });
       setSelectedId(newItem.id);
       setSelectedAnnoId(null);
       noteSymbolUsed(symbolId); // to the front of the palette's Recent row
+      offerFloorLink(newItem);
     };
     const up = (ev) => finish(ev, true);
     const cancel = (ev) => finish(ev, false);
@@ -1375,6 +1414,120 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     window.addEventListener("pointerup", up);
     window.addEventListener("pointercancel", cancel);
   };
+
+  // ---------- Stamp mode ----------
+  // A tap on a tile while stamping stops it; two taps on the same tile within
+  // a moment start stamping that symbol (the double-click on a laptop).
+  const tapTile = (symbolId) => {
+    if (readOnly || !findSymbol(symbolId)) return;
+    const now = Date.now(), last = lastTileTapRef.current;
+    lastTileTapRef.current = { symbolId, at: now };
+    if (tool === "stamp") { setTool("select"); return; }
+    if (last && last.symbolId === symbolId && now - last.at < 450) {
+      lastTileTapRef.current = null;
+      if (picking || mirror) stopPicking();
+      setWireStart(null);
+      lastStampRef.current = null;
+      setStampId(symbolId);
+      setTool("stamp");
+    }
+  };
+  const stampAt = ({ x, y }) => {
+    if (!stampId || !findSymbol(stampId) || readOnly || openStateRef.current !== "ready") return;
+    if (x < 0 || y < 0 || x > DRAW.w || y > DRAW.h) return; // off the drawing area
+    if (!tryUsageRef.current.canAdd(1)) { tryPrompt.show(LOCKED.limit); return; } // Try mode: at the limit
+    snapshot();
+    const last = placed.find(p => p.id === lastStampRef.current);
+    const newItem = {
+      id: "p_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
+      symbolId: stampId, x: snap(x), y: snap(y), rotation: last ? last.rotation || 0 : 0, scale: 1, label: linkLabel(stampId),
+    };
+    // Added to the drawing as it is now, not as this render saw it, so two
+    // clicks quicker than a redraw both land.
+    setProject(p => ({ ...p, sheets: p.sheets.map(s => s.id === p.activeSheetId ? { ...s, placed: [...(s.placed || []), newItem] } : s) }));
+    lastStampRef.current = newItem.id;
+    setSelectedId(newItem.id);
+    setSelectedAnnoId(null);
+    noteSymbolUsed(stampId);
+    offerFloorLink(newItem);
+  };
+
+  // ---------- Floor links ----------
+  // An up link (lib/symbolDrafts/marks.jsx) points to the floor above (the next
+  // tab), a down link to the one below. A new one is labelled with that floor
+  // ("To First floor"), and placing it offers to put its partner there at the
+  // same spot, labelled back ("To Ground floor"). Its label is the inspector's
+  // Label / Reference, so it can be changed like any other.
+  const linkFloor = (symbolId) => {
+    const i = sheets.findIndex(s => s.id === activeSheet.id);
+    return (symbolId === FLOOR_LINK_UP ? sheets[i + 1] : symbolId === FLOOR_LINK_DOWN ? sheets[i - 1] : null) || null;
+  };
+  const linkLabel = (symbolId) => { const t = linkFloor(symbolId); return t ? `To ${t.name}` : ""; };
+  const offerFloorLink = (item) => {
+    const partner = floorLinkPartner(item.symbolId);
+    if (!partner || readOnly) return;
+    const t = linkFloor(item.symbolId);
+    setLinkOffer({ symbolId: partner, x: item.x, y: item.y, target: t ? { id: t.id, name: t.name } : null, from: activeSheet.name, up: item.symbolId === FLOOR_LINK_UP });
+  };
+  const placeLinkPartner = () => {
+    const o = linkOffer;
+    setLinkOffer(null);
+    if (!o || !o.target || readOnly) return;
+    if (!tryUsageRef.current.canAdd(1)) { tryPrompt.show(LOCKED.limit); return; } // Try mode: at the limit
+    const partner = {
+      id: "p_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
+      symbolId: o.symbolId, x: o.x, y: o.y, rotation: 0, scale: 1, label: `To ${o.from}`,
+    };
+    setProject(p => ({ ...p, sheets: p.sheets.map(s => s.id === o.target.id ? { ...s, placed: [...(s.placed || []), partner] } : s) }));
+  };
+  const stampLabel = stampId ? (SYMBOL_META[stampId]?.description || findSymbol(stampId)?.name || "symbol") : "";
+
+  // ---------- Wire and Duct runs ----------
+  // Where a point at (x, y) goes: on the nearest symbol when it's close to
+  // one (within about half the symbol's box), else a free point (on the grid
+  // when it's on).
+  const lineNodeAt = ({ x, y }) => {
+    let best = null, bestD = Infinity;
+    for (const p of placed) {
+      const d = Math.hypot(p.x - x, p.y - y);
+      if (d <= symbolGap(48 * symbolScale * (p.scale ?? 1)) * 1.5 && d < bestD) { best = p; bestD = d; }
+    }
+    return best ? { id: best.id } : { x: snap(x), y: snap(y) };
+  };
+  const addLinePoint = (node) => {
+    if (readOnly || openStateRef.current !== "ready") return;
+    const draft = lineDraftRef.current;
+    const nodes = draft ? draft.nodes : [];
+    const last = nodes[nodes.length - 1];
+    // The same point again (a double-click or double-tap there): finished.
+    const same = last && (node.id ? last.id === node.id : !last.id && Math.hypot(last.x - node.x, last.y - node.y) * zoom < (TOUCH ? TAP_SLOP_TOUCH : TAP_SLOP));
+    if (same) { finishLine(); return; }
+    const next = { nodes: [...nodes, node], type: draft ? draft.type : (tool === "duct" ? "duct" : "wire") };
+    lineDraftRef.current = next;
+    setLineDraft(d => ({ ...next, cursor: d ? d.cursor : null }));
+    setSelectedWireId(null);
+  };
+  // The run so far becomes a line (two points at least), kept as before when
+  // it's straight from one symbol to another (lib/lineTypes.js lineFromNodes).
+  const finishLine = () => {
+    const draft = lineDraftRef.current;
+    lineDraftRef.current = null;
+    setLineDraft(null);
+    if (!draft || draft.nodes.length < 2 || readOnly) return;
+    snapshot();
+    const w = lineFromNodes("w_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6), draft.nodes, draft.type, lineEnds);
+    setProject(p => ({ ...p, sheets: p.sheets.map(s => s.id === p.activeSheetId ? { ...s, wires: [...(s.wires || []), w] } : s) }));
+  };
+  const cancelLine = () => { lineDraftRef.current = null; setLineDraft(null); };
+  // Leaving the tool (or switching Wire / Duct) finishes the run being drawn.
+  useEffect(() => {
+    if (lineDraftRef.current && lineDraftRef.current.type !== tool) finishLine();
+  }, [tool]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The run as it's drawn, in sheet units, for the drawing area.
+  const lineDraftView = lineDraft ? {
+    type: lineDraft.type, cursor: lineDraft.cursor,
+    pts: lineDraft.nodes.map(n => (n.id ? placed.find(p => p.id === n.id) : n)).filter(Boolean).map(p => ({ x: p.x, y: p.y })),
+  } : null;
 
   // Drop onto the drawing area
   const onDrawingDrop = (e) => {
@@ -1392,12 +1545,13 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     snapshot();
     const newItem = {
       id: "p_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
-      symbolId, x: snap(x), y: snap(y), rotation: 0, scale: 1, label: "",
+      symbolId, x: snap(x), y: snap(y), rotation: 0, scale: 1, label: linkLabel(symbolId),
     };
     updateProject({ placed: [...placed, newItem] });
     setSelectedId(newItem.id);
     setSelectedAnnoId(null);
     noteSymbolUsed(symbolId);
+    offerFloorLink(newItem);
   };
 
   const onDrawingDragOver = (e) => {
@@ -1414,18 +1568,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const onItemMouseDown = (e, item) => {
     if (tool === "pan" || spacePressed) return;
     e.stopPropagation();
-    if (tool === "wire") {
-      if (!wireStart) {
-        setWireStart(item.id);
-      } else if (wireStart !== item.id) {
-        snapshot();
-        updateProject({ wires: [...wires, { id: "w_" + Date.now(), fromId: wireStart, toId: item.id }] });
-        setWireStart(null);
-      } else {
-        setWireStart(null);
-      }
-      return;
-    }
+    if (drawingLine) { addLinePoint({ id: item.id }); return; } // a point on this symbol
     if (e.shiftKey && tool === "select") {
       const keep = selectedId && selectedId !== item.id ? [selectedId] : [];
       startPicking();
@@ -1625,9 +1768,15 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
 
     if (wantPan) {
       e.preventDefault();
-      setIsPanning(true);
       panStart.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
       try { viewportRef.current?.setPointerCapture?.(e.pointerId); } catch {}
+      // Stamp mode and the Wire / Duct tools: a press on the drawing is a tap
+      // (onViewportMouseUp places a symbol, or a point of the run) unless it
+      // clearly moves (onViewportMouseMove), and only then does it pan. The
+      // drawing doesn't move under a quick or wobbly click.
+      const tapping = (tool === "stamp" || drawingLine) && !explicitPan && e.button === 0 && !!e.target.closest?.("[data-drawing-bg]");
+      tapRef.current = tapping ? { id: e.pointerId, x: e.clientX, y: e.clientY, at: clientToDrawing(e.clientX, e.clientY), touch: e.pointerType !== "mouse" } : null;
+      if (!tapping) setIsPanning(true);
       if (e.button === 0 && onPannableBg) {
         setSelectedId(null);
         setSelectedAnnoId(null);
@@ -1657,6 +1806,22 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
 
   const onViewportMouseMove = (e) => {
     if (pinchActiveRef.current) return;   // pinch-zoom owns the gesture
+    const tap = tapRef.current;
+    if (tap && e.pointerId === tap.id) {
+      // A clear, deliberate drag: no longer a tap, it pans (catching up from
+      // where it went down). Hand wobble under TAP_SLOP stays a tap.
+      if (Math.hypot(e.clientX - tap.x, e.clientY - tap.y) > (tap.touch ? TAP_SLOP_TOUCH : TAP_SLOP)) {
+        tapRef.current = null;
+        setIsPanning(true);
+        setPan({ x: panStart.current.panX + (e.clientX - panStart.current.x), y: panStart.current.panY + (e.clientY - panStart.current.y) });
+      }
+      return;
+    }
+    // The run being drawn: a stretch from its last point to the pointer.
+    if (lineDraftRef.current && drawingLine && e.pointerType === "mouse") {
+      const p = clientToDrawing(e.clientX, e.clientY);
+      setLineDraft(d => (d ? { ...d, cursor: p } : d));
+    }
     if (pickBox) {
       const p = clientToDrawing(e.clientX, e.clientY);
       setPickBox(b => (b ? { ...b, x1: p.x, y1: p.y } : b));
@@ -1770,6 +1935,13 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   };
 
   const onViewportMouseUp = (e) => {
+    const tap = tapRef.current;
+    tapRef.current = null;
+    if (tap && e && e.type !== "pointercancel" && e.pointerId === tap.id && !pinchActiveRef.current
+        && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) <= (tap.touch ? TAP_SLOP_TOUCH : TAP_SLOP)) {
+      if (tool === "stamp") stampAt(tap.at);
+      else if (drawingLine) addLinePoint(lineNodeAt(tap.at));
+    }
     if (pickBox) {
       const hits = inBox(placed, pickBox).map(p => p.id);
       setPicked(ids => [...new Set([...ids, ...hits])]);
@@ -1832,7 +2004,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     if (!pickedItems.length) return;
     snapshot();
     const gone = new Set(pickedItems.map(p => p.id));
-    updateProject({ placed: placed.filter(p => !gone.has(p.id)), wires: wires.filter(w => !gone.has(w.fromId) && !gone.has(w.toId)) });
+    updateProject({ placed: placed.filter(p => !gone.has(p.id)), wires: linesAfterDelete(wires, gone, new Map(placed.map(p => [p.id, p]))) });
     setPicked([]);
   };
   // The bar above the drawing keeps the tallest height it has had while open,
@@ -1913,7 +2085,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       snapshot();
       updateProject({
         placed: placed.filter(it => it.id !== selectedId),
-        wires: wires.filter(w => w.fromId !== selectedId && w.toId !== selectedId),
+        wires: linesAfterDelete(wires, new Set([selectedId]), new Map(placed.map(p => [p.id, p]))),
       });
       setSelectedId(null);
     } else if (selectedFurnId) {
@@ -1976,6 +2148,15 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         return;
       }
       if (wallDraft && e.key === "Escape") { e.preventDefault(); cancelWall(); return; }
+      if (lineDraftRef.current && e.key === "Escape") { e.preventDefault(); cancelLine(); return; }
+      if (lineDraftRef.current && e.key === "Enter") { e.preventDefault(); finishLine(); return; }
+      if (lineDraftRef.current && e.key === "Backspace") {
+        e.preventDefault(); // takes the last point off the run
+        const nodes = lineDraftRef.current.nodes.slice(0, -1);
+        lineDraftRef.current = nodes.length ? { ...lineDraftRef.current, nodes } : null;
+        setLineDraft(d => (nodes.length && d ? { ...d, nodes } : null));
+        return;
+      }
       if (mirror && e.key === "Escape") { e.preventDefault(); stopPicking(); return; }
       if (picking && e.key === "Escape") { e.preventDefault(); stopPicking(); return; }
       if (mirror && e.key === "Enter") { e.preventDefault(); placeMirrorCopies(); return; }
@@ -1997,6 +2178,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       // A tool key leaves Select several (as choosing the tool on the bar does).
       else if (e.key === "v" || e.key === "V") { stopPicking(); setTool("select"); }
       else if (e.key === "w" || e.key === "W") { stopPicking(); setTool("wire"); }
+      else if (e.key === "d" || e.key === "D") { stopPicking(); setTool("duct"); }
       else if (e.key === "h" || e.key === "H") { stopPicking(); setTool("pan"); }
       else if (e.key === "n" || e.key === "N") { stopPicking(); setTool("note"); }
       else if (e.key === "+" || e.key === "=") {
@@ -2919,9 +3101,10 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const viewportCursor =
     isPanning ? "grabbing" :
     (tool === "pan" || spacePressed) ? "grab" :
-    tool === "wire" ? "crosshair" :
+    tool === "wire" || tool === "duct" ? "crosshair" :
     tool === "wall" ? "crosshair" :
     tool === "note" ? "text" :
+    tool === "stamp" ? "copy" :
     "default";
 
   // The list of distinct symbol IDs used in the current sheet (for the legend)
@@ -3002,8 +3185,9 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const deselect = TOUCH ? [] : [["del", "to delete"], ["esc", "deselect"]];
   const statusParts = spacePressed ? ["Drag to pan", "let go of Space to stop"]
     : tool === "wall" ? (wallDraft ? [`${act} to set the end point`, !TOUCH && ["shift", "any angle"], !TOUCH && ["esc", "cancel"]] : [`${act} to start a wall`, !TOUCH && ["esc", "exit"]])
-    : tool === "wire" ? [wireStart ? `${act} the symbol to link it to` : `${act} a symbol to start a wire`, !TOUCH && ["esc", "stop"]]
+    : drawingLine ? [lineDraft ? `${act} the next point, double-${act.toLowerCase()} to finish` : `${act} a symbol or the plan to start the ${tool}`, !TOUCH && lineDraft && ["enter", "finish"], !TOUCH && ["esc", lineDraft ? "cancel" : "stop"]]
     : tool === "note" ? [`${act} the drawing to add a note`, !TOUCH && ["esc", "cancel"]]
+    : tool === "stamp" ? [`${act} the drawing to place another`, `${act.toLowerCase()} the tile again to stop`, !TOUCH && ["esc", "stop"]]
     : tool === "pan" ? (TOUCH ? ["Drag to pan", "pinch to zoom"] : ["Drag to pan", ["wheel", "to zoom"], ["v", "select"]])
     : selectedId ? (TOUCH ? ["Drag to move it", "drag the round handle to rotate"] : ["Drag to move it", ["r", "rotate 15°"], ...deselect])
     : selectedFurnId ? ["Drag to move it", TOUCH ? "drag its handles to rotate or resize" : null, ...deselect]
@@ -3111,6 +3295,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         {!sidebarHidden && (
           <PalettePanel
             onPalettePointerDown={onPalettePointerDown}
+            stampId={tool === "stamp" ? stampId : null}
             onFurniturePointerDown={onFurniturePointerDown}
             symbolScale={symbolScale}
             setSymbolScale={setSymbolScale}
@@ -3178,6 +3363,92 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
               </div>
             );
           })()}
+          {/* Stamp mode: the same bright bar, saying what's being placed, with
+              a big Done (the tile again, another tool or Esc stop it too). */}
+          {tool === "stamp" && stampId && !readOnly && (() => {
+            const sym = findSymbol(stampId);
+            const cols = resolveColours(stampId, colourMode || "colour");
+            return (
+              <div role="region" aria-label="Stamp mode"
+                   className="shrink-0 relative z-20 flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5 bg-amber-300 text-[#1A2530] border-b-2 border-amber-500 shadow-[0_8px_18px_-10px_rgba(16,28,40,0.45)]">
+                <div className="flex items-center gap-3 min-w-0 flex-1 basis-[280px] min-h-[44px]">
+                  <span className="shrink-0 w-10 h-10 rounded-xl bg-white flex items-center justify-center" aria-hidden="true">
+                    <svg viewBox={VIEWBOX} width="30" height="30" style={{ color: cols.body, "--feeder": cols.feeder }}>{sym?.svg}</svg>
+                  </span>
+                  <div className="min-w-0 text-[15px] font-bold leading-snug" role="status">
+                    Stamping {stampLabel}. {TOUCH ? "Tap" : "Click"} the drawing to place each one.
+                  </div>
+                </div>
+                <button type="button" onClick={() => setTool("select")}
+                        className="min-h-[44px] px-3 lg:px-4 rounded-xl text-[14px] font-semibold flex items-center gap-2 whitespace-nowrap bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)] shadow-sm">
+                  <Check size={18}/> Done
+                </button>
+              </div>
+            );
+          })()}
+          {/* Wire or Duct on: a bar of its own above the drawing (the Mirror copy
+              bar's style, so the drawing gets shorter and nothing is covered,
+              clear of the zoom buttons): what's being drawn and how, the
+              arrowheads for the run, and Done (finishes it, back to Select). */}
+          {drawingLine && !readOnly && (() => {
+            const big = "min-h-[44px] px-3 lg:px-4 rounded-xl text-[14px] font-semibold flex items-center gap-2 whitespace-nowrap";
+            const plain = `${big} bg-white text-[#1A2530] ring-1 ring-[#1A2530]/25 hover:bg-amber-50`;
+            const chosen = `${big} bg-[#E6F6F8] text-[#1A2530] ring-2 ring-[#1A2530]`;
+            const name = tool === "duct" ? "Duct" : "Wire";
+            const tapOr = TOUCH ? "Tap" : "Click";
+            return (
+              <div role="region" aria-label={`Drawing a ${tool}`}
+                   className="shrink-0 relative z-20 flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5 bg-amber-300 text-[#1A2530] border-b-2 border-amber-500 shadow-[0_8px_18px_-10px_rgba(16,28,40,0.45)]">
+                <div className="flex items-center gap-3 min-w-0 flex-1 basis-[280px] min-h-[44px]">
+                  <span className="shrink-0 w-10 h-10 rounded-xl bg-[#1A2530] text-amber-300 flex items-center justify-center" aria-hidden="true">
+                    {tool === "duct" ? <AirVent size={22}/> : <Cable size={22}/>}
+                  </span>
+                  <div className="min-w-0 text-[15px] font-bold leading-snug" role="status">
+                    Drawing: {name}. {tapOr} points to draw the run, double-{tapOr.toLowerCase()} to finish.
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[12px] font-bold uppercase tracking-wide">Arrows</span>
+                  <div role="radiogroup" aria-label="Arrowheads" className="flex gap-1.5">
+                    {[["none", "None"], ["start", "Start"], ["end", "End"], ["both", "Both"]].map(([v, label]) => (
+                      <button key={v} type="button" role="radio" aria-checked={lineEnds === v} onClick={() => setLineEnds(v)}
+                              className={lineEnds === v ? chosen : plain}>{label}</button>
+                    ))}
+                  </div>
+                  <button type="button" onClick={() => { finishLine(); setTool("select"); }}
+                          className={`${big} bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)] shadow-sm`}>
+                    <Check size={18}/> Done
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+          {/* A floor link just placed: put its partner on the other floor? */}
+          {linkOffer && !readOnly && (() => {
+            const arrow = linkOffer.up ? "↓" : "↑";
+            const plain = "min-h-[40px] px-3 rounded-xl text-[13px] font-semibold flex items-center gap-2 whitespace-nowrap bg-white text-[#1A2530] ring-1 ring-[#1A2530]/25 hover:bg-slate-50";
+            return (
+              <div role="region" aria-label="Floor link"
+                   className="shrink-0 relative z-20 flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2 bg-[#E6F6F8] text-[#1A2530] border-b border-[#3FB7C9]/50">
+                <div className="min-w-0 flex-1 basis-[260px] text-[14px] font-semibold leading-snug" role="status">
+                  {linkOffer.target
+                    ? `Put the matching ${arrow} on ${linkOffer.target.name}, in the same spot?`
+                    : `There's no floor ${linkOffer.up ? "above" : "below"} this one yet. Add one with + Add floor, then place its partner there.`}
+                </div>
+                <div className="flex items-center gap-2">
+                  {linkOffer.target && (
+                    <button type="button" onClick={placeLinkPartner}
+                            className="min-h-[40px] px-3 rounded-xl text-[13px] font-semibold flex items-center gap-2 whitespace-nowrap bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)] shadow-sm">
+                      <Check size={16}/> Place it
+                    </button>
+                  )}
+                  <button type="button" onClick={() => setLinkOffer(null)} className={plain}>
+                    {linkOffer.target ? "No thanks" : "OK"}
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
           <div className="relative flex-1 overflow-hidden" style={{ cursor: viewportCursor }}>
           <Workspace
             viewportRef={viewportRef}
@@ -3199,6 +3470,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
             wireStrength={wireStrength}
             symbolSize={48 * symbolScale}
             wireStart={wireStart}
+            lineDraft={lineDraftView}
             onWireSelect={onWireSelect}
             spacePressed={spacePressed}
             DRAW={DRAW}
@@ -3231,7 +3503,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
           {/* Floating tool toolbar */}
           {/* Tools, labelled and big, with Floor plan (opens the sketch for
               this drawing, round-tripping back here) at the top. */}
-          <FloatingToolbar labelled tool={picking ? "several" : tool} tools={readOnly ? ["select", "wire"] : ["select", "wire", "several"]}
+          <FloatingToolbar labelled tool={picking ? "several" : tool} tools={readOnly ? ["select", "wire", "duct"] : ["select", "wire", "duct", "several"]}
             lead={{ label: "Floor plan", icon: FloorPlanIcon, tip: "Floor plan: draw or edit this floor's plan, to scale", onClick: () => openFloorPlan(activeSheet?.sketchId) }}
             setTool={(t) => {
               if (t === "several") { startPicking(); return; }
@@ -3305,6 +3577,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
               selectedItem={selectedItem}
               selectedAnno={selectedAnno}
               wireSelected={!!selectedWireId}
+              selectedWire={selectedWireId ? wires.find(w => w.id === selectedWireId) || null : null}
+              onLine={readOnly ? null : (type, arrows) => { snapshot(); updateProject({ wires: wires.map(w => w.id === selectedWireId ? withLine(w, type, arrows) : w) }); }}
               updateLabel={updateLabel}
               updateAnnoText={updateAnnoText}
               setRotation={setRotation}
