@@ -137,7 +137,8 @@ export function isCaptchaError(error) {
   return /captcha/i.test(error?.message || "");
 }
 
-export const CAPTCHA_MESSAGE = "The security check didn't go through. Wait for it to finish, then try again.";
+// One wording for the whole sign-in screen: lib/authMessages.js.
+export { CAPTCHA_MESSAGE } from "@/lib/authMessages";
 
 // True while the form should wait for the widget before submitting.
 export function captchaPending(status) {
