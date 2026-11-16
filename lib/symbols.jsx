@@ -725,6 +725,9 @@ export const LIBRARY_CATEGORIES = [
   { key: "ev",           label: "EV & renewables",       colour: "fixtures"  },
   { key: "distribution", label: "Distribution",          colour: "fixtures"  },
   { key: "care",         label: "Care/nurse call",       colour: "care"      },
+  // Drawing marks (floor links, lib/symbolDrafts/marks.jsx): marks on the
+  // drawing, not things to buy or fit. Never on the quote.
+  { key: "marks",        label: "Drawing marks",         colour: "heating"   },
 ];
 
 // How a symbol's items are bought: the groups a materials list or order would
@@ -747,6 +750,7 @@ export const MATERIALS_GROUPS = [
   "Earthing & protection",
   "Nurse call & care",
   "Services (non-electrical)",
+  "Drawing marks (not ordered)",
 ];
 
 // The original symbols' place in the library: [legend code, category, materials group].
