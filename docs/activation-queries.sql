@@ -28,6 +28,30 @@
 --              within the 7-day grace. Stripe test-mode rows from the test
 --              preview never count. Billing-exempt accounts aren't "paying"
 --   days/weeks UK time (Europe/London); weeks start on Monday
+--
+-- QUERIES 9 AND 10 (detail), read from each drawing's saved data:
+--   symbols    projects.symbol_count: the database works it out from the
+--              drawing itself on every save (placed symbols on every sheet;
+--              not furniture, notes or lines). The preview's own count
+--              (data.preview.count) uses the same rule but is written by the
+--              browser, so the database's count is used
+--   lines      wire and duct lines: each sheet's "wires" list (a duct is a
+--              wire saved with type "duct"), or the old single-sheet
+--              drawing's top-level "wires"
+--   sheets     the drawing's sheets (floors); an old single-sheet drawing is 1
+--   plan       a background plan (bgImage) on at least one sheet
+--   quote      "no", "yes, no prices yet" or "yes, priced" (a line with a
+--              rate above 0). A quote saves itself the moment the Quote
+--              screen is opened, so "yes, no prices yet" can mean only that
+--   last login auth.users.last_sign_in_at: the last time they signed in with
+--              their password (or a confirmation link). Staying signed in on
+--              a device doesn't update it, so the last drawing edit is the
+--              better sign of activity
+--   last edit  projects.updated_at, or created if never saved again
+--   status     "billing exempt"; "paying"; "lapsed" (a subscription that
+--              ended or stopped paying); otherwise "Try mode" while billing
+--              is switched on (app_flags enforce_billing), or "free (billing
+--              off)" while it's off
 -- ============================================================================
 
 
@@ -35,10 +59,14 @@
 select
   exists (select 1 from information_schema.columns
            where table_schema = 'public' and table_name = 'projects'
-             and column_name = 'created_at')                     as projects_has_created_at,   -- queries 4 and 8
+             and column_name = 'created_at')                     as projects_has_created_at,   -- queries 4, 8, 9, 10
   to_regclass('public.billing_exempt') is not null              as has_billing_exempt,        -- queries 1, 2, 5
   to_regclass('public.billing_test_accounts') is not null       as has_billing_test_accounts, -- every query
-  to_regprocedure('public.access_level(uuid)') is not null      as has_access_level;          -- queries 1, 2, 5
+  to_regprocedure('public.access_level(uuid)') is not null      as has_access_level,          -- queries 1, 2, 5, 9
+  exists (select 1 from information_schema.columns
+           where table_schema = 'public' and table_name = 'projects'
+             and column_name = 'symbol_count')                   as projects_has_symbol_count, -- queries 9 and 10
+  to_regprocedure('public.billing_enforced()') is not null      as has_billing_switch;        -- query 9
 
 
 -- 0b. How many accounts each "left out" rule removes, and how many are counted (counts only).
@@ -281,3 +309,127 @@ select days.day,
   from days
   left join made on made.day = days.day
  order by days.day desc;
+
+
+-- 9. One row per account: email, sign-up, confirmed, last login, drawings, symbols, lines, sheets, first drawing, last edit, quote, status; most recently active first. SHOWS EMAIL ADDRESSES.
+with people as (
+  select u.id, u.email, u.created_at, u.email_confirmed_at,
+         (u.created_at at time zone 'Europe/London')::date as signup_day
+    from auth.users u
+   where u.email is not null
+     and split_part(lower(u.email), '@', 2) not in ('wattsonelectrical.co.uk', 'plotwire.uk')
+     and split_part(lower(u.email), '@', 2) !~ '(^|\.)(example\.[a-z.]+|invalid|test|localhost)$'
+     and not exists (select 1 from public.billing_test_accounts t where t.user_id = u.id)
+     and coalesce(u.raw_app_meta_data ->> 'plotwire_kind', '') <> 'operative'
+),
+facts as (
+  select d.user_id,
+         d.created_at,
+         coalesce(d.updated_at, d.created_at)                                          as last_edited,
+         coalesce(d.symbol_count, 0)                                                   as symbols,
+         case when sh.list is not null then
+                (select coalesce(sum(case when jsonb_typeof(s -> 'wires') = 'array'
+                                          then jsonb_array_length(s -> 'wires') else 0 end), 0)
+                   from jsonb_array_elements(sh.list) s)
+              when jsonb_typeof(d.data -> 'wires') = 'array' then jsonb_array_length(d.data -> 'wires')
+              else 0 end                                                               as lines,
+         coalesce(jsonb_array_length(sh.list), 1)                                      as sheets,
+         coalesce(jsonb_typeof(d.data -> 'boq') = 'object', false)                     as has_quote,
+         exists (select 1
+                   from jsonb_array_elements(case when jsonb_typeof(d.data -> 'boq' -> 'sections') = 'array'
+                                                  then d.data -> 'boq' -> 'sections' else '[]'::jsonb end) sec
+                  cross join lateral
+                        jsonb_array_elements(case when jsonb_typeof(sec -> 'items') = 'array'
+                                                  then sec -> 'items' else '[]'::jsonb end) it
+                  where case when (it ->> 'rate') ~ '^\s*[0-9]*\.?[0-9]+\s*$'
+                             then trim(it ->> 'rate')::numeric > 0 else false end)       as quote_priced
+    from public.projects d
+    join people p on p.id = d.user_id
+   cross join lateral (
+         select case when jsonb_typeof(d.data -> 'sheets') = 'array' and (d.data -> 'sheets' -> 0) is not null
+                     then d.data -> 'sheets' end as list) sh
+),
+per_account as (
+  select f.user_id,
+         count(*)                as drawings,
+         sum(f.symbols)          as symbols,
+         sum(f.lines)            as lines,
+         sum(f.sheets)           as sheets,
+         min(f.created_at)       as first_drawing,
+         max(f.last_edited)      as last_edit,
+         bool_or(f.has_quote)    as has_quote,
+         bool_or(f.quote_priced) as quote_priced
+    from facts f
+   group by f.user_id
+)
+select p.email,
+       p.signup_day                                                                   as signed_up,
+       case when p.email_confirmed_at is not null then 'yes' else 'no' end            as email_confirmed,
+       to_char(u.last_sign_in_at at time zone 'Europe/London', 'YYYY-MM-DD HH24:MI')  as last_login,
+       coalesce(a.drawings, 0)                                                        as drawings,
+       coalesce(a.symbols, 0)                                                         as symbols,
+       coalesce(a.lines, 0)                                                           as wire_duct_lines,
+       coalesce(a.sheets, 0)                                                          as sheets,
+       (a.first_drawing at time zone 'Europe/London')::date                           as first_drawing,
+       to_char(a.last_edit at time zone 'Europe/London', 'YYYY-MM-DD HH24:MI')        as last_drawing_edit,
+       case when a.quote_priced then 'yes, priced'
+            when a.has_quote    then 'yes, no prices yet'
+            else 'no' end                                                             as saved_quote,
+       case when e.user_id is not null                then 'billing exempt'
+            when public.access_level(p.id) = 'full'   then 'paying'
+            when public.access_level(p.id) = 'lapsed' then 'lapsed'
+            when public.billing_enforced()            then 'Try mode'
+            else 'free (billing off)' end                                             as status
+  from people p
+  join auth.users u on u.id = p.id
+  left join per_account a on a.user_id = p.id
+  left join public.billing_exempt e on e.user_id = p.id
+ order by greatest(u.last_sign_in_at, a.last_edit, p.created_at) desc nulls last;
+
+
+-- 10. One row per drawing: account email, drawing name, created, last edited, symbols, lines, sheets, background plan, quote; last edited first. SHOWS EMAIL ADDRESSES AND DRAWING NAMES.
+with people as (
+  select u.id, u.email, u.created_at, u.email_confirmed_at,
+         (u.created_at at time zone 'Europe/London')::date as signup_day
+    from auth.users u
+   where u.email is not null
+     and split_part(lower(u.email), '@', 2) not in ('wattsonelectrical.co.uk', 'plotwire.uk')
+     and split_part(lower(u.email), '@', 2) !~ '(^|\.)(example\.[a-z.]+|invalid|test|localhost)$'
+     and not exists (select 1 from public.billing_test_accounts t where t.user_id = u.id)
+     and coalesce(u.raw_app_meta_data ->> 'plotwire_kind', '') <> 'operative'
+)
+select p.email,
+       d.name                                                                         as drawing,
+       to_char(d.created_at at time zone 'Europe/London', 'YYYY-MM-DD HH24:MI')       as created,
+       to_char(coalesce(d.updated_at, d.created_at) at time zone 'Europe/London',
+               'YYYY-MM-DD HH24:MI')                                                  as last_edited,
+       coalesce(d.symbol_count, 0)                                                    as symbols,
+       case when sh.list is not null then
+              (select coalesce(sum(case when jsonb_typeof(s -> 'wires') = 'array'
+                                        then jsonb_array_length(s -> 'wires') else 0 end), 0)
+                 from jsonb_array_elements(sh.list) s)
+            when jsonb_typeof(d.data -> 'wires') = 'array' then jsonb_array_length(d.data -> 'wires')
+            else 0 end                                                                as wire_duct_lines,
+       coalesce(jsonb_array_length(sh.list), 1)                                       as sheets,
+       case when (case when sh.list is not null
+                       then exists (select 1 from jsonb_array_elements(sh.list) s
+                                     where jsonb_typeof(s -> 'bgImage') = 'object')
+                       else jsonb_typeof(d.data -> 'bgImage') = 'object' end)
+            then 'yes' else 'no' end                                                  as background_plan,
+       case when exists (select 1
+                           from jsonb_array_elements(case when jsonb_typeof(d.data -> 'boq' -> 'sections') = 'array'
+                                                          then d.data -> 'boq' -> 'sections' else '[]'::jsonb end) sec
+                          cross join lateral
+                                jsonb_array_elements(case when jsonb_typeof(sec -> 'items') = 'array'
+                                                          then sec -> 'items' else '[]'::jsonb end) it
+                          where case when (it ->> 'rate') ~ '^\s*[0-9]*\.?[0-9]+\s*$'
+                                     then trim(it ->> 'rate')::numeric > 0 else false end)
+                 then 'yes, priced'
+            when jsonb_typeof(d.data -> 'boq') = 'object' then 'yes, no prices yet'
+            else 'no' end                                                             as quote
+  from public.projects d
+  join people p on p.id = d.user_id
+ cross join lateral (
+       select case when jsonb_typeof(d.data -> 'sheets') = 'array' and (d.data -> 'sheets' -> 0) is not null
+                   then d.data -> 'sheets' end as list) sh
+ order by coalesce(d.updated_at, d.created_at) desc nulls last;
