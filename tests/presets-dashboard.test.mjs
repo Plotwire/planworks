@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import {
   templateForEditing, templateForSaving, buildInitialBoq,
-  presetsSnapshot, quoteStartPresets, summarisePresets,
+  presetsSnapshot, quoteStartPresets,
 } from "../lib/boqTemplate.js";
 
 const read = (file) => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
@@ -86,17 +86,6 @@ test("a started quote is the drawing's own: never rebuilt from presets on openin
   assert.match(open, /buildInitialBoq\(project, SYMBOL_META, findSymbol, start\.template, start\.prefs\)/);
 });
 
-test("the dashboard summary counts lines, prices and VAT", () => {
-  const s = summarisePresets(presetsWith(14.5, 280), { vatOn: false });
-  assert.equal(s.priced, 2);
-  assert.equal(s.vatOn, false);
-  assert.ok(s.items > 10 && s.sections >= 3);
-  assert.deepEqual(s.sample.map((x) => x.rate).sort(), [14.5, 280]);
-  const none = summarisePresets(null, null);
-  assert.equal(none.priced, 0);
-  assert.equal(none.vatOn, true);
-});
-
 test("the editor keeps each drawing's copy when it loads, and makes one only for new drawings", () => {
   const src = read("components/ElectricalPlanTool.jsx");
   assert.equal((src.match(/\.\.\.presetsField\(p\.quotePresets\)/g) || []).length, 2); // both drawing shapes
@@ -108,7 +97,7 @@ test("the editor keeps each drawing's copy when it loads, and makes one only for
   assert.match(read("components/cad/CadSketch.jsx"), /\.\.\.\(presetsReady \? \{ quotePresets: presetsSnapshot\(accountPresets, accountPresetPrefs\) \} : \{\}\)/);
 });
 
-test("presets are edited on the dashboard's page, not inside a drawing's quote", () => {
+test("presets are edited on the Presets page, from the left rail, not inside a drawing's quote", () => {
   const quote = read("components/SheetParts.jsx");
   const boqPart = quote.slice(quote.indexOf("export function BillOfQuantities"));
   assert.doesNotMatch(boqPart, /<BoqTemplateEditor/);
@@ -116,9 +105,24 @@ test("presets are edited on the dashboard's page, not inside a drawing's quote",
   assert.match(boqPart, /Prices here are for this job only/);
   assert.ok(existsSync(new URL("../app/presets/page.jsx", import.meta.url)));
   const home = read("components/HomeScreen.jsx");
-  assert.match(home, /<h2>Presets &amp; pricing<\/h2>/);
-  assert.match(home, /title="Presets & pricing" onClick=\{onPresets\}/);
+  assert.match(home, /onClick=\{onPresets\}[^>]*>\{PRICE_TAG_ICON\}<span className="navlabel">Presets<\/span>/);
   assert.match(read("app/page.jsx"), /onPresets=\{\(\) => router\.push\("\/presets"\)\}/);
+  // No big section or summary on the dashboard itself.
+  assert.doesNotMatch(home, /<h2>Presets &amp; pricing<\/h2>|className="presets"|presetSummary/);
+});
+
+test("every left-rail button is teal with a label, all the time", () => {
+  const home = read("components/HomeScreen.jsx");
+  const rail = home.slice(home.indexOf('<aside className="rail">'), home.indexOf("</aside>"));
+  const items = rail.match(/<div className="navitem[^"]*"/g) || [];
+  const labels = rail.match(/<span className="navlabel">[A-Za-z]+<\/span>/g) || [];
+  assert.equal(labels.length, items.length); // every button in the rail has its label
+  for (const name of ["Dashboard", "Drawings", "Presets", "Symbols", "Planner", "Business"]) {
+    assert.match(rail, new RegExp(`<span className="navlabel">${name}</span>`));
+  }
+  assert.match(read("components/OfflinePanel.jsx"), /<span className="navlabel">Help<\/span>/);
+  // Teal (the app's button colour) when idle, not only on hover.
+  assert.match(home, /\.pw-home \.navitem\{[^}]*background:var\(--action\); color:var\(--action-ink\)/);
 });
 
 test("the page edits the same saved presets, so everything already set carries over", () => {

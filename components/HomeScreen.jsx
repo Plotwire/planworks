@@ -18,15 +18,13 @@ import Toast from "@/components/Toast";
 import { useTimesheetsAddon } from "@/lib/timesheets/useTimesheetsAddon";
 import { StatusIcon, StatusPill } from "@/components/StatusMark";
 import { hasSignal, subscribeSignal, noteServer, looksLikeNoSignal } from "@/lib/device/connection";
-import { summarisePresets } from "@/lib/boqTemplate";
 
-// A price tag: Presets & pricing (the rail button, the section and its button).
+// A price tag: the Presets button in the left rail.
 const PRICE_TAG_ICON = (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round">
     <path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>
   </svg>
 );
-const gbp = (n) => "£" + Number(n).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /* Sheet geometry — must match ElectricalPlanTool */
 const SHEET = { width: 1587, height: 1123, margin: 18, legendWidth: 230, notesWidth: 280, titleHeight: 110 };
@@ -111,9 +109,7 @@ function PlanThumb({ project }) {
 }
 
 export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSketch, onPlanner, onBusiness, onSymbols, onPresets, onTimesheets, theme, onToggleTheme, user, onSignOut }) {
-  const { manageBilling, subscription, access = {}, boqTemplate, boqPrefs, presetsReady = false } = useApp();
-  // The Presets & pricing section's summary of the account's presets.
-  const presetSummary = useMemo(() => summarisePresets(boqTemplate, boqPrefs), [boqTemplate, boqPrefs]);
+  const { manageBilling, subscription, access = {} } = useApp();
   // The Timesheets rail item shows only for accounts with the add-on.
   const timesheets = useTimesheetsAddon(user?.id);
   // Try: 25 symbols across all saved drawings. Lapsed: read-only, so nothing
@@ -373,15 +369,15 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
           <div className="brandmark" title="Plotwire">
             <svg viewBox="0 0 24 24" fill="none"><path d="M13 2 4 13h6l-1 9 9-11h-6l1-9z" fill="#08313a"/></svg>
           </div>
-          <div className="navitem active" title="Dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg></div>
-          <div className="navitem" title="All drawings" onClick={showAllDrawings} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></div>
-          <div className="navitem" title="Presets & pricing" onClick={onPresets} style={{ cursor: "pointer" }}>{PRICE_TAG_ICON}</div>
-          <div className="navitem" title="Symbol library" onClick={onSymbols} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="7" cy="7" r="3.2"/><rect x="14" y="4" width="6" height="6" rx="1.4"/><path d="M4 15h6v6H4zM14 18h6"/><circle cx="17" cy="18" r="3.2"/></svg></div>
-          <div className="navitem" title="Work planner" onClick={onPlanner} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M7 13h3M7 17h3M14 13h3"/></svg></div>
-          {timesheets.status === "on" && <div className="navitem" title="Timesheets" onClick={onTimesheets} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>}
+          <div className="navitem active" title="Dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg><span className="navlabel">Dashboard</span></div>
+          <div className="navitem" title="All drawings" onClick={showAllDrawings} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span className="navlabel">Drawings</span></div>
+          <div className="navitem" title="Presets & pricing: your starting items, specs and prices" onClick={onPresets} style={{ cursor: "pointer" }}>{PRICE_TAG_ICON}<span className="navlabel">Presets</span></div>
+          <div className="navitem" title="Symbol library" onClick={onSymbols} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="7" cy="7" r="3.2"/><rect x="14" y="4" width="6" height="6" rx="1.4"/><path d="M4 15h6v6H4zM14 18h6"/><circle cx="17" cy="18" r="3.2"/></svg><span className="navlabel">Symbols</span></div>
+          <div className="navitem" title="Work planner" onClick={onPlanner} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M7 13h3M7 17h3M14 13h3"/></svg><span className="navlabel">Planner</span></div>
+          {timesheets.status === "on" && <div className="navitem" title="Timesheets" onClick={onTimesheets} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span className="navlabel">Timesheets</span></div>}
           <div className="rail-spacer"></div>
           <HelpMenu />
-          <div className="navitem" title="Edit business information" onClick={onBusiness} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 13a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 0 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9 2 2 0 0 1 0-4 1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 2.9-1.2 2 2 0 0 1 4 0 1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9 2 2 0 0 1 0 4 1.7 1.7 0 0 0-1.5 1z"/></svg></div>
+          <div className="navitem" title="Edit business information" onClick={onBusiness} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 13a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 0 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9 2 2 0 0 1 0-4 1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 2.9-1.2 2 2 0 0 1 4 0 1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9 2 2 0 0 1 0 4 1.7 1.7 0 0 0-1.5 1z"/></svg><span className="navlabel">Business</span></div>
           <div className="rail-avatar">{(displayName(user) || user?.email || "?").slice(0, 2).toUpperCase()}</div>
         </aside>
 
@@ -525,39 +521,6 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
                 <div><div className="t">Import a PDF plan</div><div className="s">Trace over it</div></div>
               </div>
             </div>
-
-            {/* Presets & pricing: where the account's starting items, specs and
-                prices are set (app/presets), never inside a drawing. */}
-            <div className="sec-head"><h2>Presets &amp; pricing</h2></div>
-            <section className="presets" aria-label="Presets and pricing">
-              <div className="presets-main">
-                <div className="presets-ic" aria-hidden="true">{PRICE_TAG_ICON}</div>
-                <div className="presets-text">
-                  <div className="presets-title">Your starting items, specs &amp; prices</div>
-                  <p>Every new drawing&apos;s quote starts with these. Change them here at any time: a drawing you&apos;ve already started keeps the prices it has, and inside a drawing you can still change a price for that job only.</p>
-                  {presetsReady ? (
-                    <>
-                      <div className="presets-stats">
-                        <div><b>{presetSummary.items}</b> items in {presetSummary.sections} sections</div>
-                        <div><b>{presetSummary.priced}</b> with a price</div>
-                        <div>VAT <b>{presetSummary.vatOn ? "on" : "off"}</b></div>
-                      </div>
-                      {presetSummary.sample.length ? (
-                        <ul className="presets-prices">
-                          {presetSummary.sample.map((s, i) => <li key={i}><span>{s.item}</span><b>{gbp(s.rate)}</b></li>)}
-                          {presetSummary.priced > presetSummary.sample.length && <li className="more">+{presetSummary.priced - presetSummary.sample.length} more</li>}
-                        </ul>
-                      ) : (
-                        <div className="presets-empty">No prices yet. Add your selling prices and every new quote starts priced.</div>
-                      )}
-                    </>
-                  ) : (
-                    <div className="presets-empty">Loading your presets…</div>
-                  )}
-                </div>
-              </div>
-              <button className="btn btn-primary presets-btn" onClick={onPresets}>{PRICE_TAG_ICON}Edit presets &amp; pricing</button>
-            </section>
 
             <div className="sec-head" ref={drawingsRef} id="all-drawings">
               <h2>All drawings</h2>
@@ -812,11 +775,15 @@ const CSS = `
 .pw-home .rail::after{content:""; position:absolute; inset:0 0 0 auto; width:1px; background:rgba(255,255,255,.05)}
 .pw-home .brandmark{width:42px; height:42px; border-radius:12px; background:linear-gradient(150deg,var(--teal),var(--teal-700)); display:grid; place-items:center; margin-bottom:18px; box-shadow:0 6px 16px -4px rgba(63,183,201,.5)}
 .pw-home .brandmark svg{width:22px; height:22px}
-.pw-home .navitem{width:46px; height:46px; border-radius:12px; display:grid; place-items:center; color:#8190a0; cursor:pointer; transition:all .18s ease; position:relative}
-.pw-home .navitem svg{width:21px; height:21px}
-.pw-home .navitem:hover{color:var(--navy); background:var(--teal-600)}
-.pw-home .navitem.active{color:#fff; background:rgba(63,183,201,.16)}
-.pw-home .navitem.active::before{content:""; position:absolute; left:-18px; top:11px; bottom:11px; width:3px; border-radius:0 3px 3px 0; background:var(--teal)}
+/* Rail buttons: solid teal with a navy icon and a short label, all the time,
+   so they read as buttons (the app's button style). The page you're on is
+   navy with a teal ring, like the chosen tool in the editor's toolbar. */
+.pw-home .navitem{width:62px; min-height:52px; padding:6px 2px 5px; border-radius:12px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; background:var(--action); color:var(--action-ink); cursor:pointer; transition:background .18s ease, color .18s ease; position:relative}
+.pw-home .navitem svg{width:20px; height:20px; flex-shrink:0}
+.pw-home .navitem .navlabel{font-size:10px; font-weight:600; line-height:1.1; text-align:center; white-space:nowrap}
+.pw-home .navitem:hover{background:var(--action-hover)}
+.pw-home .navitem.active{color:#5FD0E0; background:var(--navy-2); box-shadow:0 0 0 2px #3FB7C9}
+.pw-home .navitem.active::before{content:""; position:absolute; left:-6px; top:12px; bottom:12px; width:3px; border-radius:0 3px 3px 0; background:var(--teal)}
 .pw-home .rail-spacer{flex:1}
 .pw-home .rail-avatar{width:40px; height:40px; border-radius:50%; background:var(--navy-2); border:1.5px solid var(--navy-line); color:#cdd6e0; display:grid; place-items:center; font-weight:600; font-size:13px; cursor:pointer; font-family:var(--font-space-grotesk),sans-serif; margin-top:6px}
 .pw-home .main{flex:1; display:flex; flex-direction:column; min-width:0}
@@ -902,25 +869,6 @@ html.dark .pw-home .access-banner.is-lapsed{background:#2a2114; border-color:#6b
 .pw-home .sec-head h2{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:17px; letter-spacing:-.01em}
 .pw-home .muted-count{font-size:13px; color:var(--muted)}
 .pw-home .templates{display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:14px; margin-bottom:38px}
-/* Presets & pricing: one big card between "Start something new" and the
-   drawings, so the presets are never more than a glance away. */
-.pw-home .presets{background:var(--surface); border:1px solid var(--line); border-radius:18px; padding:24px 26px; margin-bottom:38px; display:flex; align-items:center; justify-content:space-between; gap:22px; flex-wrap:wrap; box-shadow:0 1px 2px rgba(16,28,40,.04),0 1px 3px rgba(16,28,40,.06)}
-.pw-home .presets-main{display:flex; gap:18px; flex:1; min-width:min(100%,280px)}
-.pw-home .presets-ic{width:52px; height:52px; border-radius:14px; display:grid; place-items:center; flex-shrink:0; background:rgba(63,183,201,.12); color:var(--teal-700)}
-.pw-home .presets-ic svg{width:26px; height:26px}
-.pw-home .presets-text{min-width:0}
-.pw-home .presets-title{font-family:var(--font-space-grotesk),sans-serif; font-size:19px; font-weight:600; letter-spacing:-.01em}
-.pw-home .presets-text p{font-size:13.5px; color:var(--muted); margin-top:5px; line-height:1.5; max-width:600px}
-.pw-home .presets-stats{display:flex; gap:22px; flex-wrap:wrap; margin-top:14px; font-size:13.5px; color:var(--ink-2)}
-.pw-home .presets-stats b{font-family:var(--font-space-grotesk),sans-serif; font-size:18px; font-weight:600; color:var(--ink)}
-.pw-home .presets-prices{list-style:none; display:flex; flex-wrap:wrap; gap:8px; margin-top:14px}
-.pw-home .presets-prices li{display:flex; gap:8px; align-items:baseline; background:var(--paper); border:1px solid var(--line); border-radius:999px; padding:5px 12px; font-size:12.5px; color:var(--ink-2); max-width:100%}
-.pw-home .presets-prices li span{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-.pw-home .presets-prices li b{font-weight:600; color:var(--ink); font-variant-numeric:tabular-nums}
-.pw-home .presets-prices li.more{color:var(--muted)}
-.pw-home .presets-empty{margin-top:14px; font-size:13.5px; color:var(--muted)}
-.pw-home .presets-btn{flex-shrink:0}
-@media (max-width:560px){.pw-home .presets{padding:20px} .pw-home .presets-btn{width:100%; justify-content:center}}
 .pw-home .tpl{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:16px; cursor:pointer; transition:all .18s ease; display:flex; align-items:center; gap:13px}
 .pw-home .tpl:hover{border-color:#cfe7ec; box-shadow:0 4px 14px rgba(16,28,40,.07); transform:translateY(-2px)}
 .pw-home .tpl-ic{width:40px; height:40px; border-radius:10px; display:grid; place-items:center; flex-shrink:0; background:rgba(63,183,201,.12); color:var(--teal-700); transition:background .18s ease, color .18s ease}
@@ -1009,7 +957,7 @@ html.dark .pw-home .offline-strip[data-tone=red]{background:#2E1A1A; border-colo
 @media (max-width:560px){.pw-home .offline-details dl{grid-template-columns:1fr}.pw-home .offline-details dd{margin-bottom:6px}}
 /* Help in the side menu (components/OfflinePanel.jsx HelpMenu) */
 .pw-home .help-wrap{position:relative}
-.pw-home .navitem.is-open{color:var(--navy); background:var(--teal-600)}
+.pw-home .navitem.is-open{background:var(--action-hover)}
 .pw-home .help-menu{position:absolute; left:calc(100% + 24px); bottom:0; z-index:40; width:260px; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:6px; box-shadow:0 18px 40px -12px rgba(11,17,23,.4)}
 .pw-home .help-head{font-family:var(--font-jetbrains-mono),monospace; font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); padding:8px 10px 6px}
 .pw-home .help-item{display:flex; align-items:center; gap:10px; width:100%; text-align:left; padding:10px; border:0; border-radius:8px; background:transparent; color:var(--ink); font:500 13.5px var(--font-inter),system-ui,sans-serif; cursor:pointer}
@@ -1055,7 +1003,7 @@ html.dark .pw-home .sync-banner{background:#33290f; border-color:#F59E0B}
 .pw-home .load-error{margin-top:0}
 .pw-home .load-error strong{color:var(--ink)}
 .pw-home .load-error-actions{margin-top:14px}
-@media (max-width:720px){.pw-home .rail{width:60px} .pw-home .scroll{padding:24px 18px 50px} .pw-home .hero{padding:24px} .pw-home .hero h1{font-size:24px} .pw-home .stats{gap:22px; flex-wrap:wrap}}
+@media (max-width:720px){.pw-home .rail{width:60px} .pw-home .navitem{width:52px} .pw-home .navitem .navlabel{font-size:9px} .pw-home .navitem.active::before{left:-4px} .pw-home .scroll{padding:24px 18px 50px} .pw-home .hero{padding:24px} .pw-home .hero h1{font-size:24px} .pw-home .stats{gap:22px; flex-wrap:wrap}}
 `;
 
 
