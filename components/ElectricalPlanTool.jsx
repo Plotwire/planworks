@@ -33,6 +33,7 @@ import { SHEET, DRAW } from "@/lib/cad/sheet";
 import { applyPlanToSheet, scaleLabel, outsideNote, PLAN_PX } from "@/lib/cad/planScale";
 import { DEFAULT_TITLEBLOCK } from "@/lib/titleBlock";
 import { normaliseWireStrength, wireStrengthField } from "@/lib/wireStrength";
+import { presetsSnapshot } from "@/lib/boqTemplate";
 import { useTryUsage, useTryPrompt, TryPill, TryPrompt, LOCKED, drawingSymbolCount, refusedPrompt } from "@/components/TryMode";
 import { ShortcutsCard, StatusHint, TOUCH } from "@/components/Shortcuts";
 import dynamic from "next/dynamic";
@@ -151,6 +152,11 @@ function freshProject() {
   };
 }
 
+// The drawing's own copy of the Presets & pricing it was started with
+// (lib/boqTemplate.js presetsSnapshot), kept only when present, so drawings
+// made before copies existed are unchanged.
+const presetsField = (q) => (q && typeof q === "object" ? { quotePresets: q } : {});
+
 // Bring any saved project (including old single-drawing ones) up to the
 // multi-sheet shape without losing data.
 function normaliseProject(p) {
@@ -176,7 +182,7 @@ function normaliseProject(p) {
       ...(s.sketchId ? { sketchId: s.sketchId } : {}),
     }));
     // Wire lines: kept only when not Standard, so older drawings are unchanged.
-    return { meta, notes: projNotesText, boq: p.boq || null, titleBlock: p.titleBlock || null, colourMode: p.colourMode || "colour", ...wireStrengthField(p.wireStrength), sheets, activeSheetId: sheets.find(s => s.id === p.activeSheetId) ? p.activeSheetId : sheets[0].id };
+    return { meta, notes: projNotesText, boq: p.boq || null, ...presetsField(p.quotePresets), titleBlock: p.titleBlock || null, colourMode: p.colourMode || "colour", ...wireStrengthField(p.wireStrength), sheets, activeSheetId: sheets.find(s => s.id === p.activeSheetId) ? p.activeSheetId : sheets[0].id };
   }
   // Legacy flat project → wrap its drawing into a single sheet.
   const sheet = {
@@ -192,7 +198,7 @@ function normaliseProject(p) {
     notes: seedNotes(null),
     symbolScale: typeof p.symbolScale === "number" ? p.symbolScale : 1,
   };
-  return { meta, notes: projNotesText, boq: p.boq || null, titleBlock: p.titleBlock || null, colourMode: p.colourMode || "colour", ...wireStrengthField(p.wireStrength), sheets: [sheet], activeSheetId: sheet.id };
+  return { meta, notes: projNotesText, boq: p.boq || null, ...presetsField(p.quotePresets), titleBlock: p.titleBlock || null, colourMode: p.colourMode || "colour", ...wireStrengthField(p.wireStrength), sheets: [sheet], activeSheetId: sheet.id };
 }
 
 // ---- Plan-image storage helpers --------------------------------------------
@@ -498,7 +504,11 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   activeSheetIdRef.current = project.activeSheetId;
 
   // Title block: per-project, falling back to the account default for new jobs.
-  const { titleBlock: accountTitleBlock, saveTitleBlock, access = {}, user, noteSymbolUsed = () => {} } = useApp();
+  const { titleBlock: accountTitleBlock, saveTitleBlock, access = {}, user, noteSymbolUsed = () => {},
+          boqTemplate: accountPresets, boqPrefs: accountPresetPrefs, presetsReady = false } = useApp();
+  // Started as a new drawing in this editor (New drawing, Import a PDF, or
+  // New in the Projects window), not opened from the saved ones.
+  const [startedNew, setStartedNew] = useState(false);
   // The signed-in account: this device's copies are kept under it (lib/device).
   const uidRef = useRef(user?.id || null);
   uidRef.current = user?.id || null;
@@ -2491,6 +2501,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   // from this device's copies, or arrive in the background (linkPlansLater).
   const openSeqRef = useRef(0);
   const openProjectById = async (id, { initial = false } = {}) => {
+    setStartedNew(false); // a saved drawing keeps whatever presets it has
     const seq = ++openSeqRef.current;
     const live = () => aliveRef.current && openSeqRef.current === seq;
     const uid = uidRef.current;
@@ -2796,6 +2807,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     if (placed.length && !confirm("Start a new blank project? Unsaved changes to the current drawing will be lost.")) return;
     loadGenRef.current += 1; // see enqueueSave
     setProject(freshProject());
+    setStartedNew(true);
     currentProjectIdRef.current = null;
     setCurrentProjectId(null);
     newKeyRef.current = newSessionKey();
@@ -2821,6 +2833,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       return;
     }
     newKeyRef.current = newSessionKey();
+    setStartedNew(true);
     if (t.category) setActiveCategory(t.category);
     if (t.mode === "import") setTimeout(() => fileInputRef.current?.click(), 250);
     setTimeout(fitToScreen, 60);
@@ -2828,6 +2841,19 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     else setRecovery(draftOfferOnNew());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // A new drawing keeps a copy of the account's Presets & pricing as they are
+  // now (lib/boqTemplate.js presetsSnapshot), and its quote is first built
+  // from that copy, so presets changed later on the dashboard never reach
+  // it. Only once the presets are really known (presetsReady), never from the
+  // built-in defaults by mistake; never on a drawing that already has a copy
+  // or a started quote, nor on one opened from the saved drawings.
+  useEffect(() => {
+    if (!startedNew || !presetsReady || readOnly) return;
+    if (!project || project.quotePresets || project.boq) return;
+    const copy = presetsSnapshot(accountPresets, accountPresetPrefs);
+    setProject(p => (p && !p.quotePresets && !p.boq ? { ...p, quotePresets: copy } : p));
+  }, [startedNew, presetsReady, readOnly, project, accountPresets, accountPresetPrefs, setProject]);
 
   // ---- Crash recovery: keep a local draft so work is never lost -------------
   // A backup is only offered once the drawing on screen has settled (opened,

@@ -1,5 +1,10 @@
 # Test plan: Preset prices
 
+> **Changed by branch presets-dashboard:** presets are no longer edited from
+> the quote's **Presets** button. They're on the dashboard, in **Presets &
+> pricing**, and each new drawing keeps the presets it was started with. See
+> `docs/presets-dashboard-test.md`. The steps below describe the old way.
+
 Branch **preset-prices** (built on **stamp-mode**), on the
 **stripe-plotwire-test** link once it's pushed. Use the **test account** and
 **test drawings only** (name them `TEST …`), and delete them at the end.
