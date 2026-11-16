@@ -1509,6 +1509,11 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   };
   // The run so far becomes a line (two points at least), kept as before when
   // it's straight from one symbol to another (lib/lineTypes.js lineFromNodes).
+  // Duct draws one line per press of the Duct button (or D): once a duct line
+  // is finished (double-click, Enter), Duct switches off and Select is back.
+  // Only while Duct is still the tool: when this runs because another tool
+  // was chosen mid-line, that choice stands. Wire keeps drawing line after
+  // line until Done or Esc, as before.
   const finishLine = () => {
     const draft = lineDraftRef.current;
     lineDraftRef.current = null;
@@ -1517,6 +1522,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     snapshot();
     const w = lineFromNodes("w_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6), draft.nodes, draft.type, lineEnds);
     setProject(p => ({ ...p, sheets: p.sheets.map(s => s.id === p.activeSheetId ? { ...s, wires: [...(s.wires || []), w] } : s) }));
+    if (draft.type === "duct" && tool === "duct") setTool("select");
   };
   const cancelLine = () => { lineDraftRef.current = null; setLineDraft(null); };
   // Leaving the tool (or switching Wire / Duct) finishes the run being drawn.
@@ -2148,7 +2154,9 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         return;
       }
       if (wallDraft && e.key === "Escape") { e.preventDefault(); cancelWall(); return; }
-      if (lineDraftRef.current && e.key === "Escape") { e.preventDefault(); cancelLine(); return; }
+      // Esc drops the line being drawn. For Duct it also switches Duct off
+      // (one press of Esc); Wire stays on, and a second Esc leaves it.
+      if (lineDraftRef.current && e.key === "Escape") { e.preventDefault(); cancelLine(); if (tool === "duct") setTool("select"); return; }
       if (lineDraftRef.current && e.key === "Enter") { e.preventDefault(); finishLine(); return; }
       if (lineDraftRef.current && e.key === "Backspace") {
         e.preventDefault(); // takes the last point off the run
@@ -3404,7 +3412,9 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
                     {tool === "duct" ? <AirVent size={22}/> : <Cable size={22}/>}
                   </span>
                   <div className="min-w-0 text-[15px] font-bold leading-snug" role="status">
-                    Drawing: {name}. {tapOr} points to draw the run, double-{tapOr.toLowerCase()} to finish.
+                    {tool === "duct"
+                      ? <>Drawing: Duct. {tapOr} points to draw one line, double-{tapOr.toLowerCase()} to finish. Duct then switches off.</>
+                      : <>Drawing: {name}. {tapOr} points to draw the run, double-{tapOr.toLowerCase()} to finish.</>}
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">

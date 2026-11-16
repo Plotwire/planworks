@@ -107,3 +107,19 @@ test("Mirror copy takes a run whose symbols are all copied, its free points mirr
   assert.deepEqual(out.wires[0].pts[1], { x: 38, y: 10 });
   assert.equal(out.wires[0].type, "duct");
 });
+
+// Duct draws one line per press of the button (branch duct-one-shot); Wire
+// keeps drawing until Done or Esc. Checked in the editor's source, as the
+// editor itself needs a browser.
+import { readFileSync } from "node:fs";
+const editorSource = readFileSync(new URL("../components/ElectricalPlanTool.jsx", import.meta.url), "utf8");
+
+test("finishing a duct line switches Duct off; a wire line leaves Wire on", () => {
+  const finish = editorSource.slice(editorSource.indexOf("const finishLine = () => {"), editorSource.indexOf("const cancelLine = "));
+  assert.match(finish, /if \(draft\.type === "duct" && tool === "duct"\) setTool\("select"\);/);
+  assert.doesNotMatch(finish, /draft\.type === "wire"[^\n]*setTool/);
+});
+
+test("Esc on a half-drawn duct drops it and switches Duct off in one press", () => {
+  assert.match(editorSource, /if \(lineDraftRef\.current && e\.key === "Escape"\) \{ e\.preventDefault\(\); cancelLine\(\); if \(tool === "duct"\) setTool\("select"\); return; \}/);
+});
