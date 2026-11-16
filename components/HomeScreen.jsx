@@ -18,6 +18,15 @@ import Toast from "@/components/Toast";
 import { useTimesheetsAddon } from "@/lib/timesheets/useTimesheetsAddon";
 import { StatusIcon, StatusPill } from "@/components/StatusMark";
 import { hasSignal, subscribeSignal, noteServer, looksLikeNoSignal } from "@/lib/device/connection";
+import { summarisePresets } from "@/lib/boqTemplate";
+
+// A price tag: Presets & pricing (the rail button, the section and its button).
+const PRICE_TAG_ICON = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round">
+    <path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>
+  </svg>
+);
+const gbp = (n) => "£" + Number(n).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /* Sheet geometry — must match ElectricalPlanTool */
 const SHEET = { width: 1587, height: 1123, margin: 18, legendWidth: 230, notesWidth: 280, titleHeight: 110 };
@@ -101,8 +110,10 @@ function PlanThumb({ project }) {
   );
 }
 
-export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSketch, onPlanner, onBusiness, onSymbols, onTimesheets, theme, onToggleTheme, user, onSignOut }) {
-  const { manageBilling, subscription, access = {} } = useApp();
+export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSketch, onPlanner, onBusiness, onSymbols, onPresets, onTimesheets, theme, onToggleTheme, user, onSignOut }) {
+  const { manageBilling, subscription, access = {}, boqTemplate, boqPrefs, presetsReady = false } = useApp();
+  // The Presets & pricing section's summary of the account's presets.
+  const presetSummary = useMemo(() => summarisePresets(boqTemplate, boqPrefs), [boqTemplate, boqPrefs]);
   // The Timesheets rail item shows only for accounts with the add-on.
   const timesheets = useTimesheetsAddon(user?.id);
   // Try: 25 symbols across all saved drawings. Lapsed: read-only, so nothing
@@ -364,6 +375,7 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
           </div>
           <div className="navitem active" title="Dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg></div>
           <div className="navitem" title="All drawings" onClick={showAllDrawings} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></div>
+          <div className="navitem" title="Presets & pricing" onClick={onPresets} style={{ cursor: "pointer" }}>{PRICE_TAG_ICON}</div>
           <div className="navitem" title="Symbol library" onClick={onSymbols} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="7" cy="7" r="3.2"/><rect x="14" y="4" width="6" height="6" rx="1.4"/><path d="M4 15h6v6H4zM14 18h6"/><circle cx="17" cy="18" r="3.2"/></svg></div>
           <div className="navitem" title="Work planner" onClick={onPlanner} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M7 13h3M7 17h3M14 13h3"/></svg></div>
           {timesheets.status === "on" && <div className="navitem" title="Timesheets" onClick={onTimesheets} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>}
@@ -513,6 +525,39 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
                 <div><div className="t">Import a PDF plan</div><div className="s">Trace over it</div></div>
               </div>
             </div>
+
+            {/* Presets & pricing: where the account's starting items, specs and
+                prices are set (app/presets), never inside a drawing. */}
+            <div className="sec-head"><h2>Presets &amp; pricing</h2></div>
+            <section className="presets" aria-label="Presets and pricing">
+              <div className="presets-main">
+                <div className="presets-ic" aria-hidden="true">{PRICE_TAG_ICON}</div>
+                <div className="presets-text">
+                  <div className="presets-title">Your starting items, specs &amp; prices</div>
+                  <p>Every new drawing&apos;s quote starts with these. Change them here at any time: a drawing you&apos;ve already started keeps the prices it has, and inside a drawing you can still change a price for that job only.</p>
+                  {presetsReady ? (
+                    <>
+                      <div className="presets-stats">
+                        <div><b>{presetSummary.items}</b> items in {presetSummary.sections} sections</div>
+                        <div><b>{presetSummary.priced}</b> with a price</div>
+                        <div>VAT <b>{presetSummary.vatOn ? "on" : "off"}</b></div>
+                      </div>
+                      {presetSummary.sample.length ? (
+                        <ul className="presets-prices">
+                          {presetSummary.sample.map((s, i) => <li key={i}><span>{s.item}</span><b>{gbp(s.rate)}</b></li>)}
+                          {presetSummary.priced > presetSummary.sample.length && <li className="more">+{presetSummary.priced - presetSummary.sample.length} more</li>}
+                        </ul>
+                      ) : (
+                        <div className="presets-empty">No prices yet. Add your selling prices and every new quote starts priced.</div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="presets-empty">Loading your presets…</div>
+                  )}
+                </div>
+              </div>
+              <button className="btn btn-primary presets-btn" onClick={onPresets}>{PRICE_TAG_ICON}Edit presets &amp; pricing</button>
+            </section>
 
             <div className="sec-head" ref={drawingsRef} id="all-drawings">
               <h2>All drawings</h2>
@@ -857,6 +902,25 @@ html.dark .pw-home .access-banner.is-lapsed{background:#2a2114; border-color:#6b
 .pw-home .sec-head h2{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:17px; letter-spacing:-.01em}
 .pw-home .muted-count{font-size:13px; color:var(--muted)}
 .pw-home .templates{display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:14px; margin-bottom:38px}
+/* Presets & pricing: one big card between "Start something new" and the
+   drawings, so the presets are never more than a glance away. */
+.pw-home .presets{background:var(--surface); border:1px solid var(--line); border-radius:18px; padding:24px 26px; margin-bottom:38px; display:flex; align-items:center; justify-content:space-between; gap:22px; flex-wrap:wrap; box-shadow:0 1px 2px rgba(16,28,40,.04),0 1px 3px rgba(16,28,40,.06)}
+.pw-home .presets-main{display:flex; gap:18px; flex:1; min-width:min(100%,280px)}
+.pw-home .presets-ic{width:52px; height:52px; border-radius:14px; display:grid; place-items:center; flex-shrink:0; background:rgba(63,183,201,.12); color:var(--teal-700)}
+.pw-home .presets-ic svg{width:26px; height:26px}
+.pw-home .presets-text{min-width:0}
+.pw-home .presets-title{font-family:var(--font-space-grotesk),sans-serif; font-size:19px; font-weight:600; letter-spacing:-.01em}
+.pw-home .presets-text p{font-size:13.5px; color:var(--muted); margin-top:5px; line-height:1.5; max-width:600px}
+.pw-home .presets-stats{display:flex; gap:22px; flex-wrap:wrap; margin-top:14px; font-size:13.5px; color:var(--ink-2)}
+.pw-home .presets-stats b{font-family:var(--font-space-grotesk),sans-serif; font-size:18px; font-weight:600; color:var(--ink)}
+.pw-home .presets-prices{list-style:none; display:flex; flex-wrap:wrap; gap:8px; margin-top:14px}
+.pw-home .presets-prices li{display:flex; gap:8px; align-items:baseline; background:var(--paper); border:1px solid var(--line); border-radius:999px; padding:5px 12px; font-size:12.5px; color:var(--ink-2); max-width:100%}
+.pw-home .presets-prices li span{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.pw-home .presets-prices li b{font-weight:600; color:var(--ink); font-variant-numeric:tabular-nums}
+.pw-home .presets-prices li.more{color:var(--muted)}
+.pw-home .presets-empty{margin-top:14px; font-size:13.5px; color:var(--muted)}
+.pw-home .presets-btn{flex-shrink:0}
+@media (max-width:560px){.pw-home .presets{padding:20px} .pw-home .presets-btn{width:100%; justify-content:center}}
 .pw-home .tpl{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:16px; cursor:pointer; transition:all .18s ease; display:flex; align-items:center; gap:13px}
 .pw-home .tpl:hover{border-color:#cfe7ec; box-shadow:0 4px 14px rgba(16,28,40,.07); transform:translateY(-2px)}
 .pw-home .tpl-ic{width:40px; height:40px; border-radius:10px; display:grid; place-items:center; flex-shrink:0; background:rgba(63,183,201,.12); color:var(--teal-700); transition:background .18s ease, color .18s ease}

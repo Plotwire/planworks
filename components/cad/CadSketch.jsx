@@ -46,6 +46,7 @@ import {
 } from "@/components/SheetParts";
 import { ShortcutsCard, ShortcutsTip, StatusHint, useOnceTip, TOUCH } from "@/components/Shortcuts";
 import { useApp } from "@/components/AppShell";
+import { presetsSnapshot } from "@/lib/boqTemplate";
 import { TryPill, useTryUsage } from "@/components/TryMode";
 
 // A composited layer for a canvas this size rasterises at reduced resolution on
@@ -451,7 +452,7 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
 
   viewRef.current = view;
 
-  const { theme, toggleTheme, access = {}, user } = useApp();
+  const { theme, toggleTheme, access = {}, user, boqTemplate: accountPresets, boqPrefs: accountPresetPrefs, presetsReady = false } = useApp();
   // Try mode: the Trial pill shows the account's symbols across saved drawings
   // (a sketch places none), same pill and Subscribe as the editor.
   const tryUsage = useTryUsage({ enabled: access.isTry, limit: access.symbolLimit, currentProjectId: null, project: null, uid: user?.id });
@@ -1214,6 +1215,9 @@ export default function CadSketch({ title = "Maple House \u2014 First floor", re
       return {
         meta: { projectName: name, drawingNumber: "", date: today, revision: "A", revNote: "First Issue", company: "", clientName: "", clientEmail: "", scale: scaleLabel(ps.scale) },
         boq: null, titleBlock: null, colourMode: "red",
+        // A new drawing keeps a copy of the Presets & pricing as they are now
+        // (lib/boqTemplate.js presetsSnapshot); only once they are known.
+        ...(presetsReady ? { quotePresets: presetsSnapshot(accountPresets, accountPresetPrefs) } : {}),
         notes: "", // blank Installation Notes, like any new drawing
         sheets: [{ id: sheetId, name, drawingNumber: "", sketchId: skId, bgImage: { ...(path ? { path } : { src }), w, h, planFrame: ps.frame, planScale: ps.scale, ...stairsField(ps.frame, planStairs(model)) }, placed: [], furniture: [], walls: [], wires: [], annotations: [], notes: "", symbolScale: 1 }],
         activeSheetId: sheetId,
