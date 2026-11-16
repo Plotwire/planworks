@@ -129,6 +129,7 @@ export function HelpMenu() {
       <div className={`navitem${open ? " is-open" : ""}`} title="Help" role="button" tabIndex={0} aria-haspopup="menu" aria-expanded={open}
         onClick={toggle} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } }}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.9.7c0 1.7-2.5 2.2-2.5 3.7"/><path d="M12 17.2h.01"/></svg>
+        <span className="navlabel">Help</span>
       </div>
       {open && (
         <div className="help-menu" role="menu" aria-label="Help">
