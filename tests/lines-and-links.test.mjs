@@ -123,3 +123,8 @@ test("finishing a duct line switches Duct off; a wire line leaves Wire on", () =
 test("Esc on a half-drawn duct drops it and switches Duct off in one press", () => {
   assert.match(editorSource, /if \(lineDraftRef\.current && e\.key === "Escape"\) \{ e\.preventDefault\(\); cancelLine\(\); if \(tool === "duct"\) setTool\("select"\); return; \}/);
 });
+
+test("pressing Duct (or D) again mid-line finishes that duct, ready for the next", () => {
+  assert.match(editorSource, /if \(t === "duct" && tool === "duct" && lineDraftRef\.current\) \{ finishLine\(\); setTool\("duct"\); return; \}/);
+  assert.match(editorSource, /else if \(e\.key === "d" \|\| e\.key === "D"\) \{ stopPicking\(\); if \(tool === "duct" && lineDraftRef\.current\) finishLine\(\); setTool\("duct"\); \}/);
+});

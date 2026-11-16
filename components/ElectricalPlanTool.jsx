@@ -2196,7 +2196,9 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       // A tool key leaves Select several (as choosing the tool on the bar does).
       else if (e.key === "v" || e.key === "V") { stopPicking(); setTool("select"); }
       else if (e.key === "w" || e.key === "W") { stopPicking(); setTool("wire"); }
-      else if (e.key === "d" || e.key === "D") { stopPicking(); setTool("duct"); }
+      // D while a duct is being drawn finishes it, ready for the next (as the
+      // Duct button does); otherwise it picks Duct.
+      else if (e.key === "d" || e.key === "D") { stopPicking(); if (tool === "duct" && lineDraftRef.current) finishLine(); setTool("duct"); }
       else if (e.key === "h" || e.key === "H") { stopPicking(); setTool("pan"); }
       else if (e.key === "n" || e.key === "N") { stopPicking(); setTool("note"); }
       else if (e.key === "+" || e.key === "=") {
@@ -3543,6 +3545,11 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
             lead={{ label: "Floor plan", icon: FloorPlanIcon, tip: "Floor plan: draw or edit this floor's plan, to scale", onClick: () => openFloorPlan(activeSheet?.sketchId) }}
             setTool={(t) => {
               if (t === "several") { startPicking(); return; }
+              // Pressing Duct again while a duct is being drawn finishes that
+              // line and leaves Duct ready for the next one ("press Duct again
+              // for the next line"), instead of doing nothing while the line
+              // keeps following the pointer.
+              if (t === "duct" && tool === "duct" && lineDraftRef.current) { finishLine(); setTool("duct"); return; }
               stopPicking();
               setTool(t); setWireStart(null); if (t !== "wall") cancelWall();
             }} />
