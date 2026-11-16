@@ -14,6 +14,9 @@ close the Safari tab and open the link again.
 Finishing the line (double-click, **Enter** or **Done**) switches Duct off and
 puts you back on **Select**; to draw another, press **Duct** (or **D**) again.
 **Esc** throws away a half-drawn duct and switches Duct off in one press.
+A single click only adds a bend: the line keeps following the pointer until
+it is finished. **Pressing Duct (or D) again while a duct is being drawn
+finishes it** and leaves Duct ready for the next line.
 **Wire is unchanged:** it keeps drawing line after line until **Done** or
 **Esc**. Steps 4, 5, 5a and Part B step 2 cover this.
 
@@ -100,7 +103,10 @@ puts you back on **Select**; to draw another, press **Duct** (or **D**) again.
 5a. **One line per press:** press **D**, click two places on empty plan and
    press **Enter**: a duct, and Duct is off again. Press **Duct**, click once,
    then press **Esc**: the half-drawn duct goes and Duct is off, in one
-   press. **Ctrl+Z** the extra duct.
+   press. Now press **Duct**, click two places (single clicks), then press
+   **Duct** again: that duct is drawn and Duct stays on, ready. Click two more
+   places and double-click to finish the next one: Duct is off. **Ctrl+Z**
+   the extra ducts.
 6. **Wire, switch to beside a floor link:** drag **Up to floor above** onto
    the plan (press **Place it** or **OK** on the blue bar). Press **Wire**,
    choose **End**. Click the **switch**, then double-click on empty plan
