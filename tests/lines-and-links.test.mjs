@@ -124,7 +124,22 @@ test("Esc on a half-drawn duct drops it and switches Duct off in one press", () 
   assert.match(editorSource, /if \(lineDraftRef\.current && e\.key === "Escape"\) \{ e\.preventDefault\(\); cancelLine\(\); if \(tool === "duct"\) setTool\("select"\); return; \}/);
 });
 
-test("pressing Duct (or D) again mid-line finishes that duct, ready for the next", () => {
-  assert.match(editorSource, /if \(t === "duct" && tool === "duct" && lineDraftRef\.current\) \{ finishLine\(\); setTool\("duct"\); return; \}/);
-  assert.match(editorSource, /else if \(e\.key === "d" \|\| e\.key === "D"\) \{ stopPicking\(\); if \(tool === "duct" && lineDraftRef\.current\) finishLine\(\); setTool\("duct"\); \}/);
+test("a duct is two clicks: the second click finishes it; a wire still takes bends", () => {
+  const add = editorSource.slice(editorSource.indexOf("const addLinePoint = (node) => {"), editorSource.indexOf("const finishLine = () => {"));
+  // The duct's second point finishes it (and finishLine switches Duct off).
+  assert.match(add, /if \(next\.type === "duct" && next\.nodes\.length >= 2\) \{ finishLine\(\); return; \}/);
+  // Only ducts: a wire's points still keep the run going.
+  assert.doesNotMatch(add, /next\.type === "wire"/);
+  // Pressing Duct or D just picks Duct (nothing special mid-line any more).
+  assert.match(editorSource, /else if \(e\.key === "d" \|\| e\.key === "D"\) \{ stopPicking\(\); setTool\("duct"\); \}/);
+});
+
+test("a two-point duct is saved like any line, with its arrowheads", () => {
+  const nodes = [{ x: 0, y: 0 }, { x: 120, y: 0 }];
+  const duct = lineFromNodes("w_test", nodes, "duct", "end");
+  assert.equal(lineType(duct), "duct");
+  assert.equal(lineArrows(duct), "end");
+  const between = lineFromNodes("w_test2", [{ id: "a" }, { id: "b" }], "duct", "both");
+  assert.equal(between.fromId, "a"); assert.equal(between.toId, "b"); // symbol to symbol, as always
+  assert.equal(lineArrows(between), "both");
 });

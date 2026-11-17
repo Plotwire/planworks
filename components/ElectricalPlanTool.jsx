@@ -1514,16 +1514,19 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     if (same) { finishLine(); return; }
     const next = { nodes: [...nodes, node], type: draft ? draft.type : (tool === "duct" ? "duct" : "wire") };
     lineDraftRef.current = next;
+    // A duct is two clicks: the start, then the end. The end finishes it (no
+    // bends, no double-click), and Duct switches off (finishLine).
+    if (next.type === "duct" && next.nodes.length >= 2) { finishLine(); return; }
     setLineDraft(d => ({ ...next, cursor: d ? d.cursor : null }));
     setSelectedWireId(null);
   };
   // The run so far becomes a line (two points at least), kept as before when
   // it's straight from one symbol to another (lib/lineTypes.js lineFromNodes).
   // Duct draws one line per press of the Duct button (or D): once a duct line
-  // is finished (double-click, Enter), Duct switches off and Select is back.
-  // Only while Duct is still the tool: when this runs because another tool
-  // was chosen mid-line, that choice stands. Wire keeps drawing line after
-  // line until Done or Esc, as before.
+  // is finished (its second click, or Done), Duct switches off and Select is
+  // back. Only while Duct is still the tool: when this runs because another
+  // tool was chosen mid-line, that choice stands. Wire keeps drawing line
+  // after line, with bends, until Done or Esc, as before.
   const finishLine = () => {
     const draft = lineDraftRef.current;
     lineDraftRef.current = null;
@@ -2196,9 +2199,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
       // A tool key leaves Select several (as choosing the tool on the bar does).
       else if (e.key === "v" || e.key === "V") { stopPicking(); setTool("select"); }
       else if (e.key === "w" || e.key === "W") { stopPicking(); setTool("wire"); }
-      // D while a duct is being drawn finishes it, ready for the next (as the
-      // Duct button does); otherwise it picks Duct.
-      else if (e.key === "d" || e.key === "D") { stopPicking(); if (tool === "duct" && lineDraftRef.current) finishLine(); setTool("duct"); }
+      else if (e.key === "d" || e.key === "D") { stopPicking(); setTool("duct"); }
       else if (e.key === "h" || e.key === "H") { stopPicking(); setTool("pan"); }
       else if (e.key === "n" || e.key === "N") { stopPicking(); setTool("note"); }
       else if (e.key === "+" || e.key === "=") {
@@ -3221,6 +3222,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const deselect = TOUCH ? [] : [["del", "to delete"], ["esc", "deselect"]];
   const statusParts = spacePressed ? ["Drag to pan", "let go of Space to stop"]
     : tool === "wall" ? (wallDraft ? [`${act} to set the end point`, !TOUCH && ["shift", "any angle"], !TOUCH && ["esc", "cancel"]] : [`${act} to start a wall`, !TOUCH && ["esc", "exit"]])
+    : tool === "duct" ? [lineDraft ? `${act} the end of the duct` : `${act} a symbol or the plan to start the duct`, !TOUCH && ["esc", lineDraft ? "cancel" : "stop"]]
     : drawingLine ? [lineDraft ? `${act} the next point, double-${act.toLowerCase()} to finish` : `${act} a symbol or the plan to start the ${tool}`, !TOUCH && lineDraft && ["enter", "finish"], !TOUCH && ["esc", lineDraft ? "cancel" : "stop"]]
     : tool === "note" ? [`${act} the drawing to add a note`, !TOUCH && ["esc", "cancel"]]
     : tool === "stamp" ? [`${act} the drawing to place another`, `${act.toLowerCase()} the tile again to stop`, !TOUCH && ["esc", "stop"]]
@@ -3441,7 +3443,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
                   </span>
                   <div className="min-w-0 text-[15px] font-bold leading-snug" role="status">
                     {tool === "duct"
-                      ? <>Drawing: Duct. {tapOr} points to draw one line, double-{tapOr.toLowerCase()} to finish. Duct then switches off.</>
+                      ? <>Drawing: Duct. {tapOr} the start, then the end. Duct then switches off.</>
                       : <>Drawing: {name}. {tapOr} points to draw the run, double-{tapOr.toLowerCase()} to finish.</>}
                   </div>
                 </div>
@@ -3545,11 +3547,6 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
             lead={{ label: "Floor plan", icon: FloorPlanIcon, tip: "Floor plan: draw or edit this floor's plan, to scale", onClick: () => openFloorPlan(activeSheet?.sketchId) }}
             setTool={(t) => {
               if (t === "several") { startPicking(); return; }
-              // Pressing Duct again while a duct is being drawn finishes that
-              // line and leaves Duct ready for the next one ("press Duct again
-              // for the next line"), instead of doing nothing while the line
-              // keeps following the pointer.
-              if (t === "duct" && tool === "duct" && lineDraftRef.current) { finishLine(); setTool("duct"); return; }
               stopPicking();
               setTool(t); setWireStart(null); if (t !== "wall") cancelWall();
             }} />
