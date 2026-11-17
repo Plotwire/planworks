@@ -105,24 +105,34 @@ test("presets are edited on the Presets page, from the left rail, not inside a d
   assert.match(boqPart, /Prices here are for this job only/);
   assert.ok(existsSync(new URL("../app/presets/page.jsx", import.meta.url)));
   const home = read("components/HomeScreen.jsx");
-  assert.match(home, /onClick=\{onPresets\}[^>]*>\{PRICE_TAG_ICON\}<span className="navlabel">Presets<\/span>/);
+  assert.match(home, /<RailItem name="Presets" short="Presets" onClick=\{onPresets\} icon=\{PRICE_TAG_ICON\} \/>/);
   assert.match(read("app/page.jsx"), /onPresets=\{\(\) => router\.push\("\/presets"\)\}/);
   // No big section or summary on the dashboard itself.
   assert.doesNotMatch(home, /<h2>Presets &amp; pricing<\/h2>|className="presets"|presetSummary/);
 });
 
-test("every left-rail button is teal with a label, all the time", () => {
+test("left rail: teal icons, a slide-out name on mouse hover, a short label on touch", () => {
   const home = read("components/HomeScreen.jsx");
   const rail = home.slice(home.indexOf('<aside className="rail">'), home.indexOf("</aside>"));
-  const items = rail.match(/<div className="navitem[^"]*"/g) || [];
-  const labels = rail.match(/<span className="navlabel">[A-Za-z]+<\/span>/g) || [];
-  assert.equal(labels.length, items.length); // every button in the rail has its label
-  for (const name of ["Dashboard", "Drawings", "Presets", "Symbols", "Planner", "Business"]) {
-    assert.match(rail, new RegExp(`<span className="navlabel">${name}</span>`));
-  }
-  assert.match(read("components/OfflinePanel.jsx"), /<span className="navlabel">Help<\/span>/);
-  // Teal (the app's button colour) when idle, not only on hover.
-  assert.match(home, /\.pw-home \.navitem\{[^}]*background:var\(--action\); color:var\(--action-ink\)/);
+  // The items, in Joe's order, each with its full name and its short label.
+  const items = [...rail.matchAll(/<RailItem (active )?name="([^"]+)" short="([^"]+)"/g)].map((m) => m[2]);
+  assert.deepEqual(items, ["Dashboard", "All drawings", "Symbol library", "Work planner", "Timesheets", "Presets", "Business information"]);
+  // No browser tooltips: one behaviour only.
+  assert.doesNotMatch(rail, /<div className="navitem[^>]*title=/);
+  assert.doesNotMatch(home.slice(home.indexOf("function RailItem"), home.indexOf("/* Sheet geometry")), /title=/);
+  const help = read("components/OfflinePanel.jsx");
+  assert.match(help, /<span className="navname">Help<\/span>/);
+  assert.match(help, /<span className="navshort" aria-hidden="true">Help<\/span>/);
+  assert.doesNotMatch(help, /className=\{`navitem[^`]*`\} title=/);
+  // Mouse: teal icon at rest; hovering anywhere on the item opens the pill
+  // with the name, in about 150 ms, over the page (absolutely placed).
+  assert.match(home, /\.pw-home \.navitem\{[^}]*color:var\(--teal\)/);
+  assert.match(home, /\.pw-home \.navpill\{position:absolute;[^}]*max-width:52px;[^}]*transition:max-width \.15s ease/);
+  assert.match(home, /@media \(hover:hover\) and \(pointer:fine\)\{\n  \.pw-home \.navitem:hover \.navpill, \.pw-home \.navitem:focus-visible \.navpill\{max-width:260px; background:var\(--action\)/);
+  // Touch: the short label under the icon, always; no pill.
+  assert.match(home, /@media \(hover:none\), \(pointer:coarse\)\{[^@]*\.pw-home \.navname\{display:none\}[^@]*\.pw-home \.navshort\{display:block;/);
+  // The page you're on stays highlighted.
+  assert.match(home, /\.pw-home \.navitem\.active \.navpill\{background:rgba\(63,183,201,\.18\)/);
 });
 
 test("the page edits the same saved presets, so everything already set carries over", () => {

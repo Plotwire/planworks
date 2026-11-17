@@ -83,7 +83,7 @@ test("a refused save says why", () => {
 });
 
 test("the rail item only shows for accounts with the add-on", () => {
-  assert.match(read("components/HomeScreen.jsx"), /timesheets\.status === "on" && <div className="navitem" title="Timesheets"/);
+  assert.match(read("components/HomeScreen.jsx"), /timesheets\.status === "on" && <RailItem name="Timesheets"/);
 });
 
 test("accounts without the add-on are sent back to the dashboard", () => {
