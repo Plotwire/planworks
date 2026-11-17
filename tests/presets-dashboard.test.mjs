@@ -128,7 +128,8 @@ test("left rail: teal icons, a slide-out name on mouse hover, a short label on t
   // with the name, in about 150 ms, over the page (absolutely placed).
   assert.match(home, /\.pw-home \.navitem\{[^}]*color:var\(--teal\)/);
   assert.match(home, /\.pw-home \.navpill\{position:absolute;[^}]*max-width:52px;[^}]*transition:max-width \.15s ease/);
-  assert.match(home, /@media \(hover:hover\) and \(pointer:fine\)\{\n  \.pw-home \.navitem:hover \.navpill, \.pw-home \.navitem:focus-visible \.navpill\{max-width:260px; background:var\(--action\)/);
+  // (\r? as Git may give the file Windows line endings.)
+  assert.match(home, /@media \(hover:hover\) and \(pointer:fine\)\{\r?\n  \.pw-home \.navitem:hover \.navpill, \.pw-home \.navitem:focus-visible \.navpill\{max-width:260px; background:var\(--action\)/);
   // Touch: the short label under the icon, always; no pill.
   assert.match(home, /@media \(hover:none\), \(pointer:coarse\)\{[^@]*\.pw-home \.navname\{display:none\}[^@]*\.pw-home \.navshort\{display:block;/);
   // The page you're on stays highlighted.
