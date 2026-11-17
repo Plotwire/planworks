@@ -10,12 +10,15 @@ link was updated, then open it fresh (or press **Ctrl+F5**).
 
 ## What's new, in plain English
 
-- **The left rail on the dashboard:** every button is a solid teal button
-  (the app's button colour) all the time, with a **white** icon and a short
-  **white** label: **Dashboard, Drawings, Presets, Symbols, Planner** (and
-  **Timesheets** for accounts with it), then **Help** and **Business** at the
-  bottom. The page you're on (Dashboard) is a darker teal with a white
-  outline.
+- **The left rail on the dashboard:** Dashboard, then **All drawings, Symbol
+  library, Work planner, Timesheets** (accounts with it) and **Presets**, with
+  **Help** and **Business information** at the bottom.
+  - **With a mouse:** teal icons. Hover anywhere on an item and it slides out
+    to the right as a teal pill with its name (e.g. "Work planner"), over the
+    page, and slides back when the mouse leaves. No grey tooltip.
+  - **On touch (iPad, phone):** teal icons with a short name underneath
+    (Drawings, Symbols, Planner, Presets…), always shown.
+  - The page you're on (Dashboard) stays highlighted.
 - **Presets** in the rail opens the Presets page: all your items, specs and
   prices, in bigger text than before. Changes save as you type (the light at
   the top right says **Saved**). **Dashboard** takes you back. There's no
@@ -43,12 +46,14 @@ link was updated, then open it fresh (or press **Ctrl+F5**).
 
 ## Steps (laptop, Edge)
 
-1. Sign in to the **test account** and look at the dashboard's **left rail**.
-   Every button is solid teal with a white icon and white label: Dashboard
-   (darker teal with a white outline: you're on it), Drawings, Presets,
-   Symbols, Planner, and Help and Business at the bottom. Hover one: it goes
-   a darker teal. There's no big presets
-   section between "Start something new" and "All drawings".
+1. Sign in to the **test account** and look at the dashboard's **left rail**:
+   teal icons, Dashboard highlighted. Move the mouse onto **Symbol library**,
+   on the edge of the button rather than the icon: a teal pill slides out with
+   **"Symbol library"** in it, over the page (the page doesn't move). Move
+   away: it slides back. Do the same down the rail: **All drawings, Work
+   planner, Presets, Help, Business information**. No grey tooltip appears.
+   There's no big presets section between "Start something new" and "All
+   drawings".
 2. **Nothing lost:** press **Presets** in the rail. Every item, spec and price
    you'd set before (in the quote's old Presets box) is there. Write down a
    few prices, to put back in step 13.
@@ -89,7 +94,9 @@ link was updated, then open it fresh (or press **Ctrl+F5**).
 
 ## iPad (Safari)
 
-1. The rail's labels are readable and each button is easy to tap.
+1. The rail shows teal icons with a short name under each (Dashboard,
+   Drawings, Symbols, Planner, Presets, Help, Business), always, with no
+   slide-out. Each is easy to tap.
 2. On the Presets page, tap a **Unit rate** box: the number keyboard comes
    up, and the price saves the same way. The rows are big enough to tap
    without zooming.
@@ -109,7 +116,9 @@ the drawing. No database change was needed.
   edits the same saved presets; every rail button has its label and is teal).
 - `npm run build` (the build gate) and `node scripts/symbol-library/check.cjs`
   (the symbol check).
-- Looked at in a local copy with a stand-in for the database: the rail (all
-  teal, labelled, Dashboard ringed), no presets section on the dashboard, the
-  Presets button opening the Presets page, and both fitting a phone screen
-  (375 px) with no sideways scrolling.
+- Looked at in a local copy with a stand-in for the database: with a mouse,
+  teal icons at rest, and hovering the corner of an item (away from its icon)
+  slides out its named pill (about 160 px for "Symbol library") without
+  moving the page; on phone emulation (touch), every short name shows under
+  its icon and fits, with no sideways scrolling; Presets opens the Presets
+  page.
