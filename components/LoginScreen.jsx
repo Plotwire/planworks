@@ -1,16 +1,20 @@
 "use client";
 
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import * as Sentry from "@sentry/nextjs";
 import { supabase, isConfigured } from "@/lib/supabase";
 import TermsCheckboxes from "@/components/TermsCheckboxes";
 import { LEGAL_LINKS } from "@/lib/legal";
 import { signupTermsMetadata } from "@/lib/termsAcceptance";
 import { authFailure, authReportExtra } from "@/lib/authMessages";
-import { inAppBrowserTag } from "@/lib/inAppBrowser";
+import { inAppBrowserTag, detectInAppBrowser, canOpenInChrome, chromeIntentUrl } from "@/lib/inAppBrowser";
 import Turnstile, { TURNSTILE_SITE_KEY, captchaPending } from "@/components/Turnstile";
 import { StatusIcon } from "@/components/StatusMark";
-import InAppBrowserBanner from "@/components/InAppBrowserBanner";
+
+// Only for someone in Instagram, Facebook, Messenger or TikTok's built-in
+// browser, and only where it helps: the confirmation link opens in another
+// app, which is then the one that's signed in.
+const IN_APP_TIP = "Tip: if the link opens in a different app, log in there instead.";
 
 // notice: shown above the form, e.g. saves still waiting on this device after
 // the account was signed out by itself (components/AppShell.jsx).
@@ -29,6 +33,15 @@ export default function LoginScreen({ recovery = false, onRecovered, notice = ""
   const [sentTo, setSentTo] = useState("");        // email we just messaged
   const [sentKind, setSentKind] = useState("");    // "confirm" | "reset"
   const [resetDone, setResetDone] = useState(false);
+  // An app's built-in browser (lib/inAppBrowser.js), worked out after the page
+  // loads (the server has no user agent to go on). Nothing is shown up front
+  // for it: just "Open in Chrome" where that works, and the tip when needed.
+  const [inApp, setInApp] = useState(null);
+  const [origin, setOrigin] = useState("");
+  useEffect(() => {
+    setInApp(detectInAppBrowser(navigator.userAgent, window.location.search));
+    setOrigin(window.location.origin);
+  }, []);
   // Sign-up acknowledgements: both start unticked and both are required.
   const [agreed, setAgreed] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
@@ -223,6 +236,7 @@ export default function LoginScreen({ recovery = false, onRecovered, notice = ""
               {resent ? "We've sent the confirmation email again." : "We've sent you a confirmation email."}{" "}
               Tap the link in it to finish setting up your account. If it's not in your inbox, check your junk folder.
               <span className="sent-to">Sent to <b>{sentTo}</b></span>
+              {inApp && <span className="inapp-tip">{IN_APP_TIP}</span>}
             </p>
           )}
           <button type="button" className="submit" onClick={() => switchMode("signin")}>
@@ -316,6 +330,7 @@ export default function LoginScreen({ recovery = false, onRecovered, notice = ""
             <StatusIcon tone="amber" size={20} />
             <div>
               <span>{error}</span>
+              {inApp && <span className="inapp-tip">{IN_APP_TIP}</span>}
               <ResendButton busy={resending} waiting={waitingForCheck} onClick={resendConfirmation} />
             </div>
           </div>
@@ -347,6 +362,17 @@ export default function LoginScreen({ recovery = false, onRecovered, notice = ""
           )}
         </div>
 
+        {/* Android, in Instagram, Facebook or Messenger: this page in Chrome,
+            in one tap (an intent:// link, lib/inAppBrowser.js). No text. */}
+        {canOpenInChrome(inApp) && origin && (
+          <div className="open-chrome-row">
+            <a className="open-chrome" href={chromeIntentUrl(origin)}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+              Open in Chrome
+            </a>
+          </div>
+        )}
+
         {!isConfigured && (
           <div className="note">The cloud connection isn't set up yet — check the environment variables.</div>
         )}
@@ -374,8 +400,7 @@ function ResendButton({ busy, waiting, onClick }) {
 
 // The sign-in page layout (brand rail + card), shared with the terms acceptance
 // page (components/TermsGate.jsx) and the email-link page (app/auth/confirm).
-// Inside Instagram, Facebook, Messenger or TikTok a banner above the card asks
-// the person to open Plotwire in their phone's browser instead.
+// The same for everyone: no banner for in-app browsers.
 export function AuthFrame({ children }) {
   return (
     <div className="login-root">
@@ -390,7 +415,6 @@ export function AuthFrame({ children }) {
       </div>
       <div className="login-main">
         <div className="login-stack">
-          <InAppBrowserBanner />
           {children}
         </div>
       </div>
@@ -444,6 +468,12 @@ const CSS = `
 .resend-box{margin-top:26px; padding-top:18px; border-top:1px solid #E6EBF1}
 .resend-q{font-size:13.5px; color:#3A4654; font-weight:500; margin-bottom:10px}
 .resend-box .resend{margin-top:0}
+.inapp-tip{display:block; margin-top:6px; font-size:12.5px; line-height:1.45}
+.sub .inapp-tip{margin-top:10px; color:#3A4654}
+.open-chrome-row{display:flex; justify-content:center; margin-top:16px}
+.open-chrome{display:inline-flex; align-items:center; gap:7px; height:38px; padding:0 14px; border-radius:10px; background:var(--action); color:var(--action-ink); font-size:13px; font-weight:600; text-decoration:none}
+.open-chrome:hover{background:var(--action-hover)}
+.open-chrome svg{width:15px; height:15px}
 .legal-foot{margin-top:22px; text-align:center; font-size:12px; color:#9AA6B2}
 .legal-foot a{color:#697785; text-decoration:none}
 .legal-foot a:hover{color:#22808F; text-decoration:underline}

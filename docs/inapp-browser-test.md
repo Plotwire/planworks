@@ -1,17 +1,25 @@
 # In-app browser and sign-in messages: test steps
 
-Branch: `inapp-browser` (from master ed182a7). Not on the test link yet: the
-test link stays on `lines-and-links` until that's done. Steps 1 to 4 work on
-any copy of this branch. The rest need the real sign-in (the test link, or a
-preview where the security check works).
+Branch: `inapp-browser`, on the test link through `test-nov16` (testing
+only). Steps 1 to 4 work on any copy of this branch. The rest need the real
+sign-in (the test link).
 
 ## What changed
 
-- **Banner inside Instagram, Facebook, Messenger and TikTok.** On the sign-in,
-  sign-up, "Check your email", email-link and terms pages, a yellow banner says
-  *"For the best experience, open Plotwire in your phone's browser"*, with two
-  steps (three dots at the top right, then Open in browser) and a teal **Copy
-  link** button. **Not now** hides it until the page is next opened.
+- **No banner.** People in Instagram, Facebook, Messenger or TikTok's
+  built-in browser see the normal sign-in and sign-up pages, with no warning
+  up front.
+- **"Open in Chrome" on Android.** In Instagram, Facebook or Messenger on an
+  Android phone, the sign-in page has one small teal **Open in Chrome**
+  button under "New to Plotwire?". One tap opens the sign-in page in Chrome
+  (if Chrome isn't there, the phone's usual browser). No instructions text.
+  Not on iPhones (a page can't open Safari) and **not in TikTok**: its
+  built-in browser doesn't reliably let a page open another app, so it gets
+  no button rather than one that might do nothing.
+- **A tip only when it's needed.** For in-app browser users only, one line
+  *"Tip: if the link opens in a different app, log in there instead."* under
+  *"Email not confirmed yet…"* (the Resend button is still there) and on the
+  *Check your email* screen after signing up.
 - **Plain messages for every sign-in and sign-up refusal.** Supabase's own
   wording ("Invalid login credentials", "Email not confirmed") never shows.
 - **Resend confirmation email.** Shown under "Email not confirmed yet…" when
@@ -34,24 +42,23 @@ preview where the security check works).
 - **Google sign-in.** Plotwire doesn't offer it, so there's nothing to hide.
 - **Phones.** The sign-in page now scrolls if it's taller than the screen.
 
-## Banner (any copy of the branch)
+## No banner (any browser)
 
 1. On a laptop, open the site with `?login=1&inapp=instagram` on the end of the
-   address. The yellow banner shows above **Sign in** and says *You're in
-   Instagram's built-in browser*.
-2. Tap **Copy link**. It says *Link copied*. Paste it somewhere: it's the
-   site's address with `/?login=1`.
-3. Tap **Not now**. The banner goes. Reload: it's back.
-4. Take `&inapp=instagram` off the address and reload. No banner.
+   address (this pretends to be Instagram). The normal sign-in page, no
+   banner, and no Open in Chrome button (a laptop isn't Android).
+2. Press **Create an account**: the normal sign-up page, no banner.
+3. Take `&inapp=instagram` off the address and reload: the same page.
+4. On an ordinary phone browser (Chrome or Safari): no Open in Chrome button.
 
-## Banner on your phone
+## Open in Chrome (Android phone)
 
-5. Send yourself the link in an Instagram message and tap it. The banner
-   shows. On Android, step 2 says *It may say Open in Chrome*; on an iPhone,
-   *Open in Safari*.
-6. Follow the two steps. Plotwire opens in the phone's own browser with no
-   banner.
-7. If you can, repeat with Facebook or Messenger, and TikTok.
+5. Send yourself the sign-in link in an Instagram message and tap it, so it
+   opens inside Instagram. The normal sign-in page, with one small teal
+   **Open in Chrome** button under "New to Plotwire?".
+6. Tap **Open in Chrome**: the sign-in page opens in Chrome in one tap.
+7. If you can, repeat in Facebook or Messenger (same button) and in TikTok
+   (no button, by design). On an iPhone, in Instagram: no button.
 
 ## Messages (real sign-in needed)
 
@@ -70,6 +77,12 @@ Use a spare email address you own for a new account.
     with a clock: *Email not confirmed yet. Check your inbox and tap the link,
     then come back here.* with a **Resend confirmation email** button under
     it. Tap it: you're taken to *Check your email*.
+12a. **The tip, only in an app's browser:** in steps 9 and 12 in an ordinary
+    browser, there's no tip. Do steps 9 and 12 again inside Instagram's
+    browser (open the sign-in link from an Instagram message), or on a laptop
+    with `&inapp=instagram` on the address: under *Email not confirmed yet…*
+    and on *Check your email* there's one extra line, *Tip: if the link opens
+    in a different app, log in there instead.*, and Resend is still there.
 13. Open the link in the email. You're signed in.
 14. On your phone, turn on flight mode, then tap **Sign in**. It says
     *Couldn't reach Plotwire. Check your signal or Wi-Fi, then try again.*
@@ -100,13 +113,18 @@ Use a spare email address you own for a new account.
 
 - `npm test`: all tests pass, including `tests/inapp-browser.test.mjs`
   (every refusal gets a plain message; Instagram, Facebook, Messenger and
-  TikTok are spotted and ordinary browsers aren't; Plotwire's own postMessage
-  errors still reach Sentry).
+  TikTok are spotted and ordinary browsers aren't; Open in Chrome only on
+  Android in Instagram, Facebook and Messenger, as an intent:// link to the
+  sign-in page; the tip only for in-app browsers, in its two places;
+  Plotwire's own postMessage errors still reach Sentry).
 - `npm run build` (the build gate) and `node scripts/symbol-library/check.cjs`
   (the symbol check).
-- In the browser at phone size: banner, numbered steps, Copy link, Not now, no
-  banner in an ordinary browser, sign-up form scrolls to the bottom, desktop
-  sign-in looks as before, no console errors.
+- In a local copy at phone size, pretending to be Instagram on Android: the
+  normal sign-in page, no banner, the Open in Chrome button with the right
+  link; no button when pretending to be TikTok, or in an ordinary browser.
+- **Not checked:** tapping Open in Chrome on a real Android phone inside
+  Instagram or Facebook (that needs the phone: steps 5 to 7), and the tip on
+  a real "Email not confirmed" (needs the real sign-in: step 12a).
 
 ## Login 400 counts
 

@@ -3,9 +3,9 @@
 // Run: npm test
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { authFailure, authErrorCode, authReportExtra, NOT_CONFIRMED_MESSAGE } from "../lib/authMessages.js";
-import { detectInAppBrowser, inAppBrowserTag, isInAppBridgeNoise, openInBrowserLabel } from "../lib/inAppBrowser.js";
+import { detectInAppBrowser, inAppBrowserTag, isInAppBridgeNoise, canOpenInChrome, chromeIntentUrl } from "../lib/inAppBrowser.js";
 
 const read = (file) => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
 
@@ -111,7 +111,7 @@ test("Instagram, Facebook, Messenger and TikTok are spotted, with the phone type
   assert.deepEqual(detectInAppBrowser(UA.tiktokIos), { app: "TikTok", os: "ios" });
 });
 
-test("ordinary browsers get no banner", () => {
+test("ordinary browsers aren't taken for an app's built-in browser", () => {
   for (const key of ["chromeAndroid", "safariIos", "chromeDesktop", "gmailAndroidTab"]) {
     assert.equal(detectInAppBrowser(UA[key]), null, key);
   }
@@ -119,16 +119,33 @@ test("ordinary browsers get no banner", () => {
   assert.equal(detectInAppBrowser(undefined), null);
 });
 
-test("?inapp=instagram shows the banner in any browser, for testing", () => {
+test("?inapp=instagram pretends to be Instagram's browser in any browser, for testing", () => {
   assert.deepEqual(detectInAppBrowser(UA.chromeDesktop, "?inapp=instagram"), { app: "Instagram", os: "other" });
   assert.deepEqual(detectInAppBrowser(UA.chromeAndroid, "?login=1&inapp=tiktok"), { app: "TikTok", os: "android" });
   assert.equal(detectInAppBrowser(UA.chromeDesktop, "?inapp=nonsense"), null);
 });
 
-test("the menu item hint matches the phone", () => {
-  assert.equal(openInBrowserLabel("android"), "Open in Chrome");
-  assert.equal(openInBrowserLabel("ios"), "Open in Safari");
-  assert.equal(openInBrowserLabel("other"), "Open in external browser");
+test("Open in Chrome: Android only, in Instagram, Facebook and Messenger", () => {
+  assert.equal(canOpenInChrome(detectInAppBrowser(UA.instagramAndroid)), true);
+  assert.equal(canOpenInChrome(detectInAppBrowser(UA.facebookAndroid)), true);
+  assert.equal(canOpenInChrome(detectInAppBrowser(UA.messengerAndroid)), true);
+  // Not on an iPhone (a page can't open Safari), not in TikTok (unreliable),
+  // not in an ordinary browser.
+  assert.equal(canOpenInChrome(detectInAppBrowser(UA.instagramIos)), false);
+  assert.equal(canOpenInChrome(detectInAppBrowser(UA.facebookIos)), false);
+  assert.equal(canOpenInChrome(detectInAppBrowser(UA.tiktokAndroid)), false);
+  assert.equal(canOpenInChrome(detectInAppBrowser(UA.chromeAndroid)), false);
+  assert.equal(canOpenInChrome(null), false);
+});
+
+test("the Chrome link opens sign-in in Chrome, falling back to the usual browser", () => {
+  assert.equal(
+    chromeIntentUrl("https://app.plotwire.uk"),
+    "intent://app.plotwire.uk/?login=1#Intent;scheme=https;package=com.android.chrome;"
+      + "S.browser_fallback_url=https%3A%2F%2Fapp.plotwire.uk%2F%3Flogin%3D1;end",
+  );
+  // Only the site: never the page's own address, which can carry a token.
+  assert.doesNotMatch(chromeIntentUrl("https://app.plotwire.uk"), /token|access_token|token_hash/);
 });
 
 test("in-app bridge errors are dropped from Sentry", () => {
@@ -161,11 +178,25 @@ test("the browser's Sentry setup uses the filter and the tag", () => {
   assert.match(src, /in_app_browser/);
 });
 
-test("the sign-in screen shows the banner and never Supabase's raw message", () => {
+test("the sign-in screen: no banner, never Supabase's raw message", () => {
   const src = read("components/LoginScreen.jsx");
-  assert.match(src, /<InAppBrowserBanner \/>/);
+  assert.doesNotMatch(src, /InAppBrowserBanner/);
+  assert.ok(!existsSync(new URL("../components/InAppBrowserBanner.jsx", import.meta.url)));
   assert.doesNotMatch(src, /error\.message/);
   assert.match(src, /supabase\.auth\.resend\(/);
+});
+
+test("in-app browsers get help only when it's needed", () => {
+  const src = read("components/LoginScreen.jsx");
+  assert.match(src, /const IN_APP_TIP = "Tip: if the link opens in a different app, log in there instead\.";/);
+  // Twice: under "Email not confirmed" (with Resend still there), and on
+  // "Check your email" after signing up. Only for an in-app browser.
+  assert.equal((src.match(/\{inApp && <span className="inapp-tip">\{IN_APP_TIP\}<\/span>\}/g) || []).length, 2);
+  const refusal = src.slice(src.indexOf("{error && canResend ? ("), src.indexOf(") : error ? ("));
+  assert.match(refusal, /inapp-tip[\s\S]*<ResendButton/);
+  // The Chrome button: only where it works, an intent:// link, no text beside it.
+  assert.match(src, /\{canOpenInChrome\(inApp\) && origin && \(/);
+  assert.match(src, /<a className="open-chrome" href=\{chromeIntentUrl\(origin\)\}>/);
 });
 
 test("Sentry gets a report for email not confirmed, no connection and unmapped errors", () => {
