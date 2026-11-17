@@ -10,11 +10,12 @@ link was updated, then open it fresh (or press **Ctrl+F5**).
 
 ## What's new, in plain English
 
-- **The left rail on the dashboard:** every button is solid teal (the app's
-  button colour) all the time, with a short label under its icon:
-  **Dashboard, Drawings, Presets, Symbols, Planner** (and **Timesheets** for
-  accounts with it), then **Help** and **Business** at the bottom. The page
-  you're on (Dashboard) is navy with a teal ring.
+- **The left rail on the dashboard:** every button is a solid teal button
+  (the app's button colour) all the time, with a **white** icon and a short
+  **white** label: **Dashboard, Drawings, Presets, Symbols, Planner** (and
+  **Timesheets** for accounts with it), then **Help** and **Business** at the
+  bottom. The page you're on (Dashboard) is a darker teal with a white
+  outline.
 - **Presets** in the rail opens the Presets page: all your items, specs and
   prices, in bigger text than before. Changes save as you type (the light at
   the top right says **Saved**). **Dashboard** takes you back. There's no
@@ -43,9 +44,10 @@ link was updated, then open it fresh (or press **Ctrl+F5**).
 ## Steps (laptop, Edge)
 
 1. Sign in to the **test account** and look at the dashboard's **left rail**.
-   Every button is teal with a label: Dashboard (navy, with a teal ring:
-   you're on it), Drawings, Presets, Symbols, Planner, and Help and Business at
-   the bottom. Hover one: it goes a darker teal. There's no big presets
+   Every button is solid teal with a white icon and white label: Dashboard
+   (darker teal with a white outline: you're on it), Drawings, Presets,
+   Symbols, Planner, and Help and Business at the bottom. Hover one: it goes
+   a darker teal. There's no big presets
    section between "Start something new" and "All drawings".
 2. **Nothing lost:** press **Presets** in the rail. Every item, spec and price
    you'd set before (in the quote's old Presets box) is there. Write down a

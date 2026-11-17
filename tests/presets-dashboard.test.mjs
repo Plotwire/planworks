@@ -121,8 +121,10 @@ test("every left-rail button is teal with a label, all the time", () => {
     assert.match(rail, new RegExp(`<span className="navlabel">${name}</span>`));
   }
   assert.match(read("components/OfflinePanel.jsx"), /<span className="navlabel">Help<\/span>/);
-  // Teal (the app's button colour) when idle, not only on hover.
-  assert.match(home, /\.pw-home \.navitem\{[^}]*background:var\(--action\); color:var\(--action-ink\)/);
+  // Solid teal (the app's button colour) with a white icon and label when
+  // idle, not only on hover; the page you're on darker with a white outline.
+  assert.match(home, /\.pw-home \.navitem\{[^}]*background:var\(--action\); color:#fff/);
+  assert.match(home, /\.pw-home \.navitem\.active\{background:#185F6B; box-shadow:0 0 0 2px #fff\}/);
 });
 
 test("the page edits the same saved presets, so everything already set carries over", () => {

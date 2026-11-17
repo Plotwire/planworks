@@ -775,15 +775,15 @@ const CSS = `
 .pw-home .rail::after{content:""; position:absolute; inset:0 0 0 auto; width:1px; background:rgba(255,255,255,.05)}
 .pw-home .brandmark{width:42px; height:42px; border-radius:12px; background:linear-gradient(150deg,var(--teal),var(--teal-700)); display:grid; place-items:center; margin-bottom:18px; box-shadow:0 6px 16px -4px rgba(63,183,201,.5)}
 .pw-home .brandmark svg{width:22px; height:22px}
-/* Rail buttons: solid teal with a navy icon and a short label, all the time,
-   so they read as buttons (the app's button style). The page you're on is
-   navy with a teal ring, like the chosen tool in the editor's toolbar. */
-.pw-home .navitem{width:62px; min-height:52px; padding:6px 2px 5px; border-radius:12px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; background:var(--action); color:var(--action-ink); cursor:pointer; transition:background .18s ease, color .18s ease; position:relative}
+/* Rail buttons: solid teal (the app's button teal) with a white icon and a
+   white label, all the time, so they read as buttons on the dark rail (Joe,
+   17 Nov). The page you're on is a darker teal with a white outline. */
+.pw-home .navitem{width:62px; min-height:52px; padding:6px 2px 5px; border-radius:12px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; background:var(--action); color:#fff; cursor:pointer; transition:background .18s ease, box-shadow .18s ease; position:relative; box-shadow:0 2px 6px -2px rgba(0,0,0,.45)}
 .pw-home .navitem svg{width:20px; height:20px; flex-shrink:0}
-.pw-home .navitem .navlabel{font-size:10px; font-weight:600; line-height:1.1; text-align:center; white-space:nowrap}
+.pw-home .navitem .navlabel{font-size:10px; font-weight:700; line-height:1.1; text-align:center; white-space:nowrap}
 .pw-home .navitem:hover{background:var(--action-hover)}
-.pw-home .navitem.active{color:#5FD0E0; background:var(--navy-2); box-shadow:0 0 0 2px #3FB7C9}
-.pw-home .navitem.active::before{content:""; position:absolute; left:-6px; top:12px; bottom:12px; width:3px; border-radius:0 3px 3px 0; background:var(--teal)}
+.pw-home .navitem.active{background:#185F6B; box-shadow:0 0 0 2px #fff}
+.pw-home .navitem.active::before{content:""; position:absolute; left:-6px; top:12px; bottom:12px; width:3px; border-radius:0 3px 3px 0; background:#fff}
 .pw-home .rail-spacer{flex:1}
 .pw-home .rail-avatar{width:40px; height:40px; border-radius:50%; background:var(--navy-2); border:1.5px solid var(--navy-line); color:#cdd6e0; display:grid; place-items:center; font-weight:600; font-size:13px; cursor:pointer; font-family:var(--font-space-grotesk),sans-serif; margin-top:6px}
 .pw-home .main{flex:1; display:flex; flex-direction:column; min-width:0}
