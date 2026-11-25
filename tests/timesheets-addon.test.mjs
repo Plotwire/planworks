@@ -50,10 +50,12 @@ test("nothing switches the add-on on automatically", () => {
 });
 
 test("the dashboard rail shows Timesheets only with the add-on", () => {
+  // One Timesheets item, drawn only when the add-on is on. (Either rail: a
+  // plain item, or the newer RailItem.)
   const home = read("components/HomeScreen.jsx");
-  const items = [...home.matchAll(/title="Timesheets"/g)];
+  const items = [...home.matchAll(/(?:title|name)="Timesheets"/g)];
   assert.equal(items.length, 1);
-  assert.match(home, /timesheets\.status === "on" && <div className="navitem" title="Timesheets"/);
+  assert.match(home, /timesheets\.status === "on" && <(?:div className="navitem" title|RailItem name)="Timesheets"/);
   // The Timesheets page's own rail is only drawn once the add-on is on.
   const ts = read("components/timesheets/TimesheetsHome.jsx");
   assert.ok(ts.indexOf('if (access.status !== "on") return <AddonOnly') < ts.indexOf('<aside className="ts-rail">'));
