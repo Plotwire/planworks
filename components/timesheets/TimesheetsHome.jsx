@@ -6,8 +6,10 @@ import { StatusIcon } from "@/components/StatusMark";
 import AppRailLinks from "@/components/AppRailLinks";
 import { useTimesheetsAddon } from "@/lib/timesheets/useTimesheetsAddon";
 import { listJobs, listWorkTypes } from "@/lib/timesheets/lists";
+import { getContext, listTeam } from "@/lib/timesheets/entries";
 import JobsPanel from "@/components/timesheets/JobsPanel";
 import WorkTypesPanel from "@/components/timesheets/WorkTypesPanel";
+import WorkersPanel from "@/components/timesheets/WorkersPanel";
 
 const withRow = (list, row) =>
   list.some((x) => x.id === row.id) ? list.map((x) => (x.id === row.id ? row : x)) : [...list, row];
@@ -26,9 +28,11 @@ function displayName(user) {
 export default function TimesheetsHome({ onClose, onNotAllowed }) {
   const { user, theme, toggleTheme, signOut } = useApp();
   const access = useTimesheetsAddon(user?.id);
-  const [tab, setTab] = useState("jobs");
+  const [tab, setTab] = useState("workers");
   const [jobs, setJobs] = useState(null);
   const [types, setTypes] = useState(null);
+  const [team, setTeam] = useState(null);
+  const [thisMonday, setThisMonday] = useState(null); // from the database clock
   const [loadFailed, setLoadFailed] = useState(false);
 
   useEffect(() => { if (access.status === "off") onNotAllowed?.(); }, [access.status, onNotAllowed]);
@@ -36,9 +40,11 @@ export default function TimesheetsHome({ onClose, onNotAllowed }) {
   const load = useCallback(async () => {
     setLoadFailed(false);
     try {
-      const [j, t] = await Promise.all([listJobs(), listWorkTypes()]);
+      const [j, t, o, ctx] = await Promise.all([listJobs(), listWorkTypes(), listTeam(), getContext()]);
       setJobs(j);
       setTypes(t);
+      setTeam(o);
+      setThisMonday(ctx?.week_start || null);
     } catch {
       setLoadFailed(true);
     }
@@ -47,11 +53,12 @@ export default function TimesheetsHome({ onClose, onNotAllowed }) {
   useEffect(() => { if (access.status === "on") load(); }, [access.status, load]);
 
   const failed = access.status === "failed" || loadFailed;
-  const ready = access.status === "on" && jobs && types && !loadFailed;
+  const ready = access.status === "on" && jobs && types && team && thisMonday && !loadFailed;
   const initials = (displayName(user) || user?.email || "?").slice(0, 2).toUpperCase();
 
   const count = (list, test) => (list ? list.filter(test).length : "–");
   const tabs = [
+    { key: "workers", label: "Workers", n: count(team, (o) => o.status !== "removed") },
     { key: "jobs", label: "Jobs", n: count(jobs, (j) => j.status === "active") },
     { key: "types", label: "Work types", n: count(types, (t) => t.active) },
   ];
@@ -106,12 +113,12 @@ export default function TimesheetsHome({ onClose, onNotAllowed }) {
                 <div className="ts-hero-glow" />
                 <div className="ts-hero-inner">
                   <div className="ts-eyebrow">Timesheets</div>
-                  <h1>Jobs and work types</h1>
-                  <p>Everything your team records their hours against, in one place.</p>
+                  <h1>Your team&rsquo;s hours</h1>
+                  <p>Each worker&rsquo;s week, the jobs they record against, and an export for your spreadsheet.</p>
                 </div>
                 <div className="ts-stats">
+                  <div className="ts-stat"><div className="n">{count(team, (o) => o.status !== "removed")}</div><div className="l">Workers</div></div>
                   <div className="ts-stat"><div className="n">{count(jobs, (j) => j.status === "active")}</div><div className="l">Active jobs</div></div>
-                  <div className="ts-stat"><div className="n">{count(jobs, (j) => j.status === "archived")}</div><div className="l">Archived jobs</div></div>
                   <div className="ts-stat"><div className="n">{count(types, (t) => t.active)}</div><div className="l">Work types</div></div>
                 </div>
               </section>
@@ -138,6 +145,7 @@ export default function TimesheetsHome({ onClose, onNotAllowed }) {
                       </button>
                     ))}
                   </div>
+                  {tab === "workers" && <WorkersPanel thisMonday={thisMonday} />}
                   {tab === "jobs" && (
                     <JobsPanel ownerId={user.id} jobs={jobs} types={types} onSaved={(row) => setJobs((l) => withRow(l, row))} />
                   )}
@@ -284,6 +292,56 @@ html.dark .pw-ts .ts-alert{background:#2E1A1A; border-color:#EF4444}
 .pw-ts .ts-dialog-actions{display:flex; justify-content:flex-end; gap:9px}
 .pw-ts .ts-dialog-actions .ts-btn{height:40px; font-size:13px}
 
+/* Workers: each worker's week (components/timesheets/WorkersPanel.jsx). */
+.pw-ts .ts-btn.is-quiet{background:var(--line-2); color:var(--ink-2)}
+.pw-ts .ts-btn.is-quiet:hover:not(:disabled){background:var(--line); box-shadow:none}
+.pw-ts .ts-btn-icon{width:38px; height:38px; padding:0}
+.pw-ts .ts-btn-icon svg{width:19px; height:19px}
+.pw-ts .ts-weeknav{display:flex; align-items:center; gap:10px}
+.pw-ts .ts-weeknav-label{min-width:170px; text-align:center; line-height:1.25}
+.pw-ts .ts-weeknav-label span{display:block; font-family:var(--font-jetbrains-mono),monospace; font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--teal-700)}
+html.dark .pw-ts .ts-weeknav-label span{color:var(--teal)}
+.pw-ts .ts-weeknav-label b{font-family:var(--font-space-grotesk),sans-serif; font-size:15px; font-weight:600}
+.pw-ts .ts-workers{display:flex; flex-direction:column}
+.pw-ts .ts-worker{padding:18px 22px; border-top:1px solid var(--line-2)}
+.pw-ts .ts-worker-head{display:flex; align-items:flex-start; justify-content:space-between; gap:14px}
+.pw-ts .ts-worker-name h3{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:16px; letter-spacing:-.01em; margin-bottom:6px}
+.pw-ts .ts-pill{display:inline-flex; align-items:center; gap:6px; font-size:12.5px; font-weight:600; padding:4px 10px 4px 6px; border-radius:999px}
+.pw-ts .ts-pill.is-green{background:#ECFDF3; color:#14532D; border:1px solid #4ADE80}
+.pw-ts .ts-pill.is-amber{background:#FFFBEB; color:#78350F; border:1px solid #FBBF24}
+html.dark .pw-ts .ts-pill.is-green{background:#0F2A1A; color:#BBF7D0}
+html.dark .pw-ts .ts-pill.is-amber{background:#2A2114; color:#FDE68A}
+.pw-ts .ts-worker-total{text-align:right}
+.pw-ts .ts-worker-total .n{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:22px; letter-spacing:-.01em}
+.pw-ts .ts-worker-total .l{font-size:11.5px; color:var(--muted)}
+.pw-ts .ts-daygrid{display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:6px; margin-top:14px}
+.pw-ts .ts-daycell{display:flex; flex-direction:column; align-items:center; gap:3px; padding:8px 4px; border-radius:10px; background:var(--paper); border:1px solid var(--line-2)}
+.pw-ts .ts-daycell span{font-size:11px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.04em}
+.pw-ts .ts-daycell b{font-family:var(--font-space-grotesk),sans-serif; font-size:13.5px; font-weight:600; white-space:nowrap}
+.pw-ts .ts-daycell.is-zero b{color:var(--muted-2); font-weight:500}
+.pw-ts .ts-jobtotals{list-style:none; margin-top:12px; display:flex; flex-direction:column; gap:4px}
+.pw-ts .ts-jobtotals li{display:flex; justify-content:space-between; gap:12px; font-size:13.5px; color:var(--ink-2); padding:6px 10px; border-radius:8px; background:var(--paper)}
+.pw-ts .ts-jobtotals li span{overflow-wrap:anywhere}
+.pw-ts .ts-jobtotals li b{white-space:nowrap; color:var(--ink)}
+.pw-ts .ts-worker-tools{display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-top:12px}
+.pw-ts .ts-linkbtn{display:inline-flex; align-items:center; gap:5px; border:0; background:none; font-family:inherit; font-size:13px; font-weight:600; color:var(--teal-700); cursor:pointer; padding:6px 0}
+html.dark .pw-ts .ts-linkbtn{color:var(--teal)}
+.pw-ts .ts-linkbtn svg{width:16px; height:16px; transition:transform .15s ease}
+.pw-ts .ts-linkbtn svg.is-up{transform:rotate(180deg)}
+.pw-ts .ts-ask{display:inline-flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:13px; color:var(--ink-2); margin-left:auto}
+.pw-ts .ts-entries{margin-top:10px; border:1px solid var(--line); border-radius:12px; overflow:hidden}
+.pw-ts .ts-entry{display:grid; grid-template-columns:110px minmax(0,1.4fr) minmax(0,.8fr) 110px 70px minmax(0,1fr); gap:10px; padding:9px 12px; font-size:13px; border-top:1px solid var(--line-2); align-items:start}
+.pw-ts .ts-entry:first-child{border-top:0}
+.pw-ts .ts-entry.is-head{background:var(--paper); font-family:var(--font-jetbrains-mono),monospace; font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted)}
+.pw-ts .ts-entry-job{font-weight:600; overflow-wrap:anywhere}
+.pw-ts .ts-entry-note{color:var(--muted); overflow-wrap:anywhere}
+.pw-ts .ts-export{margin-top:18px}
+.pw-ts .ts-export-body{display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap; padding:0 22px 20px}
+.pw-ts .ts-export-body .ts-field{width:170px}
+.pw-ts .ts-export-note{padding:0 22px 18px; font-size:13px; color:var(--muted)}
+.pw-ts input[type="date"]{width:100%; height:42px; padding:0 12px; font-family:inherit; font-size:14px; color:var(--ink); background:var(--paper); border:1px solid var(--line); border-radius:10px; outline:none}
+.pw-ts input[type="date"]:focus{border-color:var(--teal); box-shadow:0 0 0 3px rgba(63,183,201,.18)}
+
 @media (max-width:720px){
   .pw-ts .ts-rail{width:60px}
   .pw-ts .ts-topbar{padding:0 14px; gap:10px}
@@ -303,5 +361,18 @@ html.dark .pw-ts .ts-alert{background:#2E1A1A; border-color:#EF4444}
   .pw-ts .ts-tr.is-job{grid-template-columns:1fr; gap:8px}
   .pw-ts .ts-tr.is-job .ts-actions{justify-content:flex-start}
   .pw-ts .ts-fields{grid-template-columns:1fr}
+  .pw-ts .ts-tabs{flex-wrap:wrap}
+  .pw-ts .ts-worker{padding:16px}
+  .pw-ts .ts-weeknav{width:100%; justify-content:space-between}
+  .pw-ts .ts-weeknav-label{min-width:0}
+  .pw-ts .ts-daygrid{gap:4px}
+  .pw-ts .ts-daycell{padding:6px 2px}
+  .pw-ts .ts-daycell b{font-size:11.5px}
+  .pw-ts .ts-entry{grid-template-columns:1fr 1fr; gap:4px 10px}
+  .pw-ts .ts-entry.is-head{display:none}
+  .pw-ts .ts-entry-job,.pw-ts .ts-entry-note{grid-column:1 / -1}
+  .pw-ts .ts-export-body{padding:0 16px 16px}
+  .pw-ts .ts-export-body .ts-field{width:calc(50% - 6px)}
+  .pw-ts .ts-export-note{padding:0 16px 14px}
 }
 `;

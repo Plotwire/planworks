@@ -16,6 +16,8 @@ const INSTALL = "supabase/timesheets.sql";
 // Later batches put their Timesheets code in these folders.
 const WATCHED = [
   INSTALL,
+  "supabase/timesheets-week.sql",
+  "supabase/timesheets-week-test-workers.sql",
   "app/time",
   "app/timesheets",
   "app/api/timesheets",
