@@ -617,6 +617,32 @@ html.dark .pw-tsw .tsw-hint{color:#FBBF24}
 .pw-tsw .tsw-dialog-actions{display:flex; gap:10px; margin-top:16px}
 .pw-tsw .tsw-dialog-actions .tsw-btn{flex:1}
 
+/* The privacy notice (first sign-in) and the Privacy link under the week. */
+.pw-tsw .tsw-notice{padding:22px 18px; display:flex; flex-direction:column; gap:12px; border-top:4px solid var(--teal-600)}
+.pw-tsw .tsw-notice-ic{width:44px; height:44px; border-radius:12px; display:grid; place-items:center; background:var(--teal-soft); color:var(--teal-soft-ink)}
+.pw-tsw .tsw-notice-ic svg{width:22px; height:22px}
+.pw-tsw .tsw-notice h2,.pw-tsw .tsw-join h1{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:20px; letter-spacing:-.01em; line-height:1.25}
+.pw-tsw .tsw-notice p{font-size:15.5px; line-height:1.6; color:var(--ink-2)}
+.pw-tsw .tsw-notice .tsw-btn{margin-top:4px}
+.pw-tsw .tsw-privacy-link{margin-top:18px; text-align:center}
+.pw-tsw .tsw-privacy-link button{border:0; background:none; padding:8px 12px; font-family:inherit; font-size:13.5px; font-weight:600; color:var(--muted); text-decoration:underline; text-underline-offset:3px; cursor:pointer}
+.pw-tsw .tsw-dialog p + .tsw-dialog-actions{margin-top:18px}
+
+/* The invite page (components/timesheets/JoinInvite.jsx). */
+.pw-tsw .tsw-join{padding:22px 18px; display:flex; flex-direction:column; gap:12px; border-top:4px solid var(--teal-600)}
+.pw-tsw .tsw-join p{font-size:15.5px; line-height:1.55; color:var(--ink-2)}
+.pw-tsw .tsw-join p b{color:var(--ink); overflow-wrap:anywhere}
+.pw-tsw .tsw-join-note{padding:10px 12px; border-radius:10px; font-size:14px !important; background:#FFFBEB; border:1.5px solid #FBBF24; color:#78350F !important}
+html.dark .pw-tsw .tsw-join-note{background:#2A2114; color:#FDE68A !important}
+.pw-tsw .tsw-join label{display:flex; flex-direction:column; gap:6px; font-size:13px; font-weight:600; color:var(--ink-2)}
+.pw-tsw .tsw-join input{width:100%; height:48px; padding:0 12px; font-family:inherit; font-size:16px; color:var(--ink); background:var(--paper); border:1px solid var(--line); border-radius:10px; outline:none}
+.pw-tsw .tsw-join input:focus{border-color:var(--teal); box-shadow:0 0 0 3px rgba(63,183,201,.18)}
+.pw-tsw .tsw-pw-row{display:flex; gap:8px; align-items:center}
+.pw-tsw .tsw-pw-row input{flex:1; min-width:0}
+.pw-tsw .tsw-open-chrome{align-self:flex-start; display:inline-flex; align-items:center; gap:7px; height:38px; padding:0 12px; border-radius:10px;
+  background:var(--action); color:var(--action-ink); font-size:13.5px; font-weight:600; text-decoration:none}
+.pw-tsw .tsw-tip{font-size:13px !important; color:var(--muted) !important}
+
 @media (min-width:700px){
   .pw-tsw .tsw-dialog-back{place-items:center}
   .pw-tsw .tsw-main{padding-top:22px}
