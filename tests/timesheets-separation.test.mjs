@@ -74,5 +74,5 @@ test("the rail's shared links file holds links and nothing else", () => {
 test("the Timesheets rail gets those links from the shared file", () => {
   const source = readFileSync(path.join(root, "components/timesheets/TimesheetsHome.jsx"), "utf8");
   assert.match(source, /import AppRailLinks from "@\/components\/AppRailLinks";/);
-  assert.match(source, /<AppRailLinks className="ts-nav" \/>/);
+  assert.match(source, /<AppRailLinks current="timesheets" \/>/);
 });
