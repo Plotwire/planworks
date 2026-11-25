@@ -5,7 +5,7 @@
 // Run: npm test
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import {
   cleanInvite, isInviteCode, isUuid, inviteLink, teamMessage, TEAM_MESSAGES, joinProblem, passwordProblem,
   inviteEmail, senderName, chromeIntentFor, JOIN_PATH, INVITE_DAYS,
@@ -164,6 +164,37 @@ test("Workers: invite, invites waiting with Resend and Cancel, Remove with a yes
 });
 
 // ------------------------------------------------------------- the database
+
+/** CASEs not in brackets inside an IF / ELSIF condition (PL/pgSQL ends the condition at its first THEN). */
+export function bareCaseInIf(sql) {
+  const code = sql.replace(/--[^\n]*/g, "");
+  const found = [];
+  const re = /(?<!\bend\s+)\b(?:els)?if\b(?!\s+(?:not\s+)?exists\b)/gi;
+  let m;
+  while ((m = re.exec(code))) {
+    const rest = code.slice(m.index + m[0].length);
+    const then = rest.search(/\bthen\b/i);
+    if (then < 0) continue;
+    const condition = rest.slice(0, then);
+    let depth = 0;
+    for (const token of condition.matchAll(/\(|\)|\bcase\b/gi)) {
+      if (token[0] === "(") depth += 1;
+      else if (token[0] === ")") depth -= 1;
+      else if (depth === 0) found.push(condition.replace(/\s+/g, " ").trim().slice(0, 70));
+    }
+  }
+  return found;
+}
+
+test("no CASE sits bare inside an IF condition in any Timesheets SQL file", () => {
+  assert.deepEqual(bareCaseInIf("begin if x = case t when 'a' then 'b' end then p := 1; end if; end"), ["x = case t when 'a'"]);
+  assert.deepEqual(bareCaseInIf("begin if x = (case t when 'a' then 'b' end) then p := 1; end if; end"), []);
+  const files = readdirSync(new URL("../supabase/", import.meta.url)).filter((f) => /^timesheets.*\.sql$/.test(f));
+  assert.ok(files.length >= 8);
+  const offenders = files.flatMap((f) => bareCaseInIf(read(`supabase/${f}`)).map((c) => `${f}: ${c}`));
+  assert.deepEqual(offenders, []);
+});
+
 test("the database change only adds, and only the server can use it", () => {
   const sql = read("supabase/timesheets-invites.sql");
   const code = codeOnly(sql);
