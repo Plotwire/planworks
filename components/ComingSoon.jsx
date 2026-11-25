@@ -23,7 +23,7 @@ export default function ComingSoon({ onSignIn }) {
         </div>
 
         <h1 className="text-2xl sm:text-3xl font-semibold text-[#1A2530] leading-snug mb-4">
-          Electrical design &amp; quoting,<br className="hidden sm:block" /> built for electricians.
+          Electrical layouts &amp; quoting,<br className="hidden sm:block" /> built for electricians.
         </h1>
 
         <p className="text-[15px] text-slate-500 leading-relaxed mb-2">

@@ -1,12 +1,20 @@
 "use client";
 
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import * as Sentry from "@sentry/nextjs";
 import { supabase, isConfigured } from "@/lib/supabase";
 import TermsCheckboxes from "@/components/TermsCheckboxes";
 import { LEGAL_LINKS } from "@/lib/legal";
 import { signupTermsMetadata } from "@/lib/termsAcceptance";
-import Turnstile, { TURNSTILE_SITE_KEY, isCaptchaError, CAPTCHA_MESSAGE, captchaPending } from "@/components/Turnstile";
+import { authFailure, authReportExtra } from "@/lib/authMessages";
+import { inAppBrowserTag, detectInAppBrowser, canOpenInChrome, chromeIntentUrl } from "@/lib/inAppBrowser";
+import Turnstile, { TURNSTILE_SITE_KEY, captchaPending } from "@/components/Turnstile";
 import { StatusIcon } from "@/components/StatusMark";
+
+// Only for someone in Instagram, Facebook, Messenger or TikTok's built-in
+// browser, and only where it helps: the confirmation link opens in another
+// app, which is then the one that's signed in.
+const IN_APP_TIP = "Tip: if the link opens in a different app, log in there instead.";
 
 // notice: shown above the form, e.g. saves still waiting on this device after
 // the account was signed out by itself (components/AppShell.jsx).
@@ -18,9 +26,22 @@ export default function LoginScreen({ recovery = false, onRecovered, notice = ""
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // The refusal was "email not confirmed": offer to send the link again.
+  const [canResend, setCanResend] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resent, setResent] = useState(false);     // confirmation email sent again
   const [sentTo, setSentTo] = useState("");        // email we just messaged
   const [sentKind, setSentKind] = useState("");    // "confirm" | "reset"
   const [resetDone, setResetDone] = useState(false);
+  // An app's built-in browser (lib/inAppBrowser.js), worked out after the page
+  // loads (the server has no user agent to go on). Nothing is shown up front
+  // for it: just "Open in Chrome" where that works, and the tip when needed.
+  const [inApp, setInApp] = useState(null);
+  const [origin, setOrigin] = useState("");
+  useEffect(() => {
+    setInApp(detectInAppBrowser(navigator.userAgent, window.location.search));
+    setOrigin(window.location.origin);
+  }, []);
   // Sign-up acknowledgements: both start unticked and both are required.
   const [agreed, setAgreed] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
@@ -34,12 +55,35 @@ export default function LoginScreen({ recovery = false, onRecovered, notice = ""
   const captcha = captchaToken ? { captchaToken } : {};
   // Each token works once, so every attempt gets a fresh check.
   const afterAttempt = () => turnstile.current?.reset();
-  const authError = (error, fallback) =>
-    isCaptchaError(error) ? CAPTCHA_MESSAGE : (error.message || fallback);
+  const clearError = () => { setError(""); setCanResend(false); };
+  // Every refusal gets a plain message (lib/authMessages.js). Supabase's error
+  // code -- never the email or password -- goes into Sentry's trail, so any
+  // later report from this page shows why sign-in was refused.
+  // Email not confirmed, no connection and unmapped errors also send a Sentry
+  // report of their own, tagged auth_reason (the code), auth_step and
+  // in_app_browser; one Sentry issue per step + reason. A wrong password never
+  // does: that's a typo. An unmapped error's message goes too, with any email
+  // address taken out (authReportExtra); the email typed in never does.
+  const fail = (err, step) => {
+    const { code, message, resend, report } = authFailure(err, step);
+    try {
+      Sentry.addBreadcrumb({ category: "auth", level: "warning", message: `${step} refused: ${code}` });
+      if (report) {
+        Sentry.captureMessage(`Sign-in screen: ${step} refused (${code})`, {
+          level: "warning",
+          tags: { auth_reason: code, auth_step: step, in_app_browser: inAppBrowserTag(navigator.userAgent) },
+          fingerprint: ["auth-refused", step, code],
+          extra: authReportExtra(err),
+        });
+      }
+    } catch { /* Sentry must never get in the way of the message */ }
+    setError(message);
+    setCanResend(resend);
+  };
 
   const switchMode = (m) => {
     setMode(m);
-    setError(""); setSentTo(""); setSentKind("");
+    clearError(); setSentTo(""); setSentKind(""); setResent(false);
     setPassword(""); setConfirm("");
     setAgreed(false); setAcknowledged(false);
   };
@@ -48,12 +92,34 @@ export default function LoginScreen({ recovery = false, onRecovered, notice = ""
     e?.preventDefault();
     if (!isConfigured) { setError("This app isn't linked to the cloud yet."); return; }
     if (waitingForCheck) { setError("Wait for the security check to finish."); return; }
-    setBusy(true); setError("");
+    setBusy(true); clearError();
     const { error } = await supabase.auth.signInWithPassword({
       email: email.trim(), password, options: { ...captcha },
     });
     setBusy(false);
-    if (error) { afterAttempt(); setError(authError(error, "Couldn't sign in. Check your email and password.")); }
+    if (error) { afterAttempt(); fail(error, "signin"); }
+  };
+
+  // "Resend confirmation email": from the sign-in refusal, or from the
+  // "Check your email" screen after creating the account.
+  const resendConfirmation = async () => {
+    const to = (sentTo || email).trim();
+    if (!isConfigured) { setError("This app isn't linked to the cloud yet."); return; }
+    if (!to) { setError("Enter your email address above, then tap Resend."); return; }
+    if (waitingForCheck) { setError("Wait for the security check to finish."); return; }
+    setResending(true); clearError(); setResent(false);
+    const { error } = await supabase.auth.resend({
+      type: "signup",
+      email: to,
+      options: {
+        emailRedirectTo: typeof window !== "undefined" ? window.location.origin : undefined,
+        ...captcha,
+      },
+    });
+    setResending(false);
+    afterAttempt();
+    if (error) { fail(error, "resend"); return; }
+    setSentTo(to); setSentKind("confirm"); setResent(true);
   };
 
   const signUp = async (e) => {
@@ -64,7 +130,7 @@ export default function LoginScreen({ recovery = false, onRecovered, notice = ""
     if (password !== confirm) { setError("Those two passwords don't match."); return; }
     if (!consentGiven) { setError("Please tick both boxes to create your account."); return; }
     if (waitingForCheck) { setError("Wait for the security check to finish."); return; }
-    setBusy(true); setError("");
+    setBusy(true); clearError();
     const { data, error } = await supabase.auth.signUp({
       email: email.trim(),
       password,
@@ -79,8 +145,8 @@ export default function LoginScreen({ recovery = false, onRecovered, notice = ""
     });
     setBusy(false);
     afterAttempt();
-    if (error) { setError(authError(error, "Couldn't create your account.")); return; }
-    if (data?.user && !data?.session) { setSentTo(email.trim()); setSentKind("confirm"); return; }
+    if (error) { fail(error, "signup"); return; }
+    if (data?.user && !data?.session) { setSentTo(email.trim()); setSentKind("confirm"); setResent(false); return; }
     // confirmation off -> session live; AppShell takes over.
   };
 
@@ -89,14 +155,14 @@ export default function LoginScreen({ recovery = false, onRecovered, notice = ""
     if (!isConfigured) { setError("This app isn't linked to the cloud yet."); return; }
     if (!email.trim()) { setError("Enter the email address for your account."); return; }
     if (waitingForCheck) { setError("Wait for the security check to finish."); return; }
-    setBusy(true); setError("");
+    setBusy(true); clearError();
     const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
       redirectTo: typeof window !== "undefined" ? window.location.origin : undefined,
       ...captcha,
     });
     setBusy(false);
     afterAttempt();
-    if (error) { setError(authError(error, "Couldn't send the reset email.")); return; }
+    if (error) { fail(error, "reset"); return; }
     setSentTo(email.trim()); setSentKind("reset");
   };
 
@@ -104,10 +170,10 @@ export default function LoginScreen({ recovery = false, onRecovered, notice = ""
     e?.preventDefault();
     if (password.length < 8) { setError("Use a password of at least 8 characters."); return; }
     if (password !== confirm) { setError("Those two passwords don't match."); return; }
-    setBusy(true); setError("");
+    setBusy(true); clearError();
     const { error } = await supabase.auth.updateUser({ password });
     setBusy(false);
-    if (error) { setError(error.message || "Couldn't update your password. The link may have expired — request a new one."); return; }
+    if (error) { fail(error, "newpassword"); return; }
     setResetDone(true);
   };
 
@@ -167,14 +233,24 @@ export default function LoginScreen({ recovery = false, onRecovered, notice = ""
             <p className="sub">We've sent a password-reset link to <b>{sentTo}</b>. Open it to choose a new password.</p>
           ) : (
             <p className="sub">
-              We've sent you a confirmation email. If it's not in your inbox, check your junk folder.
+              {resent ? "We've sent the confirmation email again." : "We've sent you a confirmation email."}{" "}
+              Tap the link in it to finish setting up your account. If it's not in your inbox, check your junk folder.
               <span className="sent-to">Sent to <b>{sentTo}</b></span>
+              {inApp && <span className="inapp-tip">{IN_APP_TIP}</span>}
             </p>
           )}
           <button type="button" className="submit" onClick={() => switchMode("signin")}>
             Back to sign in
           </button>
           {isReset && <p className="note">No email after a minute? Check your junk folder, or try again.</p>}
+          {!isReset && (
+            <div className="resend-box">
+              <p className="resend-q">No email after a minute?</p>
+              <Turnstile ref={turnstile} action="auth" onToken={setCaptchaToken} onStatus={setCaptchaStatus} />
+              {error && <div className="err" role="alert">{error}</div>}
+              <ResendButton busy={resending} waiting={waitingForCheck} onClick={resendConfirmation} />
+            </div>
+          )}
         </div>
       </AuthFrame>
     );
@@ -247,7 +323,20 @@ export default function LoginScreen({ recovery = false, onRecovered, notice = ""
 
         <Turnstile ref={turnstile} action="auth" onToken={setCaptchaToken} onStatus={setCaptchaStatus} />
 
-        {error && <div className="err">{error}</div>}
+        {/* "Email not confirmed" is waiting on the person, not broken: amber
+            clock (components/StatusMark.jsx) and a way to get the link again. */}
+        {error && canResend ? (
+          <div className="unsent-note" role="alert">
+            <StatusIcon tone="amber" size={20} />
+            <div>
+              <span>{error}</span>
+              {inApp && <span className="inapp-tip">{IN_APP_TIP}</span>}
+              <ResendButton busy={resending} waiting={waitingForCheck} onClick={resendConfirmation} />
+            </div>
+          </div>
+        ) : error ? (
+          <div className="err" role="alert">{error}</div>
+        ) : null}
 
         <button type="submit" className="submit"
                 disabled={busy || waitingForCheck || (mode === "signup" && !consentGiven)}>
@@ -273,6 +362,17 @@ export default function LoginScreen({ recovery = false, onRecovered, notice = ""
           )}
         </div>
 
+        {/* Android, in Instagram, Facebook or Messenger: this page in Chrome,
+            in one tap (an intent:// link, lib/inAppBrowser.js). No text. */}
+        {canOpenInChrome(inApp) && origin && (
+          <div className="open-chrome-row">
+            <a className="open-chrome" href={chromeIntentUrl(origin)}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+              Open in Chrome
+            </a>
+          </div>
+        )}
+
         {!isConfigured && (
           <div className="note">The cloud connection isn't set up yet — check the environment variables.</div>
         )}
@@ -287,8 +387,20 @@ export default function LoginScreen({ recovery = false, onRecovered, notice = ""
   );
 }
 
+// The teal "Resend confirmation email" button, under the sign-in refusal and
+// on the "Check your email" screen. Waits for the security check like the
+// other buttons on these forms.
+function ResendButton({ busy, waiting, onClick }) {
+  return (
+    <button type="button" className="resend" onClick={onClick} disabled={busy || waiting}>
+      {busy ? "Sending…" : waiting ? "Running security check…" : "Resend confirmation email"}
+    </button>
+  );
+}
+
 // The sign-in page layout (brand rail + card), shared with the terms acceptance
-// page (components/TermsGate.jsx).
+// page (components/TermsGate.jsx) and the email-link page (app/auth/confirm).
+// The same for everyone: no banner for in-app browsers.
 export function AuthFrame({ children }) {
   return (
     <div className="login-root">
@@ -301,7 +413,11 @@ export function AuthFrame({ children }) {
         <p className="tag">Electrical layouts, quotes &amp; bills of quantities — drawn in minutes.</p>
         <div className="rail-foot">Plotwire</div>
       </div>
-      <div className="login-main">{children}</div>
+      <div className="login-main">
+        <div className="login-stack">
+          {children}
+        </div>
+      </div>
     </div>
   );
 }
@@ -317,7 +433,8 @@ const CSS = `
 .login-rail .wordmark b{color:#3FB7C9}
 .login-rail .tag{color:#aab8c6; font-size:15px; line-height:1.6; margin-top:14px; max-width:320px; position:relative}
 .login-rail .rail-foot{margin-top:auto; font-family:var(--font-jetbrains-mono),monospace; font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:#7e8ea0; position:relative}
-.login-main{flex:1; display:flex; align-items:center; justify-content:center; padding:32px}
+.login-main{flex:1; min-width:0; display:flex; flex-direction:column; padding:32px; overflow-y:auto}
+.login-stack{width:100%; max-width:380px; margin:auto}
 .login-card{width:100%; max-width:380px}
 .login-card h1{font-family:var(--font-space-grotesk),sans-serif; font-size:26px; font-weight:600; letter-spacing:-.02em}
 .login-card .sub{color:#697785; font-size:14px; margin-top:6px; margin-bottom:26px; line-height:1.55}
@@ -345,6 +462,18 @@ const CSS = `
 .consent-row a,.inline-link{color:#22808F; font-weight:500; text-decoration:underline}
 .consent-row a:hover,.inline-link:hover{color:#3FB7C9}
 .sent-to{display:block; margin-top:10px; font-size:13px; color:#697785}
+.resend{display:block; margin-top:10px; height:40px; padding:0 16px; border:none; border-radius:10px; background:var(--action); color:var(--action-ink); font:inherit; font-weight:600; font-size:14px; cursor:pointer}
+.resend:hover:not(:disabled){background:var(--action-hover)}
+.resend:disabled{opacity:.6; cursor:default}
+.resend-box{margin-top:26px; padding-top:18px; border-top:1px solid #E6EBF1}
+.resend-q{font-size:13.5px; color:#3A4654; font-weight:500; margin-bottom:10px}
+.resend-box .resend{margin-top:0}
+.inapp-tip{display:block; margin-top:6px; font-size:12.5px; line-height:1.45}
+.sub .inapp-tip{margin-top:10px; color:#3A4654}
+.open-chrome-row{display:flex; justify-content:center; margin-top:16px}
+.open-chrome{display:inline-flex; align-items:center; gap:7px; height:38px; padding:0 14px; border-radius:10px; background:var(--action); color:var(--action-ink); font-size:13px; font-weight:600; text-decoration:none}
+.open-chrome:hover{background:var(--action-hover)}
+.open-chrome svg{width:15px; height:15px}
 .legal-foot{margin-top:22px; text-align:center; font-size:12px; color:#9AA6B2}
 .legal-foot a{color:#697785; text-decoration:none}
 .legal-foot a:hover{color:#22808F; text-decoration:underline}
