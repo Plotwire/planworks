@@ -16,6 +16,7 @@ import { clearSignedOutDeviceData } from "@/lib/deviceData";
 import { DEFAULT_TITLEBLOCK, normaliseTitleBlock, companyProfileToTitleBlock, companyLogoFrom, mergeTitleBlocks } from "@/lib/titleBlock";
 import { useSubscription } from "@/lib/useSubscription";
 import { useCheckoutReturn } from "@/lib/useCheckoutReturn";
+import { useEmailConfirm } from "@/lib/useEmailConfirm";
 import { PAYMENT_PENDING_MESSAGE } from "@/lib/checkoutReturn";
 import { ConfirmingPayment, PaymentNote } from "@/components/PaymentStatus";
 import { TRY_SYMBOL_LIMIT } from "@/lib/pricing";
@@ -103,6 +104,9 @@ const PUBLIC_PATHS = [
   "/planner/view",
   LEGAL_LINKS.terms, LEGAL_LINKS.privacy, LEGAL_LINKS.dataProcessing,
   "/auth/confirm",
+  // A Plotwire email-confirmation link (app/confirm-email/page.jsx): it works
+  // in any browser, signed in or not.
+  "/confirm-email",
   // A Timesheets worker's invite link (components/timesheets/JoinInvite.jsx):
   // they set a password there, then go to their week.
   "/time/join",
@@ -173,6 +177,10 @@ function AppGates({ children, onOperative }) {
   // NEXT_PUBLIC_BILLING_ENABLED=true in Vercel once Stripe is live and tested.
   const BILLING_ENABLED = process.env.NEXT_PUBLIC_BILLING_ENABLED === "true";
   const subscription = useSubscription(BILLING_ENABLED ? ownerSession : null);
+  // Is the account's email address confirmed? (lib/useEmailConfirm.js) Only
+  // subscribing waits for it: the dashboard shows a note, the Subscribe screen
+  // asks for it, and the server checks before checkout.
+  const emailConfirm = useEmailConfirm(ownerSession);
   // Back from Stripe Checkout: "Confirming your payment…" until the webhook
   // has unlocked the account (lib/checkoutReturn.js). The return URL itself
   // grants nothing. If the webhook is late or lost, the server is asked to
@@ -663,6 +671,7 @@ function AppGates({ children, onOperative }) {
       onBack={() => setShowSubscribe(false)}
       hasLapsed={level === "lapsed"}
       paymentOverdue={paymentOverdue}
+      emailConfirm={emailConfirm}
       notice={billingNotice || (paymentPending ? PAYMENT_PENDING_MESSAGE : "")}
     />
   ) : null;
@@ -706,6 +715,8 @@ function AppGates({ children, onOperative }) {
       // the profile's detail lines (name first).
       companyBrand: { logo: companyLogo, details: companyBlock?.details || [] },
       subscription, manageBilling,
+      // The email-confirmation state, for the dashboard's note.
+      emailConfirm,
       // What this account may do (lib/access.js). isTry: 25-symbol cap,
       // watermark, no exports. readOnly: lapsed -- view and export only.
       access: {
