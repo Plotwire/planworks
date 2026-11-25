@@ -198,12 +198,25 @@ test("the worker's week: day cards, add another job, week total, submit, locked 
   assert.match(src, /type="time"/);
 });
 
+test("the worker's week looks like Plotwire: navy day strips, teal today, chips, a navy total bar, a padlock when submitted", () => {
+  const src = read("components/timesheets/WorkerWeek.jsx");
+  assert.match(src, /--brand:#2C3E50/);
+  assert.match(src, /\.tsw-day-head\{[^}]*background:var\(--brand\); color:#fff\}/);
+  assert.match(src, /\.tsw-day\.is-today \.tsw-day-head\{background:var\(--teal-600\); color:var\(--on-teal\)\}/);
+  assert.match(src, /\.tsw-foot\{[^}]*background:var\(--brand\); color:#fff;/);
+  assert.match(src, /\.tsw-chip\{[^}]*background:var\(--teal\); color:var\(--chip-ink\)/);
+  assert.match(src, /<div className="tsw-submitted"><Lock /);
+  assert.match(src, /className=\{`tsw-add\$\{items\.length \? "" : " is-first"\}`\}/);
+});
+
 test("the boss: workers' weeks, reopen, and the export", () => {
   const src = read("components/timesheets/WorkersPanel.jsx");
   assert.match(src, /reopenWeek\(person\.id, monday\)/);
   assert.match(src, /sum\.byDay\[d\]/);
   assert.match(src, /sum\.byJob\.map/);
   assert.match(src, /entriesCsv\(rows, names\)/);
+  assert.match(src, /timesheetWorkbook\(rows, names, from, to\)/);
+  assert.match(src, /Download Excel/);
   assert.match(read("components/timesheets/TimesheetsHome.jsx"), /\{ key: "workers", label: "Workers"/);
 });
 

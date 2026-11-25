@@ -1,13 +1,13 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Plus, Trash2, Send } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, Trash2, Send, Lock, Pencil, Check } from "lucide-react";
 import { StatusIcon } from "@/components/StatusMark";
 import {
   listEntries, listWeeks, addEntry, changeEntry, removeEntry, submitWeek, entryErrorMessage,
 } from "@/lib/timesheets/entries";
 import {
-  weekDays, addDays, weekLabel, parseDay, DAY_LONG, hhmm, minutesBetween, formatHours, jobLabel,
+  weekDays, addDays, weekLabel, parseDay, DAY_LONG, DAY_SHORT, hhmm, minutesBetween, formatHours, jobLabel,
   totals, dayState, canSubmitWeek, cleanEntry, newEntryDefaults, OTHER_JOB,
 } from "@/lib/timesheets/week";
 
@@ -131,8 +131,8 @@ export default function WorkerWeek({ ctx, lists }) {
       </section>
 
       {status === "submitted" && (
-        <div className="tsw-banner is-green" role="status">
-          <StatusIcon tone="green" size={22} />
+        <div className="tsw-banner is-green is-locked" role="status">
+          <span className="tsw-lock-badge"><Lock strokeWidth={2.4} /></span>
           <span><b>Submitted</b>{week.submitted_at ? ` ${stamp(week.submitted_at)}` : ""}. It&rsquo;s locked: only {company} can reopen it.</span>
         </div>
       )}
@@ -169,33 +169,38 @@ export default function WorkerWeek({ ctx, lists }) {
             ].sort((a, b) => hhmm(a.entry?.start_time ?? a.draft.defaults.start_time ?? "")
               .localeCompare(hhmm(b.entry?.start_time ?? b.draft.defaults.start_time ?? "")) || 0);
             const dayMins = sum.byDay[date] || 0;
+            const isToday = date === ctx.today;
             return (
-              <article key={date} className={`tsw-card tsw-day is-${state}`} aria-label={`${DAY_LONG[i]} ${shortDate(date)}`}>
+              <article key={date} className={`tsw-day is-${state}${isToday ? " is-today" : ""}`} aria-label={`${DAY_LONG[i]} ${shortDate(date)}`}>
+                {/* Navy strip (teal for today): day, date and the day's hours. */}
                 <header className="tsw-day-head">
-                  <div>
-                    <h2>{DAY_LONG[i]} <span>{shortDate(date)}</span></h2>
-                    {date === ctx.today && <span className="tsw-today">Today</span>}
-                  </div>
-                  <div className={`tsw-day-total${dayMins ? "" : " is-zero"}`}>{formatHours(dayMins)}</div>
+                  <h2><b>{DAY_SHORT[i]}</b> <span>{shortDate(date)}</span></h2>
+                  {isToday && <span className="tsw-today">Today</span>}
+                  <span className={`tsw-day-total${dayMins ? "" : " is-zero"}`}>
+                    {state === "locked" && <Lock strokeWidth={2.4} aria-label="Locked" />}
+                    {formatHours(dayMins)}
+                  </span>
                 </header>
 
-                {items.map(({ key, entry, draft }) => (
-                  <EntryRow key={key} rowKey={key} entry={entry} draft={draft} date={date} lists={lists} editable={open}
-                            onSaved={onSaved} onRemoved={onRemoved} onPending={onPending} />
-                ))}
+                <div className="tsw-day-body">
+                  {items.map(({ key, entry, draft }) => (
+                    <EntryRow key={key} rowKey={key} entry={entry} draft={draft} date={date} lists={lists} editable={open}
+                              onSaved={onSaved} onRemoved={onRemoved} onPending={onPending} />
+                  ))}
 
-                {open && (
-                  <button type="button" className={items.length ? "tsw-add" : "tsw-btn is-wide is-add"} onClick={() => addDraft(date)}>
-                    <Plus strokeWidth={2.2} />
-                    <span>{items.length ? "Add another job" : "Add hours"}</span>
-                  </button>
-                )}
-                {!open && !items.length && (
-                  <p className="tsw-day-note">{state === "future" ? "Not yet" : "No hours"}</p>
-                )}
-                {state === "closed" && items.length > 0 && (
-                  <p className="tsw-day-note">Too long ago to change. Ask {company} to reopen the week.</p>
-                )}
+                  {open && (
+                    <button type="button" className={`tsw-add${items.length ? "" : " is-first"}`} onClick={() => addDraft(date)}>
+                      <Plus strokeWidth={2.4} />
+                      <span>{items.length ? "Add another job" : "Add hours"}</span>
+                    </button>
+                  )}
+                  {!open && !items.length && (
+                    <p className="tsw-day-note">{state === "future" ? "Not yet" : "No hours"}</p>
+                  )}
+                  {state === "closed" && items.length > 0 && (
+                    <p className="tsw-day-note">Too long ago to change. Ask {company} to reopen the week.</p>
+                  )}
+                </div>
               </article>
             );
           })}
@@ -210,7 +215,7 @@ export default function WorkerWeek({ ctx, lists }) {
               <div className="n">{formatHours(sum.week)}</div>
             </div>
             {status === "submitted" ? (
-              <div className="tsw-submitted"><StatusIcon tone="green" size={20} /><span>Submitted</span></div>
+              <div className="tsw-submitted"><Lock strokeWidth={2.4} /><span>Submitted</span></div>
             ) : submittable ? (
               <button type="button" className="tsw-btn is-submit" onClick={() => setConfirmSubmit(true)} disabled={unsaved}>
                 <Send strokeWidth={2} /><span>Submit week</span>
@@ -259,6 +264,7 @@ function EntryRow({ rowKey, entry, draft, date, lists, editable, onSaved, onRemo
   const [error, setError] = useState("");
   const [touched, setTouched] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [expanded, setExpanded] = useState(!entry);   // a new job opens ready to fill in
 
   const idRef = useRef(entry?.id || null);
   const savedSig = useRef(entry ? JSON.stringify(cleanEntry(initial).value ?? null) : null);
@@ -341,15 +347,9 @@ function EntryRow({ rowKey, entry, draft, date, lists, editable, onSaved, onRemo
 
   if (!editable) {
     return (
-      <div className="tsw-entry is-read">
-        <div className="tsw-read-job">{jobLabel(entry) || "Other"}</div>
-        <div className="tsw-read-line">
-          <span>{entry.work_type}</span>
-          <span>{hhmm(entry.start_time)}–{hhmm(entry.finish_time)}</span>
-          <b>{formatHours(entry.minutes)}</b>
-        </div>
-        {entry.description && <div className="tsw-read-note">{entry.description}</div>}
-      </div>
+      <EntrySummary number={entry.job_number} name={entry.job_number ? entry.job_name : jobLabel(entry)}
+                    type={entry.work_type} start={entry.start_time} finish={entry.finish_time}
+                    minutes={entry.minutes} note={entry.description} />
     );
   }
 
@@ -365,6 +365,22 @@ function EntryRow({ rowKey, entry, draft, date, lists, editable, onSaved, onRemo
     : [...lists.work_types, { id: entry.work_type_id, name: entry.work_type }];
   const check = cleanEntry(form);
   const hint = check.error && (touched || entry) ? check.error : "";
+
+  // A saved job shows as one tidy row; tap it to change it. A new one, or one
+  // that needs attention, shows the form.
+  if (!expanded && status !== "error" && !check.error) {
+    const job = jobs.find((j) => j.id === form.job_id);
+    return (
+      <EntrySummary number={job?.job_number} name={job ? (job.job_number ? job.job_name : jobLabel(job)) : ""}
+                    type={types.find((t) => t.id === form.work_type_id)?.name} start={form.start_time} finish={form.finish_time}
+                    minutes={mins} note={form.description} saving={status === "saving"} onEdit={() => setExpanded(true)} />
+    );
+  }
+
+  const done = () => {
+    if (timer.current) { clearTimeout(timer.current); save(); }
+    setExpanded(false);
+  };
 
   return (
     <div className={`tsw-entry${status === "error" ? " is-error" : ""}`}>
@@ -396,10 +412,16 @@ function EntryRow({ rowKey, entry, draft, date, lists, editable, onSaved, onRemo
             <button type="button" className="tsw-btn is-small is-quiet" onClick={() => setConfirmRemove(false)}>Keep</button>
           </span>
         ) : (
-          <button type="button" className="tsw-icon-btn is-small" onClick={() => (idRef.current ? setConfirmRemove(true) : remove())}
-                  aria-label="Remove this job" title="Remove this job">
-            <Trash2 strokeWidth={2} />
-          </button>
+          <>
+            <button type="button" className="tsw-icon-btn is-small" onClick={() => (idRef.current ? setConfirmRemove(true) : remove())}
+                    aria-label="Remove this job" title="Remove this job">
+              <Trash2 strokeWidth={2} />
+            </button>
+            <button type="button" className="tsw-icon-btn is-small" onClick={done} disabled={!!check.error}
+                    aria-label="Done" title="Done">
+              <Check strokeWidth={2.6} />
+            </button>
+          </>
         )}
       </div>
       <div className="tsw-entry-status" aria-live="polite">
@@ -413,6 +435,33 @@ function EntryRow({ rowKey, entry, draft, date, lists, editable, onSaved, onRemo
   );
 }
 
+// One job as a row: teal accent bar, job number chip, job name, work type
+// tag, times and hours. Tappable (to change it) when onEdit is given.
+function EntrySummary({ number, name, type, start, finish, minutes, note, saving, onEdit }) {
+  const body = (
+    <>
+      {number ? <span className="tsw-chip">{number}</span> : null}
+      <span className="tsw-sum-main">
+        <span className="tsw-sum-job">{name || "Other"}</span>
+        <span className="tsw-sum-meta">
+          {type && <span className="tsw-tag">{type}</span>}
+          <span className="tsw-sum-times">{hhmm(start)}–{hhmm(finish)}</span>
+        </span>
+        {note ? <span className="tsw-sum-note">{note}</span> : null}
+      </span>
+      <b className="tsw-sum-hours">{minutes == null ? "–" : formatHours(minutes)}</b>
+      {onEdit && (
+        <span className="tsw-sum-edit" aria-hidden="true">
+          {saving ? <StatusIcon tone="amber" size={15} /> : <Pencil strokeWidth={2.2} />}
+        </span>
+      )}
+    </>
+  );
+  return onEdit
+    ? <button type="button" className="tsw-sum is-tap" onClick={onEdit} aria-label={`Change ${name || "this job"}`}>{body}</button>
+    : <div className="tsw-sum">{body}</div>;
+}
+
 // Same colours, type, cards and buttons as the rest of Plotwire (the
 // dashboard and the owner's Timesheets screens), laid out for a phone.
 export const WORKER_CSS = `
@@ -421,10 +470,12 @@ export const WORKER_CSS = `
   --teal:#3FB7C9; --teal-600:#2C97A8; --teal-700:#22808F;
   --paper:#F4F6F9; --surface:#FFFFFF; --line:#E6EBF1; --line-2:#EEF2F6;
   --ink-2:#3A4654; --muted:#697785; --muted-2:#9AA6B2;
+  --brand:#2C3E50; --on-teal:#0E141B; --chip-ink:#08313A; --teal-soft:#E2F4F7; --teal-soft-ink:#08313A;
   background:var(--paper); color:var(--ink); font-family:var(--font-inter),system-ui,sans-serif; -webkit-font-smoothing:antialiased}
 .pw-tsw *{box-sizing:border-box; margin:0; padding:0}
 html.dark .pw-tsw{--ink:#E7EDF3; --ink-2:#B6C2CE; --muted:#8595A3; --muted-2:#6B7A88;
-  --paper:#0E141B; --surface:#16202B; --line:#263441; --line-2:#202C38; --navy:#0A1016; --navy-2:#16202B}
+  --paper:#0E141B; --surface:#16202B; --line:#263441; --line-2:#202C38; --navy:#0A1016; --navy-2:#16202B;
+  --teal-soft:rgba(63,183,201,.16); --teal-soft-ink:#7FD3DF}
 
 .pw-tsw .tsw-top{position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:12px; padding:12px 16px;
   background:linear-gradient(120deg,#1A2530 0%,#233241 60%,#2C4150 100%); color:#fff; box-shadow:0 6px 18px -10px rgba(16,28,40,.5)}
@@ -458,23 +509,51 @@ html.dark .pw-tsw .tsw-week-eyebrow{color:var(--teal)}
 html.dark .pw-tsw .tsw-banner.is-green{background:#0F2A1A; color:#BBF7D0}
 html.dark .pw-tsw .tsw-banner.is-amber{background:#2A2114; color:#FDE68A}
 
-.pw-tsw .tsw-days{display:flex; flex-direction:column; gap:10px}
-.pw-tsw .tsw-day{padding:14px}
-.pw-tsw .tsw-day.is-future{opacity:.6}
-.pw-tsw .tsw-day-head{display:flex; align-items:center; justify-content:space-between; gap:10px}
-.pw-tsw .tsw-day-head > div:first-child{display:flex; align-items:center; gap:8px; min-width:0}
-.pw-tsw .tsw-day-head h2{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:17px; letter-spacing:-.01em}
-.pw-tsw .tsw-day-head h2 span{font-weight:500; color:var(--muted)}
-.pw-tsw .tsw-today{font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px; background:rgba(63,183,201,.16); color:var(--teal-700)}
-html.dark .pw-tsw .tsw-today{color:var(--teal)}
-.pw-tsw .tsw-day-total{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:17px; white-space:nowrap}
-.pw-tsw .tsw-day-total.is-zero{color:var(--muted-2); font-weight:500}
-.pw-tsw .tsw-day-note{margin-top:8px; font-size:13px; color:var(--muted)}
+/* Day cards: a navy strip (day, date, hours) over a white body. Today's
+   strip is teal with dark ink. */
+.pw-tsw .tsw-days{display:flex; flex-direction:column; gap:12px}
+.pw-tsw .tsw-day{background:var(--surface); border:1px solid var(--line); border-radius:14px; overflow:hidden;
+  box-shadow:0 1px 2px rgba(16,28,40,.05),0 3px 10px -4px rgba(16,28,40,.10)}
+html.dark .pw-tsw .tsw-day{box-shadow:0 1px 2px rgba(0,0,0,.4)}
+.pw-tsw .tsw-day.is-future{opacity:.55}
+.pw-tsw .tsw-day-head{display:flex; align-items:center; gap:10px; min-height:44px; padding:0 14px; background:var(--brand); color:#fff}
+.pw-tsw .tsw-day-head h2{font-family:var(--font-space-grotesk),sans-serif; font-size:15px; letter-spacing:.08em; text-transform:uppercase; white-space:nowrap}
+.pw-tsw .tsw-day-head h2 b{font-weight:700}
+.pw-tsw .tsw-day-head h2 span{margin-left:3px; font-family:var(--font-jetbrains-mono),monospace; font-weight:500; font-size:13.5px; letter-spacing:.04em; color:#D7E2EB}
+.pw-tsw .tsw-today{padding:3px 8px; border-radius:999px; background:var(--on-teal); color:#fff; font-size:10.5px; font-weight:700; letter-spacing:.08em; text-transform:uppercase}
+.pw-tsw .tsw-day-total{margin-left:auto; display:inline-flex; align-items:center; gap:6px; font-family:var(--font-jetbrains-mono),monospace; font-weight:700; font-size:15px; white-space:nowrap}
+.pw-tsw .tsw-day-total svg{width:15px; height:15px}
+.pw-tsw .tsw-day-total.is-zero{font-weight:500; opacity:.7}
+.pw-tsw .tsw-day.is-today{border-color:var(--teal-600); box-shadow:0 0 0 1px var(--teal-600),0 6px 16px -8px rgba(44,151,168,.55)}
+.pw-tsw .tsw-day.is-today .tsw-day-head{background:var(--teal-600); color:var(--on-teal)}
+.pw-tsw .tsw-day.is-today .tsw-day-head h2 span{color:var(--on-teal)}
+.pw-tsw .tsw-day-body{padding:10px; display:flex; flex-direction:column; gap:8px}
+.pw-tsw .tsw-day-note{padding:2px 4px; font-size:13.5px; color:var(--muted)}
 
-.pw-tsw .tsw-entry{margin-top:12px; padding:12px; border-radius:12px; background:var(--paper); border:1px solid var(--line-2); display:flex; flex-direction:column; gap:8px}
-.pw-tsw .tsw-entry.is-error{border-color:#F87171}
+/* A saved job: white row, teal accent bar, number chip, name, type tag, hours. */
+.pw-tsw .tsw-sum{width:100%; display:flex; align-items:flex-start; gap:10px; padding:11px 12px 11px 12px; text-align:left;
+  background:var(--surface); border:1px solid var(--line); border-left:4px solid var(--teal-600); border-radius:10px;
+  font-family:inherit; font-size:14px; color:var(--ink)}
+.pw-tsw .tsw-sum.is-tap{cursor:pointer; transition:box-shadow .15s ease}
+.pw-tsw .tsw-sum.is-tap:hover{box-shadow:0 3px 10px -4px rgba(16,28,40,.22)}
+.pw-tsw .tsw-chip{flex:none; margin-top:1px; padding:3px 7px; border-radius:6px; background:var(--teal); color:var(--chip-ink);
+  font-family:var(--font-jetbrains-mono),monospace; font-weight:700; font-size:12.5px; line-height:1.25}
+.pw-tsw .tsw-sum-main{flex:1; min-width:0; display:flex; flex-direction:column; gap:5px}
+.pw-tsw .tsw-sum-job{font-weight:600; font-size:15px; line-height:1.3; overflow-wrap:anywhere}
+.pw-tsw .tsw-sum-meta{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+.pw-tsw .tsw-tag{padding:2px 8px; border-radius:999px; background:var(--line-2); color:var(--ink-2); font-size:12px; font-weight:600}
+.pw-tsw .tsw-sum-times{font-family:var(--font-jetbrains-mono),monospace; font-size:12.5px; color:var(--muted)}
+.pw-tsw .tsw-sum-note{font-size:13px; color:var(--muted); overflow-wrap:anywhere}
+.pw-tsw .tsw-sum-hours{flex:none; margin-top:1px; font-family:var(--font-jetbrains-mono),monospace; font-weight:700; font-size:15px; white-space:nowrap}
+.pw-tsw .tsw-sum-edit{flex:none; width:28px; height:28px; margin-top:-3px; border-radius:8px; display:grid; place-items:center; background:var(--action); color:var(--action-ink)}
+.pw-tsw .tsw-sum-edit svg{width:15px; height:15px}
+
+/* A job being filled in or changed. */
+.pw-tsw .tsw-entry{padding:12px 12px 10px; border-radius:10px; background:var(--surface); border:1px solid var(--line); border-left:4px solid var(--teal-600);
+  display:flex; flex-direction:column; gap:8px; box-shadow:0 3px 12px -6px rgba(16,28,40,.22)}
+.pw-tsw .tsw-entry.is-error{border-color:#F87171; border-left-color:#DC2626}
 .pw-tsw .tsw-entry select,.pw-tsw .tsw-entry input{width:100%; height:46px; padding:0 12px; font-family:inherit; font-size:16px; color:var(--ink);
-  background:var(--surface); border:1px solid var(--line); border-radius:10px; outline:none; -webkit-appearance:none; appearance:none}
+  background:var(--paper); border:1px solid var(--line); border-radius:10px; outline:none; -webkit-appearance:none; appearance:none}
 .pw-tsw .tsw-entry select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);
   background-position:calc(100% - 18px) 20px,calc(100% - 13px) 20px; background-size:5px 5px; background-repeat:no-repeat; padding-right:32px}
 .pw-tsw .tsw-entry select:focus,.pw-tsw .tsw-entry input:focus{border-color:var(--teal); box-shadow:0 0 0 3px rgba(63,183,201,.18)}
@@ -483,7 +562,7 @@ html.dark .pw-tsw .tsw-today{color:var(--teal)}
 .pw-tsw .tsw-time{display:flex; flex-direction:column; gap:3px}
 .pw-tsw .tsw-time span{font-size:11px; font-weight:600; color:var(--muted)}
 .pw-tsw .tsw-time input{padding:0 8px; text-align:center}
-.pw-tsw .tsw-hours{height:46px; display:grid; place-items:center; font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:15px; white-space:nowrap}
+.pw-tsw .tsw-hours{height:46px; display:grid; place-items:center; font-family:var(--font-jetbrains-mono),monospace; font-weight:700; font-size:14.5px; white-space:nowrap}
 .pw-tsw .tsw-entry-foot{display:flex; gap:8px; align-items:center}
 .pw-tsw .tsw-note{flex:1; min-width:0}
 .pw-tsw .tsw-remove-ask{display:flex; gap:6px; flex:none}
@@ -491,19 +570,12 @@ html.dark .pw-tsw .tsw-today{color:var(--teal)}
 .pw-tsw .tsw-hint{color:#B45309}
 html.dark .pw-tsw .tsw-hint{color:#FBBF24}
 
-.pw-tsw .tsw-entry.is-read{gap:4px}
-.pw-tsw .tsw-read-job{font-weight:600; font-size:15px; overflow-wrap:anywhere}
-.pw-tsw .tsw-read-line{display:flex; gap:12px; flex-wrap:wrap; font-size:14px; color:var(--ink-2)}
-.pw-tsw .tsw-read-line b{margin-left:auto; font-family:var(--font-space-grotesk),sans-serif}
-.pw-tsw .tsw-read-note{font-size:13.5px; color:var(--muted); overflow-wrap:anywhere}
-
 /* Buttons: the app's teal with a dark navy icon. */
 .pw-tsw .tsw-btn{height:46px; padding:0 16px; display:inline-flex; align-items:center; justify-content:center; gap:8px; border:none; border-radius:12px;
   background:var(--action); color:var(--action-ink); font-family:inherit; font-size:15px; font-weight:600; cursor:pointer; white-space:nowrap; transition:background .15s ease}
 .pw-tsw .tsw-btn svg{width:19px; height:19px; flex:none}
 .pw-tsw .tsw-btn:hover:not(:disabled){background:var(--action-hover)}
 .pw-tsw .tsw-btn.is-wide{width:100%}
-.pw-tsw .tsw-btn.is-add{margin-top:12px}
 .pw-tsw .tsw-btn.is-small{height:40px; padding:0 12px; font-size:13.5px; border-radius:10px}
 .pw-tsw .tsw-btn.is-quiet{background:var(--line-2); color:var(--ink-2)}
 .pw-tsw .tsw-btn.is-quiet:hover:not(:disabled){background:var(--line)}
@@ -511,22 +583,31 @@ html.dark .pw-tsw .tsw-hint{color:#FBBF24}
 .pw-tsw .tsw-icon-btn svg{width:20px; height:20px}
 .pw-tsw .tsw-icon-btn.is-small{width:46px; height:46px}
 .pw-tsw .tsw-icon-btn:hover:not(:disabled){background:var(--action-hover)}
-.pw-tsw .tsw-add{margin-top:10px; height:44px; padding:0 14px; display:inline-flex; align-items:center; gap:7px; border:1.5px dashed var(--teal-600); border-radius:12px;
-  background:transparent; color:var(--teal-700); font-family:inherit; font-size:14.5px; font-weight:600; cursor:pointer}
-html.dark .pw-tsw .tsw-add{color:var(--teal)}
+/* "Add hours" / "Add another job": light teal, dark ink. */
+.pw-tsw .tsw-add{width:100%; height:44px; padding:0 14px; display:flex; align-items:center; justify-content:center; gap:8px;
+  border:1px solid rgba(44,151,168,.35); border-radius:10px; background:var(--teal-soft); color:var(--teal-soft-ink);
+  font-family:inherit; font-size:14.5px; font-weight:600; cursor:pointer; transition:background .15s ease}
+.pw-tsw .tsw-add.is-first{height:50px; font-size:15.5px}
+.pw-tsw .tsw-add:hover{background:rgba(63,183,201,.28)}
 .pw-tsw .tsw-add svg{width:18px; height:18px}
 .pw-tsw button:disabled{opacity:.5; cursor:not-allowed}
 .pw-tsw button:focus-visible,.pw-tsw input:focus-visible,.pw-tsw select:focus-visible{outline:2px solid var(--teal); outline-offset:2px}
 
-.pw-tsw .tsw-foot{position:fixed; left:0; right:0; bottom:0; z-index:5; background:var(--surface); border-top:1px solid var(--line);
-  box-shadow:0 -8px 24px -14px rgba(16,28,40,.35); padding:10px 12px calc(10px + env(safe-area-inset-bottom))}
+/* The week's total and Submit: a solid navy bar, white total, teal button. */
+.pw-tsw .tsw-foot{position:fixed; left:0; right:0; bottom:0; z-index:5; background:var(--brand); color:#fff;
+  box-shadow:0 -8px 24px -12px rgba(16,28,40,.5); padding:12px 14px calc(12px + env(safe-area-inset-bottom))}
 .pw-tsw .tsw-foot-inner{max-width:616px; margin:0 auto; display:flex; align-items:center; gap:12px}
 .pw-tsw .tsw-total{flex:1}
-.pw-tsw .tsw-total .l{font-size:12px; color:var(--muted)}
-.pw-tsw .tsw-total .n{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:24px; letter-spacing:-.01em; line-height:1.1}
+.pw-tsw .tsw-total .l{font-size:11px; font-weight:600; letter-spacing:.12em; text-transform:uppercase; color:#B7C6D2}
+.pw-tsw .tsw-total .n{font-family:var(--font-jetbrains-mono),monospace; font-weight:700; font-size:28px; letter-spacing:-.02em; line-height:1.1; color:#fff}
 .pw-tsw .tsw-btn.is-submit{height:52px; padding:0 22px; font-size:16px}
-.pw-tsw .tsw-submitted{display:flex; align-items:center; gap:8px; font-weight:600; font-size:15px}
-.pw-tsw .tsw-foot-note{max-width:616px; margin:6px auto 0; font-size:12.5px; color:#B45309}
+.pw-tsw .tsw-submitted{display:inline-flex; align-items:center; gap:8px; height:44px; padding:0 16px; border-radius:999px; background:#DCFCE7; color:#14532D; font-weight:700; font-size:15px}
+.pw-tsw .tsw-submitted svg{width:17px; height:17px}
+.pw-tsw .tsw-foot-note{max-width:616px; margin:6px auto 0; font-size:12.5px; color:#FCD34D}
+
+/* Submitted: a padlock badge on the banner. */
+.pw-tsw .tsw-lock-badge{flex:none; width:24px; height:24px; border-radius:7px; display:grid; place-items:center; background:#16A34A; color:#fff}
+.pw-tsw .tsw-lock-badge svg{width:14px; height:14px}
 
 .pw-tsw .tsw-dialog-back{position:fixed; inset:0; z-index:20; background:rgba(11,17,23,.55); display:grid; place-items:end center; padding:12px}
 .pw-tsw .tsw-dialog{width:100%; max-width:480px; background:var(--surface); color:var(--ink); border-radius:18px; padding:20px; box-shadow:0 24px 60px -12px rgba(11,17,23,.45)}
