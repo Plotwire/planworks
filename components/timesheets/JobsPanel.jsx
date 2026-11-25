@@ -102,7 +102,7 @@ export default function JobsPanel({ ownerId, jobs, types, onSaved }) {
                   {j.site_address && <div className="ts-sub"><MapPin strokeWidth={1.9} /><span>{j.site_address}</span></div>}
                 </div>
                 <div role="cell" className={type ? "ts-type" : "ts-type is-none"}>
-                  {type ? `${type.name}${type.active ? "" : " (archived)"}` : "No default"}
+                  {type ? <span className="ts-tag">{type.name}{type.active ? "" : " (archived)"}</span> : "No default"}
                 </div>
                 <div role="cell" className="ts-actions">
                   <button type="button" className="ts-btn" disabled={rowBusy === j.id} onClick={() => open({ ...j })}>

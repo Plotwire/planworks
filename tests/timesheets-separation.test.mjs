@@ -18,6 +18,7 @@ const WATCHED = [
   INSTALL,
   "supabase/timesheets-week.sql",
   "supabase/timesheets-week-test-workers.sql",
+  "supabase/timesheets-addon-test.sql",
   "app/time",
   "app/timesheets",
   "app/api/timesheets",

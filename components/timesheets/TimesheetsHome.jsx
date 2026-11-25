@@ -23,9 +23,11 @@ function displayName(user) {
 }
 
 // The owner's Timesheets section, in the same frame as the dashboard. Only for
-// accounts with the add-on: anyone else is sent back to the dashboard. It needs
-// a connection, so a failed load says so rather than showing empty lists.
-export default function TimesheetsHome({ onClose, onNotAllowed }) {
+// accounts with the add-on switched on: anyone else gets a short page saying
+// it's an add-on, and none of the Timesheets screens. (The database refuses
+// them everything anyway.) It needs a connection, so a failed load says so
+// rather than showing empty lists.
+export default function TimesheetsHome({ onClose }) {
   const { user, theme, toggleTheme, signOut } = useApp();
   const access = useTimesheetsAddon(user?.id);
   const [tab, setTab] = useState("workers");
@@ -34,8 +36,6 @@ export default function TimesheetsHome({ onClose, onNotAllowed }) {
   const [team, setTeam] = useState(null);
   const [thisMonday, setThisMonday] = useState(null); // from the database clock
   const [loadFailed, setLoadFailed] = useState(false);
-
-  useEffect(() => { if (access.status === "off") onNotAllowed?.(); }, [access.status, onNotAllowed]);
 
   const load = useCallback(async () => {
     setLoadFailed(false);
@@ -62,6 +62,9 @@ export default function TimesheetsHome({ onClose, onNotAllowed }) {
     { key: "jobs", label: "Jobs", n: count(jobs, (j) => j.status === "active") },
     { key: "types", label: "Work types", n: count(types, (t) => t.active) },
   ];
+
+  // Nothing of Timesheets shows until the database says the add-on is on.
+  if (access.status !== "on") return <AddonOnly status={access.status} onRetry={access.retry} onClose={onClose} />;
 
   return (
     <div className="pw-ts">
@@ -162,6 +165,43 @@ export default function TimesheetsHome({ onClose, onNotAllowed }) {
   );
 }
 
+// Timesheets without the add-on: a short, plain page. No pop-ups, nothing
+// pushy, and no Timesheets data (none is asked for).
+function AddonOnly({ status, onRetry, onClose }) {
+  return (
+    <div className="pw-ts">
+      <style>{CSS}</style>
+      <main className="ts-gate">
+        <div className="ts-gate-brand">Plot<b>wire</b></div>
+        {status === "checking" ? (
+          <p className="ts-gate-loading" aria-label="Loading">Loading&hellip;</p>
+        ) : status === "failed" ? (
+          <section className="ts-gate-card" role="alert">
+            <StatusIcon tone="red" size={28} />
+            <h1>Couldn&rsquo;t check your account</h1>
+            <p>Check your connection and try again.</p>
+            <div className="ts-gate-actions">
+              <button type="button" className="ts-btn is-primary" onClick={onRetry}>Try again</button>
+              <button type="button" className="ts-btn is-primary" onClick={onClose}>Back to dashboard</button>
+            </div>
+          </section>
+        ) : (
+          <section className="ts-gate-card">
+            <span className="ts-gate-ic" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            </span>
+            <h1>Timesheets is an add-on.</h1>
+            <p>Contact <a href="mailto:admin@plotwire.uk">admin@plotwire.uk</a> to find out more.</p>
+            <div className="ts-gate-actions">
+              <button type="button" className="ts-btn is-primary" onClick={onClose}>Back to dashboard</button>
+            </div>
+          </section>
+        )}
+      </main>
+    </div>
+  );
+}
+
 // The same colours, type, rail, top bar, hero and cards as the dashboard
 // (components/HomeScreen.jsx).
 const CSS = `
@@ -170,11 +210,13 @@ const CSS = `
   --brand:#2C3E50; --teal:#3FB7C9; --teal-600:#2C97A8; --teal-700:#22808F;
   --paper:#F4F6F9; --surface:#FFFFFF; --line:#E6EBF1; --line-2:#EEF2F6;
   --ink-2:#3A4654; --muted:#697785; --muted-2:#9AA6B2; --blueprint:rgba(63,183,201,.14);
+  --chip-ink:#08313A; --teal-soft:#E2F4F7; --teal-soft-line:rgba(44,151,168,.32);
   font-family:var(--font-inter),system-ui,sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased}
 .pw-ts *{box-sizing:border-box; margin:0; padding:0}
 html.dark .pw-ts{--ink:#E7EDF3; --ink-2:#B6C2CE; --muted:#8595A3; --muted-2:#6B7A88;
   --paper:#0E141B; --surface:#16202B; --line:#263441; --line-2:#202C38;
-  --navy:#0A1016; --navy-2:#16202B; --navy-line:#283642; --blueprint:rgba(63,183,201,.10)}
+  --navy:#0A1016; --navy-2:#16202B; --navy-line:#283642; --blueprint:rgba(63,183,201,.10);
+  --teal-soft:rgba(63,183,201,.14); --teal-soft-line:rgba(63,183,201,.35)}
 .pw-ts .ts-app{display:flex; height:100%; width:100%; background:var(--paper)}
 
 .pw-ts .ts-rail{width:74px; flex-shrink:0; background:var(--navy); display:flex; flex-direction:column; align-items:center; padding:18px 0; gap:6px; position:relative}
@@ -227,11 +269,14 @@ html.dark .pw-ts .ts-topbar{background:rgba(14,20,27,.82)}
 
 .pw-ts .ts-card{background:var(--surface); border:1px solid var(--line); border-radius:16px; overflow:hidden; box-shadow:0 1px 2px rgba(16,28,40,.04),0 1px 3px rgba(16,28,40,.06)}
 html.dark .pw-ts .ts-card{box-shadow:0 1px 2px rgba(0,0,0,.4)}
-.pw-ts .ts-card-head{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; padding:20px 22px}
-.pw-ts .ts-card-head h2{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:17px; letter-spacing:-.01em}
-.pw-ts .ts-card-head p{font-size:13px; color:var(--muted); margin-top:3px}
+/* Card headers: a navy strip (Plotwire's brand navy) with white text. */
+.pw-ts .ts-card-head{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; padding:16px 22px; background:var(--brand); color:#fff}
+.pw-ts .ts-card-head h2{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:17px; letter-spacing:-.01em; color:#fff}
+.pw-ts .ts-card-head p{font-size:13px; color:#B7C6D2; margin-top:3px}
 .pw-ts .ts-card-tools{display:flex; align-items:center; gap:16px; flex-wrap:wrap}
-.pw-ts .ts-card-alert{padding:0 22px 14px}
+.pw-ts .ts-card-head .ts-check{color:#D7E2EB}
+.pw-ts .ts-card-alert{padding:14px 22px 0}
+.pw-ts .ts-card-alert + .ts-card-alert{padding-top:8px}
 .pw-ts .ts-card-foot{padding:14px 22px 16px; font-size:12px; line-height:1.5; color:var(--muted); border-top:1px solid var(--line-2)}
 .pw-ts .ts-check{display:inline-flex; align-items:center; gap:8px; font-size:13px; color:var(--ink-2); cursor:pointer}
 .pw-ts .ts-check input{width:16px; height:16px; accent-color:var(--teal-600)}
@@ -249,11 +294,17 @@ html.dark .pw-ts .ts-card{box-shadow:0 1px 2px rgba(0,0,0,.4)}
 .pw-ts .ts-tr.is-job{grid-template-columns:110px minmax(0,1.7fr) minmax(0,1fr) 180px}
 .pw-ts .ts-tr.is-type{grid-template-columns:minmax(0,1fr) auto}
 .pw-ts .ts-tr:not(.is-head):hover{background:rgba(63,183,201,.06)}
+.pw-ts .ts-tr:not(.is-head):not(.is-archived){box-shadow:inset 4px 0 0 var(--teal-600)}
 .pw-ts .ts-tr.is-head{padding-top:10px; padding-bottom:10px; background:var(--paper); border-top:1px solid var(--line); border-bottom:1px solid var(--line); font-family:var(--font-jetbrains-mono),monospace; font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted)}
 .pw-ts .ts-tr.is-head + .ts-tr{border-top:0}
 .pw-ts .ts-tr.is-archived .ts-name,.pw-ts .ts-tr.is-archived .ts-type,.pw-ts .ts-tr.is-archived .ts-code{opacity:.62}
 .pw-ts .ts-sr{position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%)}
-.pw-ts .ts-code{display:inline-block; font-family:var(--font-jetbrains-mono),monospace; font-size:12px; font-weight:500; color:var(--ink-2); background:var(--paper); padding:4px 8px; border-radius:6px; overflow-wrap:anywhere}
+/* Job number chip: teal, dark ink, mono. */
+.pw-ts .ts-code{display:inline-block; flex:none; font-family:var(--font-jetbrains-mono),monospace; font-size:12px; font-weight:700; color:var(--chip-ink); background:var(--teal); padding:3px 8px; border-radius:6px; overflow-wrap:anywhere; line-height:1.3}
+.pw-ts .ts-jobname{display:inline-flex; align-items:center; gap:8px; min-width:0}
+.pw-ts .ts-jobname > span:last-child{overflow-wrap:anywhere}
+.pw-ts .ts-tag{display:inline-block; padding:2px 8px; border-radius:999px; background:var(--line-2); color:var(--ink-2); font-size:12px; font-weight:600; white-space:nowrap}
+.pw-ts .ts-mono{font-family:var(--font-jetbrains-mono),monospace}
 .pw-ts .ts-name{font-size:14.5px; font-weight:600; letter-spacing:-.01em; overflow-wrap:anywhere}
 .pw-ts .ts-sub{display:flex; align-items:center; gap:5px; margin-top:3px; font-size:12.5px; color:var(--muted); overflow-wrap:anywhere}
 .pw-ts .ts-sub svg{width:13px; height:13px; flex:none; opacity:.7}
@@ -262,7 +313,7 @@ html.dark .pw-ts .ts-card{box-shadow:0 1px 2px rgba(0,0,0,.4)}
 .pw-ts .ts-badge{display:inline-block; font-family:var(--font-jetbrains-mono),monospace; font-size:10px; font-weight:500; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); background:var(--paper); border:1px solid var(--line); border-radius:6px; padding:2px 6px; margin-left:9px; vertical-align:1.5px}
 .pw-ts .ts-actions{display:flex; gap:7px; justify-content:flex-end}
 
-.pw-ts .ts-empty{margin:0 22px 22px; padding:38px 20px; display:flex; flex-direction:column; align-items:center; text-align:center; border:1.5px dashed var(--line); border-radius:14px}
+.pw-ts .ts-empty{margin:22px; padding:38px 20px; display:flex; flex-direction:column; align-items:center; text-align:center; border:1.5px dashed var(--line); border-radius:14px}
 .pw-ts .ts-empty-ic{width:50px; height:50px; border-radius:14px; background:rgba(63,183,201,.12); color:var(--teal-700); display:grid; place-items:center; margin-bottom:14px}
 .pw-ts .ts-empty-ic svg{width:24px; height:24px}
 .pw-ts .ts-empty h3,.pw-ts .ts-failed h3{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:16px; letter-spacing:-.01em}
@@ -299,48 +350,81 @@ html.dark .pw-ts .ts-alert{background:#2E1A1A; border-color:#EF4444}
 .pw-ts .ts-btn-icon svg{width:19px; height:19px}
 .pw-ts .ts-weeknav{display:flex; align-items:center; gap:10px}
 .pw-ts .ts-weeknav-label{min-width:170px; text-align:center; line-height:1.25}
-.pw-ts .ts-weeknav-label span{display:block; font-family:var(--font-jetbrains-mono),monospace; font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--teal-700)}
-html.dark .pw-ts .ts-weeknav-label span{color:var(--teal)}
-.pw-ts .ts-weeknav-label b{font-family:var(--font-space-grotesk),sans-serif; font-size:15px; font-weight:600}
-.pw-ts .ts-workers{display:flex; flex-direction:column}
-.pw-ts .ts-worker{padding:18px 22px; border-top:1px solid var(--line-2)}
-.pw-ts .ts-worker-head{display:flex; align-items:flex-start; justify-content:space-between; gap:14px}
-.pw-ts .ts-worker-name h3{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:16px; letter-spacing:-.01em; margin-bottom:6px}
-.pw-ts .ts-pill{display:inline-flex; align-items:center; gap:6px; font-size:12.5px; font-weight:600; padding:4px 10px 4px 6px; border-radius:999px}
-.pw-ts .ts-pill.is-green{background:#ECFDF3; color:#14532D; border:1px solid #4ADE80}
-.pw-ts .ts-pill.is-amber{background:#FFFBEB; color:#78350F; border:1px solid #FBBF24}
-html.dark .pw-ts .ts-pill.is-green{background:#0F2A1A; color:#BBF7D0}
-html.dark .pw-ts .ts-pill.is-amber{background:#2A2114; color:#FDE68A}
-.pw-ts .ts-worker-total{text-align:right}
-.pw-ts .ts-worker-total .n{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:22px; letter-spacing:-.01em}
-.pw-ts .ts-worker-total .l{font-size:11.5px; color:var(--muted)}
-.pw-ts .ts-daygrid{display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:6px; margin-top:14px}
-.pw-ts .ts-daycell{display:flex; flex-direction:column; align-items:center; gap:3px; padding:8px 4px; border-radius:10px; background:var(--paper); border:1px solid var(--line-2)}
-.pw-ts .ts-daycell span{font-size:11px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.04em}
-.pw-ts .ts-daycell b{font-family:var(--font-space-grotesk),sans-serif; font-size:13.5px; font-weight:600; white-space:nowrap}
+.pw-ts .ts-weeknav-label span{display:block; font-family:var(--font-jetbrains-mono),monospace; font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; color:#7FD3DF}
+.pw-ts .ts-weeknav-label b{font-family:var(--font-space-grotesk),sans-serif; font-size:15px; font-weight:600; color:#fff}
+
+/* One card per worker: navy strip (name, submitted badge, week total),
+   then hours per day and per job. */
+.pw-ts .ts-workers{display:grid; grid-template-columns:repeat(auto-fill,minmax(min(440px,100%),1fr)); gap:14px; padding:16px}
+.pw-ts .ts-worker{background:var(--surface); border:1px solid var(--line); border-radius:14px; overflow:hidden; box-shadow:0 1px 2px rgba(16,28,40,.05),0 3px 10px -4px rgba(16,28,40,.10)}
+html.dark .pw-ts .ts-worker{box-shadow:0 1px 2px rgba(0,0,0,.4)}
+.pw-ts .ts-worker-head{display:flex; align-items:center; justify-content:space-between; gap:14px; padding:12px 16px; background:var(--brand); color:#fff}
+.pw-ts .ts-worker-name{min-width:0}
+.pw-ts .ts-worker-name h3{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:16px; letter-spacing:-.01em; margin-bottom:6px; color:#fff; overflow-wrap:anywhere}
+.pw-ts .ts-worker-head .ts-badge{background:rgba(255,255,255,.12); border-color:rgba(255,255,255,.22); color:#D7E2EB}
+.pw-ts .ts-pill{display:inline-flex; align-items:center; gap:6px; font-size:12.5px; font-weight:700; padding:4px 10px 4px 7px; border-radius:999px}
+.pw-ts .ts-pill svg{width:14px; height:14px; flex:none}
+.pw-ts .ts-pill.is-green{background:#DCFCE7; color:#14532D}
+.pw-ts .ts-pill.is-amber{background:#FEF3C7; color:#78350F}
+.pw-ts .ts-worker-total{text-align:right; flex:none}
+.pw-ts .ts-worker-total .n{font-family:var(--font-jetbrains-mono),monospace; font-weight:700; font-size:24px; letter-spacing:-.02em; line-height:1.1; color:#fff}
+.pw-ts .ts-worker-total .l{margin-top:2px; font-size:10.5px; font-weight:600; letter-spacing:.12em; text-transform:uppercase; color:#B7C6D2}
+.pw-ts .ts-worker-body{padding:14px 16px 10px}
+.pw-ts .ts-daygrid{display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:6px}
+.pw-ts .ts-daycell{display:flex; flex-direction:column; align-items:center; gap:3px; padding:8px 2px; border-radius:10px; background:var(--teal-soft); border:1px solid var(--teal-soft-line)}
+.pw-ts .ts-daycell span{font-size:10.5px; font-weight:700; color:var(--ink-2); text-transform:uppercase; letter-spacing:.06em}
+.pw-ts .ts-daycell b{font-family:var(--font-jetbrains-mono),monospace; font-size:12.5px; font-weight:700; white-space:nowrap; color:var(--ink)}
+.pw-ts .ts-daycell.is-zero{background:var(--paper); border-color:var(--line-2)}
+.pw-ts .ts-daycell.is-zero span{color:var(--muted)}
 .pw-ts .ts-daycell.is-zero b{color:var(--muted-2); font-weight:500}
-.pw-ts .ts-jobtotals{list-style:none; margin-top:12px; display:flex; flex-direction:column; gap:4px}
-.pw-ts .ts-jobtotals li{display:flex; justify-content:space-between; gap:12px; font-size:13.5px; color:var(--ink-2); padding:6px 10px; border-radius:8px; background:var(--paper)}
-.pw-ts .ts-jobtotals li span{overflow-wrap:anywhere}
-.pw-ts .ts-jobtotals li b{white-space:nowrap; color:var(--ink)}
+.pw-ts .ts-jobtotals{list-style:none; margin-top:12px; display:flex; flex-direction:column; gap:6px}
+.pw-ts .ts-jobtotals li{display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:13.5px; color:var(--ink); padding:7px 10px;
+  border-radius:8px; background:var(--surface); border:1px solid var(--line); border-left:3px solid var(--teal-600)}
+.pw-ts .ts-jobtotals li b{white-space:nowrap; font-family:var(--font-jetbrains-mono),monospace; font-weight:700}
 .pw-ts .ts-worker-tools{display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-top:12px}
 .pw-ts .ts-linkbtn{display:inline-flex; align-items:center; gap:5px; border:0; background:none; font-family:inherit; font-size:13px; font-weight:600; color:var(--teal-700); cursor:pointer; padding:6px 0}
 html.dark .pw-ts .ts-linkbtn{color:var(--teal)}
 .pw-ts .ts-linkbtn svg{width:16px; height:16px; transition:transform .15s ease}
 .pw-ts .ts-linkbtn svg.is-up{transform:rotate(180deg)}
 .pw-ts .ts-ask{display:inline-flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:13px; color:var(--ink-2); margin-left:auto}
+/* A worker's entries: day on the left; job and hours, then type and times,
+   then the note. */
 .pw-ts .ts-entries{margin-top:10px; border:1px solid var(--line); border-radius:12px; overflow:hidden}
-.pw-ts .ts-entry{display:grid; grid-template-columns:110px minmax(0,1.4fr) minmax(0,.8fr) 110px 70px minmax(0,1fr); gap:10px; padding:9px 12px; font-size:13px; border-top:1px solid var(--line-2); align-items:start}
+.pw-ts .ts-entry{display:grid; grid-template-columns:78px minmax(0,1fr) auto; grid-template-areas:"day job hours" "day type time" "day note note";
+  gap:4px 10px; padding:9px 12px; font-size:13px; border-top:1px solid var(--line-2); align-items:center}
+.pw-ts .ts-entry > :nth-child(1){grid-area:day; align-self:start; font-weight:600; color:var(--ink-2)}
+.pw-ts .ts-entry > :nth-child(2){grid-area:job}
+.pw-ts .ts-entry > :nth-child(3){grid-area:type}
+.pw-ts .ts-entry > :nth-child(4){grid-area:time; text-align:right; color:var(--muted)}
+.pw-ts .ts-entry > :nth-child(5){grid-area:hours; text-align:right}
+.pw-ts .ts-entry > :nth-child(6){grid-area:note}
 .pw-ts .ts-entry:first-child{border-top:0}
-.pw-ts .ts-entry.is-head{background:var(--paper); font-family:var(--font-jetbrains-mono),monospace; font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted)}
+.pw-ts .ts-entry.is-head{display:none}
+.pw-ts .ts-entry.is-head + .ts-entry{border-top:0}
 .pw-ts .ts-entry-job{font-weight:600; overflow-wrap:anywhere}
 .pw-ts .ts-entry-note{color:var(--muted); overflow-wrap:anywhere}
+.pw-ts .ts-entry-note:empty{display:none}
 .pw-ts .ts-export{margin-top:18px}
-.pw-ts .ts-export-body{display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap; padding:0 22px 20px}
+.pw-ts .ts-export-body{display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap; padding:20px 22px}
 .pw-ts .ts-export-body .ts-field{width:170px}
 .pw-ts .ts-export-note{padding:0 22px 18px; font-size:13px; color:var(--muted)}
 .pw-ts input[type="date"]{width:100%; height:42px; padding:0 12px; font-family:inherit; font-size:14px; color:var(--ink); background:var(--paper); border:1px solid var(--line); border-radius:10px; outline:none}
 .pw-ts input[type="date"]:focus{border-color:var(--teal); box-shadow:0 0 0 3px rgba(63,183,201,.18)}
+
+/* Without the add-on (AddonOnly). */
+.pw-ts .ts-gate{height:100%; overflow-y:auto; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:22px; padding:40px 16px; background:var(--paper)}
+.pw-ts .ts-gate-brand{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:20px; letter-spacing:-.01em}
+.pw-ts .ts-gate-brand b{color:var(--teal-600); font-weight:600}
+.pw-ts .ts-gate-loading{font-size:14px; color:var(--muted)}
+.pw-ts .ts-gate-card{width:100%; max-width:440px; padding:30px 26px; display:flex; flex-direction:column; align-items:center; gap:10px; text-align:center;
+  background:var(--surface); border:1px solid var(--line); border-top:4px solid var(--teal-600); border-radius:16px; box-shadow:0 1px 2px rgba(16,28,40,.05),0 8px 24px -12px rgba(16,28,40,.18)}
+.pw-ts .ts-gate-ic{width:48px; height:48px; border-radius:14px; display:grid; place-items:center; background:var(--teal-soft); color:var(--chip-ink)}
+html.dark .pw-ts .ts-gate-ic{color:var(--teal)}
+.pw-ts .ts-gate-ic svg{width:24px; height:24px}
+.pw-ts .ts-gate-card h1{font-family:var(--font-space-grotesk),sans-serif; font-weight:600; font-size:21px; letter-spacing:-.01em}
+.pw-ts .ts-gate-card p{font-size:15px; line-height:1.5; color:var(--ink-2)}
+.pw-ts .ts-gate-card a{color:inherit; font-weight:600; text-decoration:underline; text-decoration-color:var(--teal-600); text-underline-offset:3px; overflow-wrap:anywhere}
+.pw-ts .ts-gate-actions{display:flex; gap:10px; flex-wrap:wrap; justify-content:center; margin-top:8px}
 
 @media (max-width:720px){
   .pw-ts .ts-rail{width:60px}
@@ -352,26 +436,26 @@ html.dark .pw-ts .ts-linkbtn{color:var(--teal)}
   .pw-ts .ts-hero{padding:24px; border-radius:18px; margin-bottom:18px}
   .pw-ts .ts-hero h1{font-size:24px}
   .pw-ts .ts-stats{gap:22px; flex-wrap:wrap}
-  .pw-ts .ts-card-head{padding:16px}
-  .pw-ts .ts-card-alert{padding:0 16px 12px}
+  .pw-ts .ts-card-head{padding:14px 16px}
+  .pw-ts .ts-card-alert{padding:12px 16px 0}
   .pw-ts .ts-card-foot{padding:12px 16px 14px}
-  .pw-ts .ts-empty{margin:0 16px 16px}
+  .pw-ts .ts-empty{margin:16px}
   .pw-ts .ts-tr{padding:14px 16px}
   .pw-ts .ts-tr.is-head{display:none}
   .pw-ts .ts-tr.is-job{grid-template-columns:1fr; gap:8px}
   .pw-ts .ts-tr.is-job .ts-actions{justify-content:flex-start}
   .pw-ts .ts-fields{grid-template-columns:1fr}
   .pw-ts .ts-tabs{flex-wrap:wrap}
-  .pw-ts .ts-worker{padding:16px}
+  .pw-ts .ts-workers{padding:10px; gap:10px}
+  .pw-ts .ts-worker-head{padding:12px}
+  .pw-ts .ts-worker-body{padding:12px 12px 8px}
   .pw-ts .ts-weeknav{width:100%; justify-content:space-between}
   .pw-ts .ts-weeknav-label{min-width:0}
   .pw-ts .ts-daygrid{gap:4px}
-  .pw-ts .ts-daycell{padding:6px 2px}
-  .pw-ts .ts-daycell b{font-size:11.5px}
-  .pw-ts .ts-entry{grid-template-columns:1fr 1fr; gap:4px 10px}
-  .pw-ts .ts-entry.is-head{display:none}
-  .pw-ts .ts-entry-job,.pw-ts .ts-entry-note{grid-column:1 / -1}
-  .pw-ts .ts-export-body{padding:0 16px 16px}
+  .pw-ts .ts-daycell{padding:6px 1px}
+  .pw-ts .ts-daycell b{font-size:10.5px}
+  .pw-ts .ts-entry{grid-template-columns:62px minmax(0,1fr) auto}
+  .pw-ts .ts-export-body{padding:16px}
   .pw-ts .ts-export-body .ts-field{width:calc(50% - 6px)}
   .pw-ts .ts-export-note{padding:0 16px 14px}
 }

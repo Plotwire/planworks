@@ -18,7 +18,7 @@ export default function TimesheetsPage() {
   const router = useRouter();
   return (
     <NeedsSignalBoundary>
-      <TimesheetsHome onClose={() => router.push("/")} onNotAllowed={() => router.replace("/")} />
+      <TimesheetsHome onClose={() => router.push("/")} />
     </NeedsSignalBoundary>
   );
 }

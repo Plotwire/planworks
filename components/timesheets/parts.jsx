@@ -3,6 +3,7 @@
 import React, { useEffect } from "react";
 import { Save, X } from "lucide-react";
 import { StatusIcon } from "@/components/StatusMark";
+import { jobLabel } from "@/lib/timesheets/week";
 
 // Shared pieces of the owner's Timesheets screens. The styles are in
 // TimesheetsHome.jsx.
@@ -13,6 +14,16 @@ export function Alert({ children }) {
       <StatusIcon tone="red" size={18} />
       <span>{children}</span>
     </div>
+  );
+}
+
+// A job as its number chip and name; an older "Other" entry shows what it was for.
+export function JobName({ job }) {
+  return (
+    <span className="ts-jobname">
+      {job.job_number ? <span className="ts-code">{job.job_number}</span> : null}
+      <span>{job.job_number ? job.job_name : (jobLabel(job) || "Other")}</span>
+    </span>
   );
 }
 

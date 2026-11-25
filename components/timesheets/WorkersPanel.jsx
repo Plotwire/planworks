@@ -1,14 +1,15 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronLeft, ChevronRight, Download, RotateCcw, Users } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, Download, FileSpreadsheet, Lock, RotateCcw, Users } from "lucide-react";
 import { StatusIcon } from "@/components/StatusMark";
 import { listEntries, listWeeks, listTeam, reopenWeek, entryErrorMessage } from "@/lib/timesheets/entries";
 import {
-  weekDays, addDays, weekLabel, DAY_SHORT, hhmm, formatHours, jobLabel, totals, parseDay,
+  weekDays, addDays, weekLabel, DAY_SHORT, hhmm, formatHours, totals, parseDay,
 } from "@/lib/timesheets/week";
 import { entriesCsv, csvFileName } from "@/lib/timesheets/csv";
-import { Alert, CardHead, EmptyState } from "@/components/timesheets/parts";
+import { timesheetWorkbook, xlsxFileName, XLSX_TYPE } from "@/lib/timesheets/workbook";
+import { Alert, CardHead, EmptyState, JobName } from "@/components/timesheets/parts";
 
 // The boss's view of the team's weeks: each worker's week with totals per day
 // and per job, whether it's submitted, a way to reopen a submitted week, and
@@ -114,18 +115,20 @@ export default function WorkersPanel({ thisMonday }) {
         ) : (
           <div className="ts-workers">
             {people.map((person) => {
-              const mine = entries.filter((e) => e.operative_id === person.id);
+              const mine = entries.filter((e) => e.operative_id === person.id)
+                .sort((a, b) => a.work_date.localeCompare(b.work_date) || hhmm(a.start_time).localeCompare(hhmm(b.start_time)));
               const sum = totals(mine);
               const week = weeks.find((w) => w.operative_id === person.id);
               const status = week?.status || null;
               const showing = !!open[person.id];
               return (
                 <article key={person.id} className="ts-worker">
+                  {/* Navy strip: name, submitted or not, the week's total. */}
                   <header className="ts-worker-head">
                     <div className="ts-worker-name">
                       <h3>{person.name}{person.status === "removed" && <span className="ts-badge">Removed</span>}</h3>
                       {status === "submitted" ? (
-                        <span className="ts-pill is-green"><StatusIcon tone="green" size={15} />Submitted {stamp(week.submitted_at)}</span>
+                        <span className="ts-pill is-green"><Lock strokeWidth={2.4} />Submitted {stamp(week.submitted_at)}</span>
                       ) : status === "reopened" ? (
                         <span className="ts-pill is-amber"><StatusIcon tone="amber" size={15} />Reopened {stamp(week.reopened_at)}</span>
                       ) : (
@@ -134,26 +137,27 @@ export default function WorkersPanel({ thisMonday }) {
                     </div>
                     <div className="ts-worker-total">
                       <div className="n">{formatHours(sum.week)}</div>
-                      <div className="l">this week</div>
+                      <div className="l">Week total</div>
                     </div>
                   </header>
 
-                  <div className="ts-daygrid" role="list" aria-label={`${person.name}: hours per day`}>
-                    {days.map((d, i) => (
-                      <div key={d} role="listitem" className={`ts-daycell${sum.byDay[d] ? "" : " is-zero"}`}>
-                        <span>{DAY_SHORT[i]}</span>
-                        <b>{sum.byDay[d] ? formatHours(sum.byDay[d]) : "–"}</b>
-                      </div>
-                    ))}
-                  </div>
-
-                  {sum.byJob.length > 0 && (
-                    <ul className="ts-jobtotals" aria-label={`${person.name}: hours per job`}>
-                      {sum.byJob.map((j) => (
-                        <li key={j.key}><span>{jobLabel(j) || "Other"}</span><b>{formatHours(j.minutes)}</b></li>
+                  <div className="ts-worker-body">
+                    <div className="ts-daygrid" role="list" aria-label={`${person.name}: hours per day`}>
+                      {days.map((d, i) => (
+                        <div key={d} role="listitem" className={`ts-daycell${sum.byDay[d] ? "" : " is-zero"}`}>
+                          <span>{DAY_SHORT[i]}</span>
+                          <b>{sum.byDay[d] ? formatHours(sum.byDay[d]) : "–"}</b>
+                        </div>
                       ))}
-                    </ul>
-                  )}
+                    </div>
+
+                    {sum.byJob.length > 0 && (
+                      <ul className="ts-jobtotals" aria-label={`${person.name}: hours per job`}>
+                        {sum.byJob.map((j) => (
+                          <li key={j.key}><JobName job={j} /><b>{formatHours(j.minutes)}</b></li>
+                        ))}
+                      </ul>
+                    )}
 
                   <div className="ts-worker-tools">
                     {mine.length > 0 && (
@@ -187,15 +191,16 @@ export default function WorkersPanel({ thisMonday }) {
                       {mine.map((e) => (
                         <div key={e.id} className="ts-entry" role="row">
                           <span role="cell">{shortDate(e.work_date)}</span>
-                          <span role="cell" className="ts-entry-job">{jobLabel(e) || "Other"}</span>
-                          <span role="cell">{e.work_type}</span>
-                          <span role="cell">{hhmm(e.start_time)}–{hhmm(e.finish_time)}</span>
-                          <span role="cell"><b>{formatHours(e.minutes)}</b></span>
+                          <span role="cell" className="ts-entry-job"><JobName job={e} /></span>
+                          <span role="cell"><span className="ts-tag">{e.work_type}</span></span>
+                          <span role="cell" className="ts-mono">{hhmm(e.start_time)}–{hhmm(e.finish_time)}</span>
+                          <span role="cell" className="ts-mono"><b>{formatHours(e.minutes)}</b></span>
                           <span role="cell" className="ts-entry-note">{e.description || ""}</span>
                         </div>
                       ))}
                     </div>
                   )}
+                  </div>
                 </article>
               );
             })}
@@ -208,13 +213,13 @@ export default function WorkersPanel({ thisMonday }) {
   );
 }
 
-// Download every entry from one date to another as a spreadsheet file (CSV,
-// opens in Excel): worker, date, job number, job name, work type, start,
-// finish, hours, note.
+// Download every entry from one date to another: an Excel workbook (an
+// Entries sheet, one row per entry, and a Summary sheet of hours per job, per
+// worker, and per job per worker) or a plain CSV. Hours only.
 function ExportCard({ monday, team }) {
   const [from, setFrom] = useState(monday);
   const [to, setTo] = useState(addDays(monday, 6));
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(null);   // "xlsx" | "csv" while preparing
   const [note, setNote] = useState("");
 
   // Follow the week shown above until the dates are changed by hand.
@@ -223,18 +228,20 @@ function ExportCard({ monday, team }) {
     if (followed.current) { setFrom(monday); setTo(addDays(monday, 6)); }
   }, [monday]);
 
-  const download = async () => {
+  const download = async (kind) => {
     setNote("");
     if (!from || !to || from > to) { setNote("Pick a start date on or before the end date."); return; }
-    setBusy(true);
+    setBusy(kind);
     try {
       const rows = await listEntries(from, to);
       const names = new Map((team || []).map((o) => [o.id, o.name]));
-      const blob = new Blob([entriesCsv(rows, names)], { type: "text/csv;charset=utf-8" });
+      const blob = kind === "xlsx"
+        ? new Blob([timesheetWorkbook(rows, names, from, to)], { type: XLSX_TYPE })
+        : new Blob([entriesCsv(rows, names)], { type: "text/csv;charset=utf-8" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = csvFileName(from, to);
+      a.download = kind === "xlsx" ? xlsxFileName(from, to) : csvFileName(from, to);
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -243,13 +250,13 @@ function ExportCard({ monday, team }) {
     } catch (err) {
       setNote(entryErrorMessage(err).replace("Couldn't save.", "Couldn't download."));
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
   return (
     <section className="ts-card ts-export">
-      <CardHead title="Export hours" sub="One row per entry, for Excel or any spreadsheet. Pick the week above, or any dates." />
+      <CardHead title="Export hours" sub="Excel: every entry, plus a summary per job and per worker. CSV: every entry. Pick the week above, or any dates." />
       <div className="ts-export-body">
         <label className="ts-field">
           <span className="ts-label">From</span>
@@ -259,8 +266,11 @@ function ExportCard({ monday, team }) {
           <span className="ts-label">To</span>
           <input type="date" value={to} onChange={(e) => { followed.current = false; setTo(e.target.value); }} />
         </label>
-        <button type="button" className="ts-btn is-primary" onClick={download} disabled={busy}>
-          <Download strokeWidth={2} /><span>{busy ? "Preparing…" : "Download CSV"}</span>
+        <button type="button" className="ts-btn is-primary" onClick={() => download("xlsx")} disabled={!!busy}>
+          <FileSpreadsheet strokeWidth={2} /><span>{busy === "xlsx" ? "Preparing…" : "Download Excel"}</span>
+        </button>
+        <button type="button" className="ts-btn is-primary" onClick={() => download("csv")} disabled={!!busy}>
+          <Download strokeWidth={2} /><span>{busy === "csv" ? "Preparing…" : "Download CSV"}</span>
         </button>
       </div>
       {note && <p className="ts-export-note" role="status">{note}</p>}
