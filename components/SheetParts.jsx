@@ -19,7 +19,7 @@ import SymbolLibrary from "@/components/SymbolLibrary";
 import { findFurniture, FURNITURE, FURNITURE_VIEWBOX, FURNITURE_COLOUR } from "@/lib/furniture.jsx";
 import { drawSymbol } from "@/lib/symbolPdf";
 import { WIRE_STRENGTHS, normaliseWireStrength, wireStyle } from "@/lib/wireStrength";
-import { LINE_TYPES, LINE_ARROWS, lineType, lineArrows, lineLook, runArrowHeads, linePoints, symbolGap, linesUsed } from "@/lib/lineTypes";
+import { LINE_TYPES, LINE_ARROWS, DUCT_FLOWS, DUCT_ARROW_GAP, SQUARE_LABEL, screenArrowGap, lineType, lineArrows, ductFlow, lineLook, lineArrowMarks, flowArrows, visibleEnds, linePoints, symbolGap, linesUsed } from "@/lib/lineTypes";
 import { FLOOR_LINKS } from "@/lib/symbolDrafts/marks";
 import { buildInitialBoq, addMissingLabour, reconcileBoq, hasTypedDrawingQtys, isDrawingLinked, newBoqItem, templateForEditing, templateForSaving, newTemplateItem, quoteStartPresets } from "@/lib/boqTemplate";
 import { useApp } from "@/components/AppShell";
@@ -63,9 +63,10 @@ export function useProjectTitleBlock() {
 const TOOLS = {
   select: { icon: MousePointer2, label: "Select", hint: "V", tip: "Select: click a symbol to move, turn or delete it" },
   pan:    { icon: Hand,          label: "Pan",    hint: "H" },
-  // Wire and Duct draw a run: click points (or symbols), double-click to finish.
+  // Wire draws a run: click points (or symbols), double-click to finish. Duct
+  // is two clicks, the start and the end.
   wire:   { icon: Cable,         label: "Wire",   hint: "W", tip: "Wire: click points or symbols to draw a run (e.g. a switch to its lights), double-click to finish" },
-  duct:   { icon: AirVent,       label: "Duct",   hint: "D", tip: "Duct: click points to draw a duct run (e.g. an extractor to the outside wall), double-click to finish" },
+  duct:   { icon: AirVent,       label: "Duct",   hint: "D", tip: "Duct: click the start, then the end (e.g. an extractor to the outside wall)" },
   wall:   { icon: BrickWall,     label: "Wall",   hint: "" },
   note:   { icon: Type,          label: "Note",   hint: "N" },
   // Pick several symbols (a box, or taps) for Mirror copy.
@@ -915,6 +916,7 @@ export function Workspace({
   onWallMouseDown,
   startRotating,
   multi = null, onViewportPointerDownCapture = null, lineDraft = null,
+  lineGuide = null, onLineEndDown = null,
 }) {
   /* ------------------------------------------------------------------------
    * Symbols went blurry on zoom and never recovered.
@@ -1025,6 +1027,8 @@ export function Workspace({
           startRotating={startRotating}
           multi={multi}
           lineDraft={lineDraft}
+          lineGuide={lineGuide}
+          onLineEndDown={onLineEndDown}
         />
         </div>
       </div>
@@ -1057,7 +1061,7 @@ export function Sheet({
   onFurnitureMouseDown, startFurnRotating, startFurnResizing,
   onWallMouseDown,
   startRotating,
-  multi = null, lineDraft = null,
+  multi = null, lineDraft = null, lineGuide = null, onLineEndDown = null,
 }) {
   const { access = {} } = useApp();
   const trial = Boolean(access.isTry);
@@ -1129,6 +1133,8 @@ export function Sheet({
         startRotating={startRotating}
         multi={multi}
         lineDraft={lineDraft}
+        lineGuide={lineGuide}
+        onLineEndDown={onLineEndDown}
       />
 
       {/* TITLE BLOCK */}
@@ -1184,13 +1190,13 @@ function LegendLines({ wires, colourMode, wireStrength }) {
     return (
       <div key={type} style={LEGEND_ROW}>
         <svg viewBox="0 0 22 22" width={22} height={22} style={{ flexShrink: 0 }}>
-          <LineMark pts={[{ x: 1, y: 11, gap: 0 }, { x: 21, y: 11, gap: 0 }]} w={{ arrows: arrows ? "end" : "none" }} look={look} stroke={look.colour} width={look.width}/>
+          <LineMark pts={[{ x: 1, y: 11, gap: 0 }, { x: 21, y: 11, gap: 0 }]} w={{ type, arrows: arrows ? "end" : "none" }} look={look} stroke={look.colour} width={look.width}/>
         </svg>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 9, fontWeight: 600, color: "#171717", lineHeight: 1.2 }}>{type === "duct" ? "Duct" : "Wire"}</div>
           {arrows && (
             <div style={{ fontSize: 8, color: "#525252", marginTop: 1 }}>
-              {type === "duct" ? "Arrow shows the airflow direction" : "Arrow shows the direction"}
+              {type === "duct" ? "Arrows show the airflow direction" : "Arrow shows the direction"}
             </div>
           )}
         </div>
@@ -1831,11 +1837,15 @@ function PlanBackground({ bgImage, imageDisplay, viewportRef }) {
 // A line can instead be a duct, and either can carry arrowheads
 // (lib/lineTypes.js): LineMark draws one, with its arrowheads stopping at the
 // edge of the symbols they point at, for the editor and the print sheet alike.
+// A duct's arrows instead repeat all along it, pointing the way the air goes
+// (lib/lineTypes.js lineArrowMarks): spacing, in sheet units, is about 40 px
+// apart on screen at any zoom (the editor passes screenArrowGap); left out,
+// the printed spacing (the print sheet, so the PDF too, and the legend).
 // pts: the points the line runs through ([{ x, y, gap }], lib/lineTypes.js
 // linePoints): two for a straight line, more where it bends.
 const ptsAttr = (pts) => pts.map((p) => `${p.x},${p.y}`).join(" ");
-function LineMark({ pts, w, look, stroke, width }) {
-  const heads = runArrowHeads(pts, lineArrows(w), look.width);
+function LineMark({ pts, w, look, stroke, width, spacing = DUCT_ARROW_GAP }) {
+  const heads = lineArrowMarks(pts, w, look.width, spacing);
   return (
     <>
       <polyline points={ptsAttr(pts)} fill="none"
@@ -1861,8 +1871,15 @@ function DrawingArea({
   // (Set of symbol ids), box ({ x0, y0, x1, y1 }), line ({ a, b }), ghosts
   // (the copies to come, bad: off the drawing area) }.
   multi = null,
-  // The Wire / Duct tool's run being drawn: { pts: [{ x, y }], cursor, type }.
+  // The Wire / Duct tool's run being drawn: { pts: [{ x, y }], cursor, type,
+  // flow (a duct's airflow, lib/lineTypes.js ductFlow) }.
   lineDraft = null,
+  // A duct straightened to horizontal, vertical or 45° (lib/lineTypes.js
+  // squareSnap), while it's drawn or an end is dragged: { a, b, dir }, a
+  // faint guide through a and b. Editor only, never printed.
+  lineGuide = null,
+  // A press on a selected duct's end handle: (event, wireId, "start" | "end").
+  onLineEndDown = null,
 }) {
   const placedById = useMemo(() => new Map(placed.map((p) => [p.id, p])), [placed]);
   // tool + selection come straight from the store now — no longer threaded
@@ -1972,7 +1989,7 @@ function DrawingArea({
                   opacity={0.55} style={{ pointerEvents: "none" }}
                 />
               )}
-              <LineMark pts={pts} w={w} look={look}
+              <LineMark pts={pts} w={w} look={look} spacing={screenArrowGap(zoom)}
                 stroke={isSel ? "#22808F" : full ? look.hoverColour : look.colour}
                 width={isSel ? Math.max(1.8, look.width) : full ? look.hoverWidth : look.width}/>
             </g>
@@ -1983,12 +2000,15 @@ function DrawingArea({
         {lineDraft && lineDraft.pts.length > 0 && (() => {
           const look = lineLook({ type: lineDraft.type }, wireStrength, colourMode);
           const shown = lineDraft.cursor ? [...lineDraft.pts, lineDraft.cursor] : lineDraft.pts;
+          // a duct shows its airflow arrows as it's drawn
+          const flow = lineDraft.type === "duct" && shown.length > 1 ? flowArrows(shown, lineDraft.flow, look.width, screenArrowGap(zoom)) : [];
           return (
             <g style={{ pointerEvents: "none" }}>
               {shown.length > 1 && (
                 <polyline points={ptsAttr(shown)} fill="none" stroke={look.hoverColour} strokeWidth={look.width}
                   strokeDasharray={look.dash} strokeLinejoin="round" opacity={0.85}/>
               )}
+              {flow.map((h, i) => <polygon key={`f${i}`} data-draft-arrow="" points={h} fill={look.hoverColour} opacity={0.85}/>)}
               {lineDraft.pts.map((p, i) => (
                 <circle key={i} cx={p.x} cy={p.y} r={i === 0 ? 3.2 : 2.4} fill="#ffffff" stroke={look.hoverColour} strokeWidth={1.2}/>
               ))}
@@ -2225,6 +2245,49 @@ function DrawingArea({
               {b && <circle cx={b.x} cy={b.y} r={4} fill="#fbbf24" stroke="#d97706" strokeWidth={1.5} vectorEffect="non-scaling-stroke"/>}
             </g>
           );
+        })()}
+
+        {/* A duct snapped horizontal, vertical or 45°: a faint guide right
+            across the drawing, through its fixed end, and a small label by
+            the moving end. A steady on-screen size at any zoom. */}
+        {lineGuide && lineGuide.a && lineGuide.b && (() => {
+          const { a, b, dir } = lineGuide;
+          const len = Math.hypot(b.x - a.x, b.y - a.y);
+          if (!len) return null;
+          const ux = (b.x - a.x) / len, uy = (b.y - a.y) / len, far = 5000;
+          const hs = Math.min(Math.max(1 / (zoom || 1), 0.6), 6);
+          const label = SQUARE_LABEL[dir] || "";
+          return (
+            <g data-square-guide={dir} style={{ pointerEvents: "none" }}>
+              <line x1={a.x - ux * far} y1={a.y - uy * far} x2={a.x + ux * far} y2={a.y + uy * far}
+                    stroke="#d97706" strokeOpacity={0.5} strokeWidth={1} strokeDasharray="4 4" vectorEffect="non-scaling-stroke"/>
+              {label && (
+                <text x={b.x + 10 * hs} y={b.y - 10 * hs} fontSize={11 * hs} fontWeight="700" fill="#92400E"
+                      stroke="#ffffff" strokeWidth={3 * hs} paintOrder="stroke" strokeLinejoin="round"
+                      fontFamily="ui-sans-serif, system-ui, sans-serif">{label}</text>
+              )}
+            </g>
+          );
+        })()}
+
+        {/* A selected duct: a round handle at each end. Drag one to move that
+            end (components/ElectricalPlanTool onLineEndDown): onto a symbol,
+            or a free point that snaps horizontal, vertical or 45°. Not on
+            wires. Above the symbols, so an end on a symbol can be grabbed. */}
+        {onLineEndDown && tool === "select" && !spacePressed && selectedWireId && (() => {
+          const w = wires.find((x) => x.id === selectedWireId);
+          if (!w || lineType(w) !== "duct") return null;
+          const pts = linePoints(w, placedById, (s) => symbolGap(symbolSize * (s.scale ?? 1)));
+          if (!pts) return null;
+          const ends = visibleEnds(pts);
+          const hs = Math.min(Math.max(1 / (zoom || 1), 0.6), 6);
+          return ["start", "end"].map((end) => (
+            <g key={end} data-duct-end={end} style={{ pointerEvents: "all", cursor: "grab", touchAction: "none" }}
+               onPointerDown={(e) => onLineEndDown(e, w.id, end)}>
+              <circle cx={ends[end].x} cy={ends[end].y} r={20 * hs} fill="transparent" stroke="none"/>
+              <circle cx={ends[end].x} cy={ends[end].y} r={6.5 * hs} fill="#fbbf24" stroke="#d97706" strokeWidth={1.5} vectorEffect="non-scaling-stroke"/>
+            </g>
+          ));
         })()}
 
         {/* Annotation text blocks (rendered last so they're on top) */}
@@ -2518,6 +2581,8 @@ function LineOptions({ options, value, onChange, label, size = "panel" }) {
   );
 }
 
+// A duct has Airflow (which way its arrows point, all along it) in place of
+// a wire's Arrowheads; a wire's choices are as they were.
 function WireInspector({ wire, onLine, deleteSelected }) {
   const type = lineType(wire), arrows = lineArrows(wire);
   const name = type === "duct" ? "Duct" : "Wire";
@@ -2527,21 +2592,33 @@ function WireInspector({ wire, onLine, deleteSelected }) {
         <div className={`${PANEL_LABEL} mb-2`}>{name}</div>
         <div className="text-[10px] text-slate-600 dark:text-slate-300 leading-relaxed mb-3">
           This line runs between symbols or points on the plan. Remove it below, or press Delete / Backspace.
+          {type === "duct" && onLine ? " Drag the dot at either end to move that end." : ""}
         </div>
       </div>
       {wire && onLine && (
         <>
           <div>
             <div className={`${PANEL_LABEL} mb-1.5`}>Line</div>
-            <LineOptions options={LINE_TYPES} value={type} onChange={(t) => onLine(t, arrows)} label="Line"/>
+            <LineOptions options={LINE_TYPES} value={type}
+              onChange={(t) => onLine(t, t === "duct" && type !== "duct" ? ductFlow(wire) : arrows)} label="Line"/>
           </div>
-          <div>
-            <div className={`${PANEL_LABEL} mb-1.5`}>Arrowheads</div>
-            <LineOptions options={LINE_ARROWS} value={arrows} onChange={(a) => onLine(type, a)} label="Arrowheads"/>
-            <div className="mt-1.5 text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
-              The start is where the line was begun.{type === "duct" ? " On a duct, the arrow shows which way the air goes." : ""}
+          {type === "duct" ? (
+            <div>
+              <div className={`${PANEL_LABEL} mb-1.5`}>Airflow</div>
+              <LineOptions options={DUCT_FLOWS} value={ductFlow(wire)} onChange={(f) => onLine("duct", f)} label="Airflow"/>
+              <div className="mt-1.5 text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                The arrows repeat along the duct, all pointing the way the air goes. The start is where the duct was begun; choose End → Start to reverse them.
+              </div>
             </div>
-          </div>
+          ) : (
+            <div>
+              <div className={`${PANEL_LABEL} mb-1.5`}>Arrowheads</div>
+              <LineOptions options={LINE_ARROWS} value={arrows} onChange={(a) => onLine(type, a)} label="Arrowheads"/>
+              <div className="mt-1.5 text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                The start is where the line was begun.
+              </div>
+            </div>
+          )}
         </>
       )}
       <button onClick={deleteSelected}

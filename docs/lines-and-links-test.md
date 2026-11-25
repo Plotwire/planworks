@@ -18,6 +18,13 @@ and switches Duct off. Arrowheads work as before.
 **Wire is unchanged:** it takes bends and keeps drawing line after line
 until **Done** or **Esc**. Steps 4, 5, 5a, 9 and Part B step 2 cover this.
 
+**Later update, same branch:** a duct's arrows now repeat all along it
+(**Airflow: Start → End | End → Start** in place of None / Start / End /
+Both), it snaps horizontal, vertical or 45° (Shift forces it), and a
+selected duct's ends can be dragged. Test those with
+**docs/duct-one-shot-test.md**. Where a step below talks about a duct's
+arrowhead at one end, it now has arrows all along it.
+
 ## What's new, in plain English
 
 - **Fast stamping never loses a click.** In stamp mode, a click or tap that
