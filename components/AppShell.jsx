@@ -103,6 +103,9 @@ const PUBLIC_PATHS = [
   "/planner/view",
   LEGAL_LINKS.terms, LEGAL_LINKS.privacy, LEGAL_LINKS.dataProcessing,
   "/auth/confirm",
+  // A Timesheets worker's invite link (components/timesheets/JoinInvite.jsx):
+  // they set a password there, then go to their week.
+  "/time/join",
 ];
 const isPublicPath = (pathname) =>
   typeof pathname === "string" && PUBLIC_PATHS.some(p => pathname === p || pathname.startsWith(p + "/"));

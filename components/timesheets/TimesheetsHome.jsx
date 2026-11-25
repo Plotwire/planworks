@@ -148,7 +148,9 @@ export default function TimesheetsHome({ onClose }) {
                       </button>
                     ))}
                   </div>
-                  {tab === "workers" && <WorkersPanel thisMonday={thisMonday} />}
+                  {tab === "workers" && (
+                    <WorkersPanel thisMonday={thisMonday} onTeamChange={() => listTeam().then(setTeam).catch(() => {})} />
+                  )}
                   {tab === "jobs" && (
                     <JobsPanel ownerId={user.id} jobs={jobs} types={types} onSaved={(row) => setJobs((l) => withRow(l, row))} />
                   )}
@@ -408,6 +410,27 @@ html.dark .pw-ts .ts-linkbtn{color:var(--teal)}
 .pw-ts .ts-export-body{display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap; padding:20px 22px}
 .pw-ts .ts-export-body .ts-field{width:170px}
 .pw-ts .ts-export-note{padding:0 22px 18px; font-size:13px; color:var(--muted)}
+/* Any week: a date to go to, and back to this week. */
+.pw-ts .ts-jump{display:flex; align-items:flex-end; gap:8px}
+.pw-ts .ts-jump-date{display:flex; flex-direction:column; gap:3px}
+.pw-ts .ts-jump-date span{font-size:10.5px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:#B7C6D2}
+.pw-ts .ts-jump-date input{height:38px !important; width:150px !important}
+/* Invites waiting, and what just happened. */
+.pw-ts .ts-card-done{display:flex; align-items:center; gap:8px; margin:14px 22px 0; padding:9px 12px; border-radius:10px; font-size:13.5px; background:#ECFDF3; border:1.5px solid #4ADE80; color:#14532D}
+html.dark .pw-ts .ts-card-done{background:#0F2A1A; color:#BBF7D0}
+.pw-ts .ts-waiting{margin:16px 16px 0; border:1px solid var(--line); border-radius:14px; overflow:hidden}
+.pw-ts .ts-waiting h3{display:flex; align-items:center; gap:8px; padding:10px 14px; background:var(--paper); border-bottom:1px solid var(--line); font-family:var(--font-jetbrains-mono),monospace; font-size:11px; font-weight:600; letter-spacing:.12em; text-transform:uppercase; color:var(--muted)}
+.pw-ts .ts-waiting h3 i{font-style:normal; padding:1px 7px; border-radius:6px; background:var(--teal); color:var(--chip-ink)}
+.pw-ts .ts-waiting-row{display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:12px 14px; border-top:1px solid var(--line-2); box-shadow:inset 4px 0 0 #F59E0B}
+.pw-ts .ts-waiting h3 + .ts-waiting-row{border-top:0}
+.pw-ts .ts-waiting-who{flex:1; min-width:180px; display:flex; flex-direction:column; gap:2px}
+.pw-ts .ts-waiting-who b{font-size:14.5px}
+.pw-ts .ts-waiting-who span{font-size:12.5px; color:var(--muted); overflow-wrap:anywhere}
+.pw-ts .ts-waiting-actions{display:flex; gap:7px; flex-wrap:wrap; margin-left:auto}
+.pw-ts .ts-ask.is-remove{flex-basis:100%; justify-content:flex-end}
+.pw-ts .ts-dialog-note{font-size:12.5px; line-height:1.5; color:var(--muted)}
+.pw-ts input[type="email"]{width:100%; height:42px; padding:0 12px; font-family:inherit; font-size:14px; color:var(--ink); background:var(--paper); border:1px solid var(--line); border-radius:10px; outline:none}
+.pw-ts input[type="email"]:focus{border-color:var(--teal); box-shadow:0 0 0 3px rgba(63,183,201,.18)}
 .pw-ts input[type="date"]{width:100%; height:42px; padding:0 12px; font-family:inherit; font-size:14px; color:var(--ink); background:var(--paper); border:1px solid var(--line); border-radius:10px; outline:none}
 .pw-ts input[type="date"]:focus{border-color:var(--teal); box-shadow:0 0 0 3px rgba(63,183,201,.18)}
 
@@ -446,6 +469,11 @@ html.dark .pw-ts .ts-gate-ic{color:var(--teal)}
   .pw-ts .ts-tr.is-job .ts-actions{justify-content:flex-start}
   .pw-ts .ts-fields{grid-template-columns:1fr}
   .pw-ts .ts-tabs{flex-wrap:wrap}
+  .pw-ts .ts-jump{width:100%}
+  .pw-ts .ts-jump-date{flex:1}
+  .pw-ts .ts-jump-date input{width:100% !important}
+  .pw-ts .ts-waiting{margin:10px 10px 0}
+  .pw-ts .ts-card-done{margin:12px 16px 0}
   .pw-ts .ts-workers{padding:10px; gap:10px}
   .pw-ts .ts-worker-head{padding:12px}
   .pw-ts .ts-worker-body{padding:12px 12px 8px}
