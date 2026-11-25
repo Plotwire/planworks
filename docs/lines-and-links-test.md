@@ -10,6 +10,21 @@ with a mouse), Part B on the **iPad** (Safari).
 link was updated, then open it fresh (or press **Ctrl+F5**). On the iPad,
 close the Safari tab and open the link again.
 
+**Update, branch duct-one-shot:** a duct is **two clicks**. Press **Duct**
+(or **D**), click the **start**, click the **end**: the duct is drawn and
+Duct switches off, back to **Select**. No bends, no double-click. To draw
+another, press **Duct** again. **Esc** after the first click throws it away
+and switches Duct off. Arrowheads work as before.
+**Wire is unchanged:** it takes bends and keeps drawing line after line
+until **Done** or **Esc**. Steps 4, 5, 5a, 9 and Part B step 2 cover this.
+
+**Later update, same branch:** a duct's arrows now repeat all along it
+(**Airflow: Start → End | End → Start** in place of None / Start / End /
+Both), it snaps horizontal, vertical or 45° (Shift forces it), and a
+selected duct's ends can be dragged. Test those with
+**docs/duct-one-shot-test.md**. Where a step below talks about a duct's
+arrowhead at one end, it now has arrows all along it.
+
 ## What's new, in plain English
 
 - **Fast stamping never loses a click.** In stamp mode, a click or tap that
@@ -18,13 +33,17 @@ close the Safari tab and open the link again.
 - **Wire and Duct are two buttons** in the left toolbar, one under the
   other, both big and labelled. Keyboard: **W** for Wire, **D** for Duct.
 - **A top bar while you draw**, in the same amber style as the Mirror copy
-  bar: **"Drawing: Duct. Click points to draw the run, double-click to
-  finish."** (Tap / double-tap on the iPad), with **Arrows: None | Start |
-  End | Both** and **Done**. The drawing gets shorter to make room, so
+  bar: **"Drawing: Duct. Click the start, then the end. Duct then switches
+  off."** (for Wire: **"Drawing: Wire. Click points to draw the run,
+  double-click to finish."**; Tap / double-tap on the iPad), with **Arrows:
+  None | Start | End | Both** and **Done**.
+- **A duct is two clicks, then Duct switches off.** Wire keeps going, with
+  bends, until Done. The drawing gets shorter to make room, so
   nothing hides behind it or the zoom buttons. The old bar at the bottom has
   gone.
 - **Lines start and end anywhere.** The first click can be on a symbol or on
-  empty plan. Every click after that adds a bend. To finish: double-click
+  empty plan. On a **wire**, every click after that adds a bend (a duct is
+  just two clicks: start and end). To finish: double-click
   (double-tap), press **Enter**, or press **Done**. A click near a symbol
   snaps to it. **Backspace** takes off the last point; **Esc** throws the
   line away. Picking another tool finishes the line.
@@ -77,28 +96,36 @@ close the Safari tab and open the link again.
 3. **The buttons:** in the left toolbar, **Wire** and, under it, **Duct**,
    both the same big teal labelled buttons.
 4. **The top bar:** press **Duct**. An amber bar across the top of the
-   drawing: **"Drawing: Duct. Click points to draw the run, double-click to
-   finish."**, then **Arrows: None | Start | End | Both** and **Done**. The
-   zoom buttons are below it, not covered. There's no bar at the bottom.
+   drawing: **"Drawing: Duct. Click the start, then the end. Duct then
+   switches off."**, then **Arrows: None | Start | End | Both** and **Done**.
+   The zoom buttons are below it, not covered. There's no bar at the bottom.
 5. **Duct, fan to the outside wall:** choose **End**. Click the **extractor
-   fan**, then double-click on the **outside wall** (or just outside it). A
-   thick blue dashed line from the fan to the wall, with an arrowhead at the
-   **wall** end, its tip on the point you clicked. Back at the fan, the line
-   starts at the fan's edge.
+   fan**, then click **once** on the **outside wall** (or just outside it).
+   That's it: a thick blue dashed line from the fan to the wall, with an
+   arrowhead at the **wall** end, its tip on the point you clicked. Back at
+   the fan, the line starts at the fan's edge. **Duct switches off by
+   itself:** the amber bar goes, the toolbar shows **Select**, and moving the
+   mouse over the drawing trails no line. Clicking the drawing now draws
+   nothing.
+5a. **Two clicks per duct:** press **D**, click two places on empty plan: a
+   straight duct, and Duct is off again. Press **Duct** again, click once,
+   then press **Esc**: the half-drawn duct goes and Duct is off, in one
+   press. **Ctrl+Z** the extra duct.
 6. **Wire, switch to beside a floor link:** drag **Up to floor above** onto
    the plan (press **Place it** or **OK** on the blue bar). Press **Wire**,
    choose **End**. Click the **switch**, then double-click on empty plan
    just **beside** the up link (not on it). A red dashed wire with an
    arrowhead at the empty end.
-7. **A wire with bends:** still on Wire, choose **None**. Click empty plan,
-   click two or three more places, then press **Enter**. A wire with bends at
-   each click. Start another: click twice, press **Backspace** (the last
-   point goes), then **Esc** (the whole line goes).
+7. **A wire with bends:** still on Wire (Wire stays on after step 6, unlike
+   Duct), choose **None**. Click empty plan, click two or three more places,
+   then press **Enter**. A wire with bends at each click. Start another:
+   click twice, press **Backspace** (the last point goes), then **Esc** (the
+   whole line goes, and Wire is still on).
 8. **Snap:** start a wire on empty plan and click just off a downlight (not
    quite on it). The line joins the downlight's centre. Double-click to
    finish.
-9. **Done:** start a duct with two clicks, then press **Done**. The duct is
-   kept, and the tool goes back to **Select**.
+9. **Done:** start a duct with one click, then press **Done**. Nothing is
+   drawn (a duct needs its end), and the tool goes back to **Select**.
 10. **Lines follow their symbols:** with **Select**, drag the fan
     somewhere else. The duct's fan end follows it; the wall end stays put.
     **Ctrl+Z**.
@@ -141,8 +168,10 @@ close the Safari tab and open the link again.
    the drawing quickly, 8 times or so. Every tap places one. A swipe moves
    the drawing and places nothing. Undo the extras, tap **Done**.
 2. Tap **Duct**: the amber bar is at the top, clear of the zoom buttons and
-   everything else. Tap **End**, tap the fan, then double-tap just outside
-   the wall. The duct is drawn with its arrow at the wall.
+   everything else. Tap **End**, tap the fan, then tap **once** just outside
+   the wall. The duct is drawn with its arrow at the wall, and Duct switches
+   off: the bar goes and the tool is back on Select. Tapping the drawing now
+   draws nothing; tap **Duct** again for another.
 3. Tap **Wire**, tap a symbol, tap two empty places, then tap **Done**. A
    wire with a bend, and the tool is back on Select.
 4. Tap the duct: the inspector shows Line and Arrowheads. Tap **Both**.

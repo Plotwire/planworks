@@ -26,7 +26,7 @@ import {
   ProjectTitleBlockContext,
 } from "@/components/SheetParts";
 import { useApp } from "@/components/AppShell";
-import { withLine, lineFromNodes, linesAfterDelete, symbolGap } from "@/lib/lineTypes";
+import { withLine, withEnd, lineFromNodes, linesAfterDelete, lineNodes, lineType, symbolGap, squareSnap, DUCT_FLOWS } from "@/lib/lineTypes";
 import { FLOOR_LINK_UP, FLOOR_LINK_DOWN, floorLinkPartner } from "@/lib/symbolDrafts/marks";
 import { openSketch } from "@/lib/device/sketches";
 import { SHEET, DRAW } from "@/lib/cad/sheet";
@@ -419,7 +419,8 @@ const SHORTCUTS = [
   { title: "Draw", items: [
     ["Stamp: a symbol in the palette, then click the drawing for each one", ["double-click"]],
     ["Wire tool: click points or symbols, double-click to finish", ["w"]],
-    ["Duct tool: the same, for a duct run", ["d"]],
+    ["Duct tool: click the start, then the end", ["d"]],
+    ["Keep a duct horizontal, vertical or at 45° (drawing it, or dragging an end)", ["shift"]],
     ["Finish the wire or duct being drawn", ["enter"]],
     ["Take the last point off it", ["backspace"]],
     ["Note tool", ["n"]],
@@ -458,7 +459,8 @@ const TOUCH_GESTURES = [
     ["Add a symbol", "Drag it from the palette onto the drawing"],
     ["Add the same symbol again and again", "Double-tap it in the palette, then tap the drawing for each one"],
     ["Scroll the palette", "Swipe up or down on it"],
-    ["Draw a wire or a duct", "Wire or Duct, then tap each point (or symbol) along the run, double-tap to finish"],
+    ["Draw a wire", "Wire, then tap each point (or symbol) along the run, double-tap to finish"],
+    ["Draw a duct", "Duct, then tap the start and the end"],
   ] },
   { title: "Edit", items: [
     ["Select", "Tap a symbol, note, wire or furniture piece"],
@@ -466,6 +468,7 @@ const TOUCH_GESTURES = [
     ["Rotate a symbol", "Drag its round handle"],
     ["Rotate or resize furniture", "Drag its handles"],
     ["Point a note's arrow", "Drag the dot at its tip"],
+    ["Move a duct's end", "Tap the duct, then drag the dot at either end"],
     ["Delete a symbol, note or wire", "Tap Delete in the inspector"],
     ["Undo or redo", "Tap the arrows in the top bar"],
     ["Rename a drawing", "Double-tap its tab"],
@@ -630,6 +633,24 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const lineDraftRef = useRef(null);                 // { nodes: [{ id } | { x, y }], type }
   const [lineDraft, setLineDraft] = useState(null);  // the same, plus cursor, to draw it
   const drawingLine = tool === "wire" || tool === "duct";
+  // A duct's airflow for the next ducts ("end": the way it's drawn, "start":
+  // reversed), chosen in the bar; its arrows repeat all along it. Ducts snap
+  // horizontal, vertical or 45° (ductEndAt), Shift forcing it: shiftDown
+  // keeps the preview right when Shift is pressed with the mouse still.
+  const [ductFlowChoice, setDuctFlowChoice] = useState("end");
+  const [shiftDown, setShiftDown] = useState(false);
+  // A selected duct's end being dragged: { id, end: "start" | "end", moved }.
+  // endGuide: the guide while that end is straightened ({ a, b, dir }).
+  const endDragRef = useRef(null);
+  const [endGuide, setEndGuide] = useState(null);
+  useEffect(() => {
+    const on = (e) => { if (e.key === "Shift") setShiftDown(e.type === "keydown"); };
+    const off = () => setShiftDown(false);
+    window.addEventListener("keydown", on);
+    window.addEventListener("keyup", on);
+    window.addEventListener("blur", off);
+    return () => { window.removeEventListener("keydown", on); window.removeEventListener("keyup", on); window.removeEventListener("blur", off); };
+  }, []);
   // A floor link just placed: the offer to put its partner on the next floor
   // ({ symbolId, x, y, target: { id, name } | null, from, up }).
   const [linkOffer, setLinkOffer] = useState(null);
@@ -1504,6 +1525,32 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     }
     return best ? { id: best.id } : { x: snap(x), y: snap(y) };
   };
+  // A node's point in sheet units: its symbol's centre, or the free point.
+  const nodePoint = (n) => {
+    if (!n) return null;
+    if (!n.id) return { x: n.x, y: n.y };
+    const s = placed.find(p => p.id === n.id);
+    return s ? { x: s.x, y: s.y } : null;
+  };
+  // Duct: level and square. Where a duct's end goes for the pointer at `at`,
+  // its other end being at `from`: on a symbol when it's close to one (as any
+  // line point), unless Shift; otherwise a free point, straightened
+  // horizontal, vertical or 45° when it's within a few degrees of one
+  // (lib/lineTypes.js squareSnap), or always with Shift. Returns { node,
+  // guide }, guide being { a, b, dir } when it's straightened.
+  const ductEndAt = (at, from, force) => {
+    if (!force) { const n = lineNodeAt(at); if (n.id) return { node: n, guide: null }; }
+    const s = from ? squareSnap(from, at, force, snap) : null;
+    if (s) return { node: { x: s.x, y: s.y }, guide: { a: from, b: { x: s.x, y: s.y }, dir: s.dir } };
+    return { node: { x: snap(at.x), y: snap(at.y) }, guide: null };
+  };
+  // The point a click (or tap) at `at` adds to the run being drawn: a duct's
+  // end goes through ductEndAt; anything else is as it always was.
+  const lineTapNode = (at, shift) => {
+    const d = lineDraftRef.current;
+    if (!d || d.type !== "duct" || !d.nodes.length) return lineNodeAt(at);
+    return ductEndAt(at, nodePoint(d.nodes[d.nodes.length - 1]), shift).node;
+  };
   const addLinePoint = (node) => {
     if (readOnly || openStateRef.current !== "ready") return;
     const draft = lineDraftRef.current;
@@ -1514,30 +1561,50 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     if (same) { finishLine(); return; }
     const next = { nodes: [...nodes, node], type: draft ? draft.type : (tool === "duct" ? "duct" : "wire") };
     lineDraftRef.current = next;
+    // A duct is two clicks: the start, then the end. The end finishes it (no
+    // bends, no double-click), and Duct switches off (finishLine).
+    if (next.type === "duct" && next.nodes.length >= 2) { finishLine(); return; }
     setLineDraft(d => ({ ...next, cursor: d ? d.cursor : null }));
     setSelectedWireId(null);
   };
   // The run so far becomes a line (two points at least), kept as before when
   // it's straight from one symbol to another (lib/lineTypes.js lineFromNodes).
+  // Duct draws one line per press of the Duct button (or D): once a duct line
+  // is finished (its second click, or Done), Duct switches off and Select is
+  // back. Only while Duct is still the tool: when this runs because another
+  // tool was chosen mid-line, that choice stands. Wire keeps drawing line
+  // after line, with bends, until Done or Esc, as before.
   const finishLine = () => {
     const draft = lineDraftRef.current;
     lineDraftRef.current = null;
     setLineDraft(null);
     if (!draft || draft.nodes.length < 2 || readOnly) return;
     snapshot();
-    const w = lineFromNodes("w_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6), draft.nodes, draft.type, lineEnds);
+    const w = lineFromNodes("w_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6), draft.nodes, draft.type, draft.type === "duct" ? ductFlowChoice : lineEnds);
     setProject(p => ({ ...p, sheets: p.sheets.map(s => s.id === p.activeSheetId ? { ...s, wires: [...(s.wires || []), w] } : s) }));
+    if (draft.type === "duct" && tool === "duct") setTool("select");
   };
   const cancelLine = () => { lineDraftRef.current = null; setLineDraft(null); };
   // Leaving the tool (or switching Wire / Duct) finishes the run being drawn.
   useEffect(() => {
     if (lineDraftRef.current && lineDraftRef.current.type !== tool) finishLine();
   }, [tool]); // eslint-disable-line react-hooks/exhaustive-deps
-  // The run as it's drawn, in sheet units, for the drawing area.
-  const lineDraftView = lineDraft ? {
-    type: lineDraft.type, cursor: lineDraft.cursor,
-    pts: lineDraft.nodes.map(n => (n.id ? placed.find(p => p.id === n.id) : n)).filter(Boolean).map(p => ({ x: p.x, y: p.y })),
-  } : null;
+  // The run as it's drawn, in sheet units, for the drawing area. A duct's
+  // stretch to the pointer goes where the click would put its end (snapped
+  // to a symbol, or straightened, with its guide), with its airflow arrows.
+  const lineDraftView = (() => {
+    if (!lineDraft) return null;
+    const gapOf = (n) => { const s = n.id && placed.find(p => p.id === n.id); return s ? symbolGap(48 * symbolScale * (s.scale ?? 1)) : 0; };
+    const pts = lineDraft.nodes.map(n => { const p = nodePoint(n); return p && { ...p, gap: gapOf(n) }; }).filter(Boolean);
+    let cursor = lineDraft.cursor, guide = null;
+    if (lineDraft.type === "duct" && cursor && pts.length) {
+      const end = ductEndAt(cursor, pts[pts.length - 1], shiftDown);
+      const p = nodePoint(end.node);
+      cursor = p ? { ...p, gap: gapOf(end.node) } : cursor;
+      guide = end.guide;
+    }
+    return { type: lineDraft.type, cursor, pts, guide, flow: ductFlowChoice };
+  })();
 
   // Drop onto the drawing area
   const onDrawingDrop = (e) => {
@@ -1578,7 +1645,10 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const onItemMouseDown = (e, item) => {
     if (tool === "pan" || spacePressed) return;
     e.stopPropagation();
-    if (drawingLine) { addLinePoint({ id: item.id }); return; } // a point on this symbol
+    if (drawingLine) { // a point on this symbol (a duct's end with Shift: kept square instead)
+      addLinePoint(e.shiftKey && lineDraftRef.current?.type === "duct" ? lineTapNode(clientToDrawing(e.clientX, e.clientY), true) : { id: item.id });
+      return;
+    }
     if (e.shiftKey && tool === "select") {
       const keep = selectedId && selectedId !== item.id ? [selectedId] : [];
       startPicking();
@@ -1831,6 +1901,31 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     if (lineDraftRef.current && drawingLine && e.pointerType === "mouse") {
       const p = clientToDrawing(e.clientX, e.clientY);
       setLineDraft(d => (d ? { ...d, cursor: p } : d));
+      if (e.shiftKey !== shiftDown) setShiftDown(e.shiftKey);
+    }
+    // A selected duct's end being dragged (onLineEndDown): it goes where a
+    // click would put a duct's end, measured from its neighbour (the other
+    // end, on a straight duct), so it snaps the same way. Never onto that
+    // neighbour, and kept on the drawing area.
+    const drag = endDragRef.current;
+    if (drag && e.pointerId === drag.pointerId) {
+      const w = wires.find(x => x.id === drag.id);
+      if (!w) return;
+      const nodes = lineNodes(w);
+      const i = drag.end === "start" ? 0 : nodes.length - 1;
+      const nb = nodes[drag.end === "start" ? 1 : nodes.length - 2];
+      const from = nodePoint(nb);
+      const raw = clientToDrawing(e.clientX, e.clientY);
+      const at = { x: Math.max(0, Math.min(DRAW.w, raw.x)), y: Math.max(0, Math.min(DRAW.h, raw.y)) };
+      const { node, guide } = ductEndAt(at, from, e.shiftKey);
+      setEndGuide(guide);
+      const cur = nodes[i];
+      const p = nodePoint(node);
+      const same = node.id ? cur && cur.id === node.id : cur && !cur.id && cur.x === node.x && cur.y === node.y;
+      if (same || (node.id && nb && nb.id === node.id) || !p || !from || Math.hypot(p.x - from.x, p.y - from.y) < 1) return;
+      if (!drag.moved) { snapshot(); drag.moved = true; } // one undo step for the whole drag
+      updateProject({ wires: wires.map(x => (x.id === w.id ? withEnd(x, drag.end, node) : x)) });
+      return;
     }
     if (pickBox) {
       const p = clientToDrawing(e.clientX, e.clientY);
@@ -1950,8 +2045,9 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     if (tap && e && e.type !== "pointercancel" && e.pointerId === tap.id && !pinchActiveRef.current
         && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) <= (tap.touch ? TAP_SLOP_TOUCH : TAP_SLOP)) {
       if (tool === "stamp") stampAt(tap.at);
-      else if (drawingLine) addLinePoint(lineNodeAt(tap.at));
+      else if (drawingLine) addLinePoint(lineTapNode(tap.at, e.shiftKey));
     }
+    if (endDragRef.current) { endDragRef.current = null; setEndGuide(null); }
     if (pickBox) {
       const hits = inBox(placed, pickBox).map(p => p.id);
       setPicked(ids => [...new Set([...ids, ...hits])]);
@@ -2090,6 +2186,18 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     setSelectedId(null);
     setSelectedAnnoId(null);
   };
+  // A press on a selected duct's end handle (components/SheetParts
+  // DrawingArea): that end follows the pointer (onViewportMouseMove) until
+  // it's let go. Ducts only; a wire's ends don't move this way.
+  const onLineEndDown = (e, id, end) => {
+    if (readOnly || tool !== "select" || spacePressed || pinchActiveRef.current) return;
+    const w = wires.find(x => x.id === id);
+    if (!w || lineType(w) !== "duct") return;
+    e.stopPropagation();
+    e.preventDefault();
+    endDragRef.current = { id, end, pointerId: e.pointerId, moved: false };
+    try { viewportRef.current?.setPointerCapture?.(e.pointerId); } catch {}
+  };
   const deleteSelected = () => {
     if (selectedId) {
       snapshot();
@@ -2158,7 +2266,9 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
         return;
       }
       if (wallDraft && e.key === "Escape") { e.preventDefault(); cancelWall(); return; }
-      if (lineDraftRef.current && e.key === "Escape") { e.preventDefault(); cancelLine(); return; }
+      // Esc drops the line being drawn. For Duct it also switches Duct off
+      // (one press of Esc); Wire stays on, and a second Esc leaves it.
+      if (lineDraftRef.current && e.key === "Escape") { e.preventDefault(); cancelLine(); if (tool === "duct") setTool("select"); return; }
       if (lineDraftRef.current && e.key === "Enter") { e.preventDefault(); finishLine(); return; }
       if (lineDraftRef.current && e.key === "Backspace") {
         e.preventDefault(); // takes the last point off the run
@@ -3211,6 +3321,7 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
   const deselect = TOUCH ? [] : [["del", "to delete"], ["esc", "deselect"]];
   const statusParts = spacePressed ? ["Drag to pan", "let go of Space to stop"]
     : tool === "wall" ? (wallDraft ? [`${act} to set the end point`, !TOUCH && ["shift", "any angle"], !TOUCH && ["esc", "cancel"]] : [`${act} to start a wall`, !TOUCH && ["esc", "exit"]])
+    : tool === "duct" ? [lineDraft ? `${act} the end of the duct` : `${act} a symbol or the plan to start the duct`, !TOUCH && lineDraft && ["shift", "keep it straight"], !TOUCH && ["esc", lineDraft ? "cancel" : "stop"]]
     : drawingLine ? [lineDraft ? `${act} the next point, double-${act.toLowerCase()} to finish` : `${act} a symbol or the plan to start the ${tool}`, !TOUCH && lineDraft && ["enter", "finish"], !TOUCH && ["esc", lineDraft ? "cancel" : "stop"]]
     : tool === "note" ? [`${act} the drawing to add a note`, !TOUCH && ["esc", "cancel"]]
     : tool === "stamp" ? [`${act} the drawing to place another`, `${act.toLowerCase()} the tile again to stop`, !TOUCH && ["esc", "stop"]]
@@ -3218,6 +3329,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
     : selectedId ? (TOUCH ? ["Drag to move it", "drag the round handle to rotate"] : ["Drag to move it", ["r", "rotate 15°"], ...deselect])
     : selectedFurnId ? ["Drag to move it", TOUCH ? "drag its handles to rotate or resize" : null, ...deselect]
     : selectedAnnoId ? ["Drag the note or its arrow to move it", ...deselect]
+    : selectedWireId && lineType(wires.find(w => w.id === selectedWireId)) === "duct" && !readOnly
+      ? (TOUCH ? ["Drag the dot at either end to move it", "Delete is in the inspector"] : ["Drag the dot at either end to move it", ["shift", "keep it straight"], ...deselect])
     : selectedWireId ? (TOUCH ? ["Delete is in the inspector"] : deselect)
     : selectedWallId ? (TOUCH ? ["Wall selected"] : deselect)
     : TOUCH ? ["Drag symbols in from the palette", "tap to select", "pinch to zoom"]
@@ -3430,17 +3543,34 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
                     {tool === "duct" ? <AirVent size={22}/> : <Cable size={22}/>}
                   </span>
                   <div className="min-w-0 text-[15px] font-bold leading-snug" role="status">
-                    Drawing: {name}. {tapOr} points to draw the run, double-{tapOr.toLowerCase()} to finish.
+                    {tool === "duct"
+                      ? <>Drawing: Duct. {tapOr} the start, then the end. Duct then switches off. It snaps straight when it&rsquo;s close to horizontal, vertical or 45°.</>
+                      : <>Drawing: {name}. {tapOr} points to draw the run, double-{tapOr.toLowerCase()} to finish.</>}
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[12px] font-bold uppercase tracking-wide">Arrows</span>
-                  <div role="radiogroup" aria-label="Arrowheads" className="flex gap-1.5">
-                    {[["none", "None"], ["start", "Start"], ["end", "End"], ["both", "Both"]].map(([v, label]) => (
-                      <button key={v} type="button" role="radio" aria-checked={lineEnds === v} onClick={() => setLineEnds(v)}
-                              className={lineEnds === v ? chosen : plain}>{label}</button>
-                    ))}
-                  </div>
+                  {tool === "duct" ? (
+                    <>
+                      {/* A duct's arrows repeat all along it; this says which way they point. */}
+                      <span className="text-[12px] font-bold uppercase tracking-wide">Airflow</span>
+                      <div role="radiogroup" aria-label="Airflow" className="flex gap-1.5">
+                        {DUCT_FLOWS.map(({ value: v, label }) => (
+                          <button key={v} type="button" role="radio" aria-checked={ductFlowChoice === v} onClick={() => setDuctFlowChoice(v)}
+                                  className={ductFlowChoice === v ? chosen : plain}>{label}</button>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-[12px] font-bold uppercase tracking-wide">Arrows</span>
+                      <div role="radiogroup" aria-label="Arrowheads" className="flex gap-1.5">
+                        {[["none", "None"], ["start", "Start"], ["end", "End"], ["both", "Both"]].map(([v, label]) => (
+                          <button key={v} type="button" role="radio" aria-checked={lineEnds === v} onClick={() => setLineEnds(v)}
+                                  className={lineEnds === v ? chosen : plain}>{label}</button>
+                        ))}
+                      </div>
+                    </>
+                  )}
                   <button type="button" onClick={() => { finishLine(); setTool("select"); }}
                           className={`${big} bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)] shadow-sm`}>
                     <Check size={18}/> Done
@@ -3497,6 +3627,8 @@ export default function ElectricalPlanTool({ initialTarget = null, onHome = null
             symbolSize={48 * symbolScale}
             wireStart={wireStart}
             lineDraft={lineDraftView}
+            lineGuide={endGuide || lineDraftView?.guide || null}
+            onLineEndDown={readOnly ? null : onLineEndDown}
             onWireSelect={onWireSelect}
             spacePressed={spacePressed}
             DRAW={DRAW}
