@@ -152,10 +152,16 @@ export default function TimesheetsHome({ onClose }) {
                     <WorkersPanel thisMonday={thisMonday} onTeamChange={() => listTeam().then(setTeam).catch(() => {})} />
                   )}
                   {tab === "jobs" && (
-                    <JobsPanel ownerId={user.id} jobs={jobs} types={types} onSaved={(row) => setJobs((l) => withRow(l, row))} />
+                    <JobsPanel ownerId={user.id} jobs={jobs} types={types} onSaved={(row) => setJobs((l) => withRow(l, row))}
+                               onRemoved={(id) => setJobs((l) => l.filter((x) => x.id !== id))} />
                   )}
                   {tab === "types" && (
-                    <WorkTypesPanel ownerId={user.id} types={types} onSaved={(row) => setTypes((l) => withRow(l, row))} />
+                    <WorkTypesPanel ownerId={user.id} types={types} onSaved={(row) => setTypes((l) => withRow(l, row))}
+                                    onRemoved={(id) => {
+                                      setTypes((l) => l.filter((x) => x.id !== id));
+                                      // Jobs that had it as their default now have none.
+                                      setJobs((l) => l.map((j) => (j.default_work_type_id === id ? { ...j, default_work_type_id: null } : j)));
+                                    }} />
                   )}
                 </>
               )}
@@ -293,7 +299,7 @@ html.dark .pw-ts .ts-card{box-shadow:0 1px 2px rgba(0,0,0,.4)}
 .pw-ts button:focus-visible,.pw-ts input:focus-visible,.pw-ts select:focus-visible{outline:2px solid var(--teal); outline-offset:2px}
 
 .pw-ts .ts-tr{display:grid; align-items:center; gap:16px; padding:14px 22px; border-top:1px solid var(--line-2); transition:background .14s ease}
-.pw-ts .ts-tr.is-job{grid-template-columns:110px minmax(0,1.7fr) minmax(0,1fr) 180px}
+.pw-ts .ts-tr.is-job{grid-template-columns:110px minmax(0,1.7fr) minmax(0,1fr) 220px}
 .pw-ts .ts-tr.is-type{grid-template-columns:minmax(0,1fr) auto}
 .pw-ts .ts-tr:not(.is-head):hover{background:rgba(63,183,201,.06)}
 .pw-ts .ts-tr:not(.is-head):not(.is-archived){box-shadow:inset 4px 0 0 var(--teal-600)}
@@ -368,6 +374,7 @@ html.dark .pw-ts .ts-worker{box-shadow:0 1px 2px rgba(0,0,0,.4)}
 .pw-ts .ts-pill svg{width:14px; height:14px; flex:none}
 .pw-ts .ts-pill.is-green{background:#DCFCE7; color:#14532D}
 .pw-ts .ts-pill.is-amber{background:#FEF3C7; color:#78350F}
+.pw-ts .ts-pill.is-grey{background:#E5E7EB; color:#1F2937}
 .pw-ts .ts-worker-total{text-align:right; flex:none}
 .pw-ts .ts-worker-total .n{font-family:var(--font-jetbrains-mono),monospace; font-weight:700; font-size:24px; letter-spacing:-.02em; line-height:1.1; color:#fff}
 .pw-ts .ts-worker-total .l{margin-top:2px; font-size:10.5px; font-weight:600; letter-spacing:.12em; text-transform:uppercase; color:#B7C6D2}
@@ -392,7 +399,7 @@ html.dark .pw-ts .ts-linkbtn{color:var(--teal)}
 /* A worker's entries: day on the left; job and hours, then type and times,
    then the note. */
 .pw-ts .ts-entries{margin-top:10px; border:1px solid var(--line); border-radius:12px; overflow:hidden}
-.pw-ts .ts-entry{display:grid; grid-template-columns:78px minmax(0,1fr) auto; grid-template-areas:"day job hours" "day type time" "day note note";
+.pw-ts .ts-entry{display:grid; grid-template-columns:78px minmax(0,1fr) auto auto; grid-template-areas:"day job hours del" "day type time del" "day note note note";
   gap:4px 10px; padding:9px 12px; font-size:13px; border-top:1px solid var(--line-2); align-items:center}
 .pw-ts .ts-entry > :nth-child(1){grid-area:day; align-self:start; font-weight:600; color:var(--ink-2)}
 .pw-ts .ts-entry > :nth-child(2){grid-area:job}
@@ -400,6 +407,7 @@ html.dark .pw-ts .ts-linkbtn{color:var(--teal)}
 .pw-ts .ts-entry > :nth-child(4){grid-area:time; text-align:right; color:var(--muted)}
 .pw-ts .ts-entry > :nth-child(5){grid-area:hours; text-align:right}
 .pw-ts .ts-entry > :nth-child(6){grid-area:note}
+.pw-ts .ts-entry > :nth-child(7){grid-area:del; align-self:center; padding-left:4px}
 .pw-ts .ts-entry:first-child{border-top:0}
 .pw-ts .ts-entry.is-head{display:none}
 .pw-ts .ts-entry.is-head + .ts-entry{border-top:0}
@@ -429,6 +437,30 @@ html.dark .pw-ts .ts-card-done{background:#0F2A1A; color:#BBF7D0}
 .pw-ts .ts-waiting-actions{display:flex; gap:7px; flex-wrap:wrap; margin-left:auto}
 .pw-ts .ts-ask.is-remove{flex-basis:100%; justify-content:flex-end}
 .pw-ts .ts-dialog-note{font-size:12.5px; line-height:1.5; color:var(--muted)}
+
+/* Deleting (components/timesheets/DeleteDialog.jsx): like deleting a drawing. */
+.pw-ts .ts-btn.is-danger{background:#DC2626; color:#FFFFFF}
+.pw-ts .ts-btn.is-danger:hover:not(:disabled){background:#B91C1C; box-shadow:0 8px 22px -6px rgba(220,38,38,.45)}
+.pw-ts .ts-ic.is-danger{background:#FEE2E2; color:#B91C1C}
+.pw-ts .ts-delete-warning{display:flex; flex-direction:column; gap:6px; padding:12px 14px; border-radius:10px; background:#FEF2F2; border:1.5px solid #FCA5A5; color:#7F1D1D; font-size:14px; line-height:1.5}
+.pw-ts .ts-delete-warning .is-final{font-weight:700}
+html.dark .pw-ts .ts-delete-warning{background:#2E1A1A; border-color:#EF4444; color:#FECACA}
+.pw-ts .ts-delete-text{font-size:14px; color:var(--muted)}
+.pw-ts .ts-delete-save{display:flex; align-items:center; gap:10px; flex-wrap:wrap; font-size:13px; color:var(--muted)}
+.pw-ts input[type="password"]{width:100%; height:42px; padding:0 12px; font-family:inherit; font-size:14px; color:var(--ink); background:var(--paper); border:1px solid var(--line); border-radius:10px; outline:none}
+.pw-ts input[type="password"]:focus{border-color:var(--teal); box-shadow:0 0 0 3px rgba(63,183,201,.18)}
+.pw-ts .ts-btn-icon.is-small{width:30px; height:30px; border-radius:8px}
+.pw-ts .ts-btn-icon.is-small svg{width:15px; height:15px}
+
+/* Archived jobs and work types: folded away until opened. */
+.pw-ts .ts-archived{border-top:1px solid var(--line)}
+.pw-ts .ts-archived-toggle{width:100%; display:flex; align-items:center; gap:8px; padding:12px 22px; border:0; background:var(--paper); cursor:pointer;
+  font-family:var(--font-jetbrains-mono),monospace; font-size:11px; font-weight:600; letter-spacing:.12em; text-transform:uppercase; color:var(--muted)}
+.pw-ts .ts-archived-toggle:hover{color:var(--ink-2)}
+.pw-ts .ts-archived-toggle svg{width:16px; height:16px; transition:transform .15s ease}
+.pw-ts .ts-archived-toggle svg.is-up{transform:rotate(180deg)}
+.pw-ts .ts-archived-toggle i{font-style:normal; padding:1px 7px; border-radius:6px; background:var(--line-2); color:var(--ink-2)}
+.pw-ts .ts-none-active{padding:16px 22px; font-size:13.5px; color:var(--muted); border-top:1px solid var(--line-2)}
 .pw-ts input[type="email"]{width:100%; height:42px; padding:0 12px; font-family:inherit; font-size:14px; color:var(--ink); background:var(--paper); border:1px solid var(--line); border-radius:10px; outline:none}
 .pw-ts input[type="email"]:focus{border-color:var(--teal); box-shadow:0 0 0 3px rgba(63,183,201,.18)}
 .pw-ts input[type="date"]{width:100%; height:42px; padding:0 12px; font-family:inherit; font-size:14px; color:var(--ink); background:var(--paper); border:1px solid var(--line); border-radius:10px; outline:none}
@@ -482,7 +514,7 @@ html.dark .pw-ts .ts-gate-ic{color:var(--teal)}
   .pw-ts .ts-daygrid{gap:4px}
   .pw-ts .ts-daycell{padding:6px 1px}
   .pw-ts .ts-daycell b{font-size:10.5px}
-  .pw-ts .ts-entry{grid-template-columns:62px minmax(0,1fr) auto}
+  .pw-ts .ts-entry{grid-template-columns:62px minmax(0,1fr) auto auto}
   .pw-ts .ts-export-body{padding:16px}
   .pw-ts .ts-export-body .ts-field{width:calc(50% - 6px)}
   .pw-ts .ts-export-note{padding:0 16px 14px}
