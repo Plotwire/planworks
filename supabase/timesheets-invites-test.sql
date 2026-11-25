@@ -114,9 +114,10 @@ begin
       end case;
       f := array_append(f, 'refuses: ' || t);
     exception when raise_exception then
-      if sqlerrm = case t when 'customer' then 'TS_INVITE_CUSTOMER' when 'self' then 'TS_INVITE_SELF'
-                          when 'other company' then 'TS_INVITE_OTHER_COMPANY' when 'no add-on' then 'TS_NO_ADDON'
-                          when 'bad email' then 'TS_INVITE_BAD_EMAIL' else 'TS_INVITE_BAD_NAME' end
+      -- The CASE is in brackets: an IF's condition ends at its first THEN.
+      if sqlerrm = (case t when 'customer' then 'TS_INVITE_CUSTOMER' when 'self' then 'TS_INVITE_SELF'
+                           when 'other company' then 'TS_INVITE_OTHER_COMPANY' when 'no add-on' then 'TS_NO_ADDON'
+                           when 'bad email' then 'TS_INVITE_BAD_EMAIL' else 'TS_INVITE_BAD_NAME' end)
       then p := p + 1; else f := array_append(f, 'refuses ' || t || ' (got ' || sqlerrm || ')'); end if;
     end;
   end loop;
