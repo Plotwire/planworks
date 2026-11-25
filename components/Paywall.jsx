@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { startCheckout } from "@/lib/billingClient";
 import { PRICE_GBP_MONTHLY } from "@/lib/pricing";
+import { CONFIRM_MESSAGES } from "@/lib/emailConfirm";
 
 const FEATURES = [
   "Unlimited drawings & symbols",
@@ -29,12 +30,43 @@ export function portalHandOffNote(status) {
 // or unpaid), not because the subscription ended. The subscription is still
 // running, so the way back is paying that invoice in Billing (Terms 4.6), not
 // a new subscription: the main button opens Billing.
-export default function Paywall({ user, onSignOut, onManageBilling, onBack, hasLapsed = false, paymentOverdue = false, notice = "" }) {
+// emailConfirm (lib/useEmailConfirm.js): subscribing needs a confirmed email
+// address. Until then the Subscribe button gives way to a short message and
+// Resend; nothing else is held up, and the server checks too.
+export default function Paywall({ user, onSignOut, onManageBilling, onBack, hasLapsed = false, paymentOverdue = false, notice = "", emailConfirm = null }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // Set when the server sends an existing subscriber to their billing page
   // instead of a second checkout (app/api/billing/checkout/route.js).
   const [portalNote, setPortalNote] = useState("");
+  // The server said the email must be confirmed first (in case this page
+  // thought it was).
+  const [serverSaysConfirm, setServerSaysConfirm] = useState(false);
+  const needsConfirm = emailConfirm?.status === "unconfirmed" || (serverSaysConfirm && emailConfirm?.status !== "confirmed");
+  const [confirmNote, setConfirmNote] = useState("");
+  const [confirmError, setConfirmError] = useState("");
+  const [resending, setResending] = useState(false);
+  const refresh = emailConfirm?.refresh;
+  // While it's waiting: look again every 15 seconds for 10 minutes, so it
+  // moves on by itself once the link is clicked on another device.
+  useEffect(() => {
+    if (!needsConfirm || !refresh) return undefined;
+    let n = 0;
+    const t = setInterval(() => { n += 1; if (n > 40) clearInterval(t); else if (document.visibilityState === "visible") refresh(); }, 15000);
+    return () => clearInterval(t);
+  }, [needsConfirm, refresh]);
+  useEffect(() => { if (emailConfirm?.status === "confirmed") setServerSaysConfirm(false); }, [emailConfirm?.status]);
+
+  const resendLink = async () => {
+    if (!emailConfirm?.resend) return;
+    setResending(true); setConfirmError(""); setConfirmNote("");
+    try {
+      await emailConfirm.resend();
+      setConfirmNote("Sent. Check your inbox, and your junk folder if it's not there.");
+    } catch (e) {
+      setConfirmError(e?.message || "That didn't work. Try again in a minute.");
+    } finally { setResending(false); }
+  };
 
   const payInBilling = async () => {
     setError(""); setPortalNote(""); setBusy(true);
@@ -49,6 +81,7 @@ export default function Paywall({ user, onSignOut, onManageBilling, onBack, hasL
       if (r?.portal) setPortalNote(portalHandOffNote(r.status));
     } catch (e) {
       setBusy(false);
+      if (e?.payload?.confirmEmail) { setServerSaysConfirm(true); refresh?.(); return; }
       setError(e?.message || "Couldn't start checkout. Try again in a moment.");
     }
   };
@@ -106,11 +139,27 @@ export default function Paywall({ user, onSignOut, onManageBilling, onBack, hasL
               </li>
             ))}
           </ul>
-          <button type="button" className="pick primary" onClick={overdue ? payInBilling : choose} disabled={busy}>
-            {overdue
-              ? (busy ? "Opening billing…" : "Open billing")
-              : busy ? (portalNote ? "Opening billing…" : "Redirecting…") : (hasLapsed ? "Re-subscribe" : "Subscribe")}
-          </button>
+          {needsConfirm && !overdue ? (
+            <div className="confirm-box" role="status">
+              <p className="confirm-head">{CONFIRM_MESSAGES.BEFORE_PAYING}</p>
+              <p className="confirm-text">
+                {emailConfirm?.email
+                  ? <>We&rsquo;ve sent a link to <b>{emailConfirm.email}</b>. Open it on any device, then come back here.</>
+                  : <>Open the link we emailed you on any device, then come back here.</>}
+              </p>
+              {confirmNote && <p className="confirm-msg">{confirmNote}</p>}
+              {confirmError && <p className="confirm-msg is-error" role="alert">{confirmError}</p>}
+              <button type="button" className="pick primary" onClick={resendLink} disabled={resending}>
+                {resending ? "Sending…" : "Resend link"}
+              </button>
+            </div>
+          ) : (
+            <button type="button" className="pick primary" onClick={overdue ? payInBilling : choose} disabled={busy}>
+              {overdue
+                ? (busy ? "Opening billing…" : "Open billing")
+                : busy ? (portalNote ? "Opening billing…" : "Redirecting…") : (hasLapsed ? "Re-subscribe" : "Subscribe")}
+            </button>
+          )}
           <div className="reassure">
             <span>Billed monthly</span><i /><span>Cancel anytime</span>
           </div>
@@ -164,6 +213,13 @@ const CSS = `
 .pick:hover:not(:disabled){background:var(--action-hover)}
 .pick:active:not(:disabled){transform:translateY(1px)}
 .pick:disabled{opacity:.6; cursor:default}
+.confirm-box{border-top:1px solid #E6EBF1; padding-top:16px}
+.confirm-head{font-weight:600; font-size:14.5px; color:#0E141B}
+.confirm-text{margin-top:6px; font-size:13.5px; line-height:1.5; color:#3A4654}
+.confirm-text b{overflow-wrap:anywhere}
+.confirm-msg{margin-top:8px; font-size:13px; color:#3A4654}
+.confirm-msg.is-error{color:#B91C1C}
+.confirm-box .pick{margin-top:14px}
 .reassure{display:flex; align-items:center; justify-content:center; gap:12px; margin-top:16px; color:#8b9bab; font-size:12px; font-family:var(--font-jetbrains-mono),monospace; letter-spacing:.04em}
 .reassure i{width:4px; height:4px; border-radius:50%; background:#c2ccd6}
 .secure{text-align:center; margin-top:22px; color:#8b9bab; font-size:12px; font-family:var(--font-jetbrains-mono),monospace; letter-spacing:.06em}

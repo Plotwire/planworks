@@ -2,6 +2,9 @@
 import { bearer, userFromToken, STRIPE_PRICE, returnOrigin, beginCheckout } from "@/lib/billing";
 import { rateCheck } from "@/lib/checkoutGuard";
 import { isOperativeUser, NOT_FOR_OPERATIVES } from "@/lib/timesheets/operative";
+import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { CONFIRM_MESSAGES } from "@/lib/emailConfirm";
+import { isEmailConfirmed } from "@/lib/emailConfirmServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,6 +44,9 @@ function allowStart(userId) {
 //                                      paid right now
 //   429 { error }                      too many attempts in a minute
 //   403 { error }                      a Timesheets operative's login
+//   403 { error, confirmEmail: true }  the account's email address isn't
+//                                      confirmed yet (lib/emailConfirm.js):
+//                                      it must be before anyone pays
 //   401 / 400 / 500 { error }
 // The browser goes to url either way (lib/billingClient.js).
 export async function POST(req) {
@@ -48,6 +54,11 @@ export async function POST(req) {
     const user = await userFromToken(bearer(req));
     if (!user) return NextResponse.json({ error: "Please sign in again." }, { status: 401 });
     if (isOperativeUser(user)) return NextResponse.json({ error: NOT_FOR_OPERATIVES }, { status: 403 });
+    // Confirmed email first: people get into Plotwire straight after signing
+    // up, but nobody subscribes until they've clicked a confirmation link.
+    if (!(await isEmailConfirmed(getSupabaseAdmin(), user))) {
+      return NextResponse.json({ error: CONFIRM_MESSAGES.BEFORE_PAYING, confirmEmail: true }, { status: 403 });
+    }
 
     const price = STRIPE_PRICE;
     if (!price) return NextResponse.json({ error: "Billing isn't configured yet." }, { status: 400 });
