@@ -153,6 +153,12 @@ function AppGates({ children, onOperative }) {
   const [companyLogo, setCompanyLogo] = useState(null); // company logo data-URI (BOQ documents)
   const [boqTemplate, setBoqTemplate] = useState(null); // null = use built-in default
   const [boqPrefs, setBoqPrefs] = useState(null);       // { vatOn } for new BOQs; null = defaults
+  // Where the account's settings (presets included) last came from: null
+  // until they're known, then "device", "server" or "none" (no copy here and
+  // no signal). The Presets & pricing page waits for it before showing the
+  // presets, and a new drawing waits for it before keeping its copy of them,
+  // so neither ever works from the built-in defaults by mistake.
+  const [settingsFrom, setSettingsFrom] = useState(null);
   const [symbolLibrary, setSymbolLibrary] = useState(null); // saved Symbol Library ticks ({ picks }); null = not loaded or never saved
   // The palette's Recent symbols ([{ id, at }], lib/recentSymbols.js); the
   // ref is the same list, for placing several before React re-renders.
@@ -418,10 +424,12 @@ function AppGates({ children, onOperative }) {
   // title block have them with no signal too.
   useEffect(() => {
     recentRef.current = []; setRecentSymbols([]); // never another account's
+    setSettingsFrom(null);
     if (!sessionUserId) { setTitleBlock(null); setBoqTemplate(null); setBoqPrefs(null); setSymbolLibrary(null); return; }
     let active = true;
-    readSettings(sessionUserId, (s) => {
+    readSettings(sessionUserId, (s, from) => {
       if (!active) return;
+      setSettingsFrom(from || "device");
       settingsRef.current = s || {};
       setTitleBlock(s?.titleBlock ? normaliseTitleBlock(s.titleBlock) : DEFAULT_TITLEBLOCK);
       setBoqTemplate(s?.boqTemplate || null);
@@ -683,6 +691,11 @@ function AppGates({ children, onOperative }) {
       // or scheme logo it does not cover is carried through.
       titleBlock: mergeTitleBlocks(companyBlock, titleBlock) || DEFAULT_TITLEBLOCK, saveTitleBlock, refreshCompany,
       boqTemplate, boqPrefs, saveBoqTemplate, saveBoqPrefs,
+      // True once the account's presets are known (see settingsFrom above):
+      // from this device's copy or the server. "none" (never loaded here, no
+      // signal) is NOT ready: the built-in defaults could hide real presets.
+      presetsReady: settingsFrom === "device" || settingsFrom === "server",
+      presetsFrom: settingsFrom,
       // Symbol Library: the saved ticks, as stored. picksFromSettings()
       // (lib/symbolLibrary.js) turns them into the ids the picker offers.
       symbolLibrary, saveSymbolPicks,

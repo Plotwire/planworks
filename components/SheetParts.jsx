@@ -8,7 +8,7 @@ import {
   Palette as PaletteIcon, Ruler, Hand, Type, Printer, Settings, Search, Sun, Moon, Mail,
   ChevronRight, ChevronLeft, X, FileText, PanelLeftClose, PanelLeftOpen,
   Grid3x3, ChevronDown, Check, ClipboardList, Plus, Clock, LayoutPanelTop, ImagePlus, SlidersHorizontal, Building2, PencilRuler, Keyboard,
-  Crop, Info, BoxSelect, AirVent,
+  Crop, Info, BoxSelect, AirVent, ArrowLeft,
 } from "lucide-react";
 import {
   SYMBOLS, SYMBOL_META, CATEGORY_COLOURS, VIEWBOX,
@@ -21,7 +21,7 @@ import { drawSymbol } from "@/lib/symbolPdf";
 import { WIRE_STRENGTHS, normaliseWireStrength, wireStyle } from "@/lib/wireStrength";
 import { LINE_TYPES, LINE_ARROWS, lineType, lineArrows, lineLook, runArrowHeads, linePoints, symbolGap, linesUsed } from "@/lib/lineTypes";
 import { FLOOR_LINKS } from "@/lib/symbolDrafts/marks";
-import { buildInitialBoq, addMissingLabour, reconcileBoq, hasTypedDrawingQtys, isDrawingLinked, newBoqItem, templateForEditing, templateForSaving, newTemplateItem } from "@/lib/boqTemplate";
+import { buildInitialBoq, addMissingLabour, reconcileBoq, hasTypedDrawingQtys, isDrawingLinked, newBoqItem, templateForEditing, templateForSaving, newTemplateItem, quoteStartPresets } from "@/lib/boqTemplate";
 import { useApp } from "@/components/AppShell";
 import { DEFAULT_TITLEBLOCK, resizeImageToDataUrl } from "@/lib/titleBlock";
 import { ensurePdfjs } from "@/lib/pdfjs";
@@ -2937,7 +2937,10 @@ export function ProjectManager({
  * ========================================================================= */
 
 /* ============================================================================
- * BOQ TEMPLATE EDITOR — edit the default items/specs/sections saved per account.
+ * PRESETS & PRICING — the full page (app/presets, from the dashboard) where
+ * the account's starting items, specs, prices and VAT are edited. Saved in the
+ * account's settings (boqTemplate, boqPrefs), as before. A new drawing keeps a
+ * copy as they are when it's started (lib/boqTemplate.js presetsSnapshot).
  * ========================================================================= */
 // onClose({ changed, saved }): changed -- anything was changed this time;
 // saved -- resolves to { ok, error } once what was typed is kept.
@@ -3027,81 +3030,83 @@ export function BoqTemplateEditor({ saved, savedPrefs, onSave, onClose }) {
     if (ok) { setFlash(true); setTimeout(() => setFlash(false), 1800); }
   };
 
-  const cell = "w-full bg-transparent outline-none rounded px-1.5 py-1 focus:bg-[#ECF8FA] focus:ring-1 focus:ring-[#3FB7C9]/40";
+  const cell = "w-full bg-transparent outline-none rounded-md px-2 py-1.5 focus:bg-[#ECF8FA] focus:ring-1 focus:ring-[#3FB7C9]/40";
 
+  // A full page (app/presets, reached from the dashboard's Presets & pricing
+  // section), not a box over a drawing: presets are set here, and a drawing's
+  // quote only ever changes its own prices.
   return (
-    <div className="fixed inset-0 z-[60] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={(e) => { e.stopPropagation(); close(); }}>
-      <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-2xl ring-1 ring-slate-200 w-full max-w-3xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
-        <div className="flex items-center justify-between px-6 h-14 bg-[#2C3E50] shrink-0">
-          <div>
-            <div className="text-[9px] tracking-[0.3em] uppercase text-[#9fd8e2]">Quote presets</div>
-            <div className="text-white font-semibold text-[15px] -mt-0.5" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>Default items, specs &amp; prices</div>
+    <div className="min-h-screen bg-[#F4F6F9] text-slate-800">
+      <header className="sticky top-0 z-20 bg-[#1A2530] shadow-sm">
+        <div className="max-w-5xl mx-auto flex items-center gap-3 px-4 sm:px-6 h-16">
+          <button onClick={close}
+            className="flex items-center gap-1.5 h-11 px-3 rounded-lg bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)] text-[13px] font-semibold shrink-0">
+            <ArrowLeft size={18}/> Dashboard
+          </button>
+          <div className="min-w-0 flex-1">
+            <div className="text-[10px] tracking-[0.3em] uppercase text-[#9fd8e2]">Presets &amp; pricing</div>
+            <h1 className="text-white font-semibold text-[17px] leading-tight truncate" style={{ fontFamily: "var(--font-space-grotesk), sans-serif" }}>Your starting items, specs &amp; prices</h1>
           </div>
-          <button onClick={close} aria-label="Close" className="text-slate-300 hover:text-white"><X size={18}/></button>
+          <div className="shrink-0"><StatusPill tone={status.tone} text={status.text} title={status.detail} size="sm" /></div>
         </div>
-        <div className="px-6 pt-3.5 pb-3 shrink-0">
-          <div role="note" className="flex items-start gap-2.5 rounded-lg border border-sky-300 bg-sky-50 px-3.5 py-2.5 text-[13px] leading-snug text-sky-950">
-            <Info size={17} className="mt-px shrink-0 text-sky-700" aria-hidden="true"/>
-            <span><b>Presets are your starting template.</b> Changes apply to new quotes only. Quotes you’ve already started keep their own wording and prices.</span>
-          </div>
+      </header>
+      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
+        <div role="note" className="flex items-start gap-3 rounded-xl border border-sky-300 bg-sky-50 px-4 py-3 text-[14px] leading-snug text-sky-950">
+          <Info size={20} className="mt-px shrink-0 text-sky-700" aria-hidden="true"/>
+          <span><b>These are the starting point for every new drawing.</b> A new drawing keeps the presets it was started with, and changing them here never changes a quote you’ve already started. Inside a drawing you can still change any price on its quote, for that job only.</span>
         </div>
-        <div className="px-6 py-2.5 bg-[#ECF8FA] border-y border-[#3FB7C9]/30 text-[11px] text-[#22808F]">
-          Edit the standard items, specs, prices and section names used every time a new quote is created. Items marked <b>auto</b> still pull their quantity from the drawing.
-          {" "}A <b>unit rate</b> here (your selling price, before VAT) fills in on every new quote, and you can still change it on any quote. Leave it blank for none.
-          {" "}Changes save as you type.
-        </div>
-        <div className="flex-1 overflow-y-auto px-6 py-4 text-slate-800">
-          {tpl.map((sec, si) => (
-            <div key={sec.key || si} className="mb-6">
-              <input value={sec.title} onChange={(e) => setTitle(si, e.target.value)}
-                className="text-[14px] font-bold text-slate-900 bg-transparent outline-none focus:bg-[#ECF8FA] rounded px-1 mb-1"/>
-              <table className="w-full border-collapse">
+        <p className="mt-3 text-[13px] leading-relaxed text-slate-600">
+          Items marked <b>auto</b> take their quantity from the drawing. A <b>unit rate</b> is your selling price for one, before VAT; leave it blank for none. Changes save as you type.
+        </p>
+        {tpl.map((sec, si) => (
+          <section key={sec.key || si} className="mt-5 bg-white rounded-2xl ring-1 ring-slate-200 px-4 sm:px-5 py-4">
+            <input value={sec.title} onChange={(e) => setTitle(si, e.target.value)} aria-label="Section name"
+              className="w-full text-[17px] font-bold text-slate-900 bg-transparent outline-none focus:bg-[#ECF8FA] rounded-md px-1.5 py-1 mb-1"/>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[560px] border-collapse">
                 <thead>
-                  <tr className="text-left text-slate-400 uppercase tracking-wider text-[8.5px] border-b border-slate-200">
-                    <th className="py-1.5 w-6">#</th><th className="py-1.5 pr-2">Item</th><th className="py-1.5 pr-2">Specification / Notes</th>
-                    <th className="py-1.5 w-12 text-center">Qty</th><th className="py-1.5 w-[88px] pr-1 text-right">Unit rate</th><th className="w-6"></th>
+                  <tr className="text-left text-slate-500 uppercase tracking-wider text-[11px] border-b border-slate-200">
+                    <th className="py-2 w-8">#</th><th className="py-2 pr-2">Item</th><th className="py-2 pr-2">Specification / notes</th>
+                    <th className="py-2 w-14 text-center">Qty</th><th className="py-2 w-[120px] pr-1 text-right">Unit rate</th><th className="w-9"></th>
                   </tr>
                 </thead>
                 <tbody>
                   {sec.items.map((it, ii) => (
                     <tr key={it.id} className="group border-b border-slate-100">
-                      <td className="py-0.5 text-slate-400 tabular-nums text-[11px]">{ii + 1}</td>
-                      <td className="py-0.5 pr-1"><input value={it.item} onChange={(e) => setItem(si, it.id, "item", e.target.value)} className={`${cell} text-[12px] font-medium text-slate-800`} placeholder="Item"/></td>
-                      <td className="py-0.5 pr-1"><input value={it.spec} onChange={(e) => setItem(si, it.id, "spec", e.target.value)} className={`${cell} text-[11px] text-slate-500`} placeholder="Spec / notes"/></td>
-                      <td className="py-0.5 text-center">{it.sf ? <span title="Quantity auto-fills from the drawing" className="text-[8px] uppercase tracking-wider text-[#22808F] bg-[#3FB7C9]/15 rounded px-1.5 py-0.5">auto</span> : <span className="text-slate-300 text-[10px]">—</span>}</td>
-                      <td className="py-0.5 pr-1">
-                        <div className="flex items-center gap-0.5">
-                          <span className="text-[11px] text-slate-400">£</span>
+                      <td className="py-1 text-slate-400 tabular-nums text-[13px]">{ii + 1}</td>
+                      <td className="py-1 pr-1"><input value={it.item} onChange={(e) => setItem(si, it.id, "item", e.target.value)} className={`${cell} text-[14px] font-medium text-slate-800`} placeholder="Item"/></td>
+                      <td className="py-1 pr-1"><input value={it.spec} onChange={(e) => setItem(si, it.id, "spec", e.target.value)} className={`${cell} text-[13px] text-slate-600`} placeholder="Spec / notes"/></td>
+                      <td className="py-1 text-center">{it.sf ? <span title="Quantity auto-fills from the drawing" className="text-[10px] uppercase tracking-wider text-[#22808F] bg-[#3FB7C9]/15 rounded px-1.5 py-0.5">auto</span> : <span className="text-slate-300 text-[12px]">—</span>}</td>
+                      <td className="py-1 pr-1">
+                        <div className="flex items-center gap-1">
+                          <span className="text-[13px] text-slate-400">£</span>
                           <NumField value={it.rate} keepBlank onChange={(v) => setItem(si, it.id, "rate", v)} aria-label={`Unit rate for ${it.item || "this line"}`}
                             title={parseNum(it.rate).bad ? "Not a number, so it won't be saved" : "Your selling price for one, before VAT. Blank for none."}
-                            className={`${cell} text-[12px] text-right tabular-nums${parseNum(it.rate).bad ? " ring-1 ring-amber-400 bg-amber-50" : ""}`} placeholder="—"/>
+                            className={`${cell} text-[14px] text-right tabular-nums${parseNum(it.rate).bad ? " ring-1 ring-amber-400 bg-amber-50" : ""}`} placeholder="—"/>
                         </div>
                       </td>
-                      <td className="py-0.5 text-center"><button onClick={() => removeItem(si, it.id)} aria-label="Delete line" className="opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 text-slate-300 hover:text-red-500"><X size={12}/></button></td>
+                      <td className="py-1 text-center"><button onClick={() => removeItem(si, it.id)} aria-label="Delete line" className="p-1.5 opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 text-slate-300 hover:text-red-500"><X size={16}/></button></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              <button onClick={() => addItem(si)} className="mt-2 text-[11px] text-[#22808F] hover:text-[#08313a] font-medium flex items-center gap-1"><Plus size={13}/> Add item to {sec.title}</button>
             </div>
-          ))}
-        </div>
-        <div className="flex items-center justify-between px-6 py-3 border-t border-slate-200 shrink-0">
-          <div className="flex items-center gap-4">
-            <label className="flex items-center gap-1.5 text-[11px] text-slate-700 cursor-pointer select-none">
-              <input type="checkbox" checked={vatOn} onChange={(e) => setVatOn(e.target.checked)} className="accent-[var(--action)]"/>
-              Charge VAT (20%)
-            </label>
-            <StatusPill tone={status.tone} text={status.text} title={status.detail} size="sm" />
-          </div>
+            <button onClick={() => addItem(si)} className="mt-3 text-[13px] text-[#22808F] hover:text-[#08313a] font-semibold flex items-center gap-1"><Plus size={16}/> Add item to {sec.title}</button>
+          </section>
+        ))}
+        <div className="mt-5 mb-10 bg-white rounded-2xl ring-1 ring-slate-200 px-4 sm:px-5 py-4 flex flex-wrap items-center justify-between gap-3">
+          <label className="flex items-center gap-2 text-[14px] text-slate-700 cursor-pointer select-none">
+            <input type="checkbox" checked={vatOn} onChange={(e) => setVatOn(e.target.checked)} className="w-5 h-5 accent-[var(--action)]"/>
+            Charge VAT (20%) on new quotes
+          </label>
           <div className="flex gap-2">
-            <button onClick={close} className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-md text-[10px] uppercase tracking-wider">Close</button>
-            <button onClick={doSave} disabled={busy} className={`px-4 py-2 rounded-md text-[10px] uppercase tracking-wider font-semibold flex items-center gap-1.5 ${flash ? "bg-emerald-500 text-white" : "bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)]"}`}>
+            <button onClick={close} className="h-11 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-[13px] font-semibold">Back to dashboard</button>
+            <button onClick={doSave} disabled={busy} className={`h-11 px-5 rounded-lg text-[13px] font-semibold flex items-center gap-1.5 ${flash ? "bg-emerald-500 text-white" : "bg-[var(--action)] text-[color:var(--action-ink)] hover:bg-[var(--action-hover)]"}`}>
               {flash ? "Saved ✓" : busy ? "Saving…" : "Save presets"}
             </button>
           </div>
         </div>
-      </div>
+      </main>
     </div>
   );
 }
@@ -3112,7 +3117,7 @@ export function BoqTemplateEditor({ saved, savedPrefs, onSave, onClose }) {
 // action?, onAction? }, components/ElectricalPlanTool quoteStatus), shown by
 // Close, so it's never left unsaid.
 export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false, saveStatus = null }) {
-  const { boqTemplate, boqPrefs, saveBoqTemplate, saveBoqPrefs, companyBrand, access = {} } = useApp();
+  const { boqTemplate, boqPrefs, saveBoqPrefs, companyBrand, access = {} } = useApp();
   const [customOpen, setCustomOpen] = useState(false);
   // Try mode: everything on screen works -- prices, totals, labour, VAT,
   // client fields, On-quote ticks, both outputs. Only the downloads (PDF and
@@ -3125,28 +3130,19 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
     return false;
   };
   const meta = project.meta || {};
+  // A started quote is the drawing's own: opened as it was saved. A drawing's
+  // first quote is built from the Presets & pricing the drawing was started
+  // with (its own copy, lib/boqTemplate.js quoteStartPresets), or, for a
+  // drawing made before copies existed, the presets as they are now. Presets
+  // are edited on the dashboard (app/presets), not in here: prices changed on
+  // this quote are for this job only.
   const [boq, setBoq] = useState(() => {
+    const start = quoteStartPresets(project, boqTemplate, boqPrefs);
     const base = project.boq
       ? addMissingLabour(project.boq, boqTemplate)
-      : buildInitialBoq(project, SYMBOL_META, findSymbol, boqTemplate, boqPrefs);
+      : buildInitialBoq(project, SYMBOL_META, findSymbol, start.template, start.prefs);
     return reconcileBoq(base, project, SYMBOL_META, findSymbol);
   });
-  const [showTemplate, setShowTemplate] = useState(false);
-  // After the presets box closes with changes in it: "saved" (for a few
-  // seconds) or { error } -- never silent. The presets' upload, to say so if
-  // the account wouldn't take them.
-  const [presetNote, setPresetNote] = useState(null);
-  const [presetUpload, setPresetUpload] = useState({ state: "saved", error: null });
-  useEffect(() => watchSettingsUpload(setPresetUpload), []);
-  useEffect(() => {
-    if (presetNote !== "saved") return;
-    const t = setTimeout(() => setPresetNote(null), 7000);
-    return () => clearTimeout(t);
-  }, [presetNote]);
-  const closePresets = ({ changed = false, saved = null } = {}) => {
-    setShowTemplate(false);
-    if (changed && saved) saved.then((r) => setPresetNote(r.ok ? "saved" : { error: r.error || "unknown error" }));
-  };
 
   // Persist edits to the project (saved with the project on Save).
   useEffect(() => { updateBoq?.(boq); /* eslint-disable-next-line */ }, [boq]);
@@ -3226,7 +3222,7 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
     setBoq(b => reconcileBoq(b, project, SYMBOL_META, findSymbol, { overrideTyped: true }));
   };
   const resetToTemplate = () => {
-    if (!window.confirm("Rebuild this quote from your saved presets and the current drawing? Quantities re-pull from the drawing, and every price goes back to your preset price (blank where a preset line has none).")) return;
+    if (!window.confirm("Rebuild this quote from your current Presets & pricing (on the dashboard) and the current drawing? Quantities re-pull from the drawing, and every price goes back to your preset price (blank where a preset line has none). Only this job's quote changes.")) return;
     setBoq(buildInitialBoq(project, SYMBOL_META, findSymbol, boqTemplate, boqPrefs));
   };
 
@@ -3324,30 +3320,13 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
             {readOnly ? (
               <span className="px-2.5 py-1 rounded-md text-[10px] uppercase tracking-wider font-semibold bg-amber-100 text-amber-900">View only</span>
             ) : (
-              <button onClick={() => setShowTemplate(true)} title="Edit the default items/specs used for every quote"
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[10px] uppercase tracking-wider font-semibold bg-[#3FB7C9]/20 text-[#9fd8e2] ring-1 ring-[#3FB7C9]/50 hover:bg-[#3FB7C9]/30">
-                <SlidersHorizontal size={13}/> Presets
-              </button>
+              <span className="hidden sm:inline text-[11px] text-[#9fd8e2]" title="Your presets for new drawings are in Presets & pricing on the dashboard">
+                Prices here are for this job only
+              </span>
             )}
             <button onClick={onClose} aria-label="Close" className="text-slate-300 hover:text-white"><X size={18}/></button>
           </div>
         </div>
-
-        {presetNote && (() => {
-          const refused = presetNote === "saved" && presetUpload.state === "failed";
-          const bad = presetNote !== "saved" || refused;
-          return (
-            <div role="status" className={`flex items-center gap-2 px-6 py-2 border-b text-[12px] shrink-0 ${bad ? "bg-red-50 border-red-200 text-red-900" : "bg-emerald-50 border-emerald-200 text-emerald-900"}`}>
-              <StatusIcon tone={bad ? "red" : "green"} size={16}/>
-              <span>{presetNote !== "saved"
-                ? `Presets couldn't be saved (${presetNote.error}). Open Presets and press Save presets to try again. This quote is unchanged.`
-                : refused
-                  ? "Presets saved on this device, but your account wouldn't take them yet. Plotwire keeps trying. This quote is unchanged."
-                  : "Presets saved. This quote is unchanged. Edit its lines directly if needed."}</span>
-              <button onClick={() => setPresetNote(null)} aria-label="Dismiss" className="ml-auto opacity-60 hover:opacity-100"><X size={14}/></button>
-            </div>
-          );
-        })()}
 
         {readOnly && (
           <div className="px-6 py-2 bg-amber-50 border-b border-amber-200 text-[11.5px] text-amber-900 shrink-0">
@@ -3569,7 +3548,7 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
               className="px-3 py-2 text-[10px] uppercase tracking-wider text-[#22808F] hover:bg-[#ECF8FA] rounded-md font-semibold flex items-center gap-1.5">
               <RotateCw size={12}/> Refresh from drawing
             </button>
-            <button onClick={resetToTemplate} title="Rebuild this quote from your saved presets"
+            <button onClick={resetToTemplate} title="Rebuild this quote from your current Presets & pricing (on the dashboard). Only this job changes."
               className="px-3 py-2 text-[10px] uppercase tracking-wider text-slate-400 hover:text-[#22808F] hover:bg-[#ECF8FA] rounded-md font-semibold">
               Reset to presets
             </button>
@@ -3597,14 +3576,6 @@ export function BillOfQuantities({ project, updateBoq, onClose, readOnly = false
       <TryPrompt open={Boolean(tryPrompt.prompt)} title={tryPrompt.prompt?.title} body={tryPrompt.prompt?.body}
         onSubscribe={() => { tryPrompt.hide(); access.openSubscribe?.(); }} onClose={tryPrompt.hide} />
 
-      {showTemplate && (
-        <BoqTemplateEditor
-          saved={boqTemplate}
-          savedPrefs={boqPrefs}
-          onSave={async (tpl, prefs) => { await saveBoqTemplate?.(tpl, prefs); }}
-          onClose={closePresets}
-        />
-      )}
     </div>
   );
 }

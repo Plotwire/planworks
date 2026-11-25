@@ -19,6 +19,30 @@ import { useTimesheetsAddon } from "@/lib/timesheets/useTimesheetsAddon";
 import { StatusIcon, StatusPill } from "@/components/StatusMark";
 import { hasSignal, subscribeSignal, noteServer, looksLikeNoSignal } from "@/lib/device/connection";
 
+// A price tag: the Presets button in the left rail.
+const PRICE_TAG_ICON = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round">
+    <path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>
+  </svg>
+);
+
+// One button in the dashboard's left rail (styles: .navitem below). With a
+// mouse, hovering anywhere on it slides out a teal pill with its full name,
+// over the page; on touch (no hover), its short name sits under the icon.
+// No browser tooltip (no title), so there's only the one behaviour.
+function RailItem({ icon, name, short, onClick, active = false }) {
+  const press = (e) => {
+    if (onClick && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onClick(); }
+  };
+  return (
+    <div className={`navitem${active ? " active" : ""}`} role={onClick ? "button" : undefined} tabIndex={onClick ? 0 : undefined}
+         aria-label={name} aria-current={active ? "page" : undefined} onClick={onClick} onKeyDown={press}>
+      <span className="navpill">{icon}<span className="navname">{name}</span></span>
+      <span className="navshort" aria-hidden="true">{short}</span>
+    </div>
+  );
+}
+
 /* Sheet geometry — must match ElectricalPlanTool */
 const SHEET = { width: 1587, height: 1123, margin: 18, legendWidth: 230, notesWidth: 280, titleHeight: 110 };
 const DRAW = {
@@ -101,7 +125,7 @@ function PlanThumb({ project }) {
   );
 }
 
-export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSketch, onPlanner, onBusiness, onSymbols, onTimesheets, theme, onToggleTheme, user, onSignOut }) {
+export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSketch, onPlanner, onBusiness, onSymbols, onPresets, onTimesheets, theme, onToggleTheme, user, onSignOut }) {
   const { manageBilling, subscription, access = {} } = useApp();
   // The Timesheets rail item shows only for accounts with the add-on.
   const timesheets = useTimesheetsAddon(user?.id);
@@ -362,14 +386,15 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
           <div className="brandmark" title="Plotwire">
             <svg viewBox="0 0 24 24" fill="none"><path d="M13 2 4 13h6l-1 9 9-11h-6l1-9z" fill="#08313a"/></svg>
           </div>
-          <div className="navitem active" title="Dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg></div>
-          <div className="navitem" title="All drawings" onClick={showAllDrawings} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></div>
-          <div className="navitem" title="Symbol library" onClick={onSymbols} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="7" cy="7" r="3.2"/><rect x="14" y="4" width="6" height="6" rx="1.4"/><path d="M4 15h6v6H4zM14 18h6"/><circle cx="17" cy="18" r="3.2"/></svg></div>
-          <div className="navitem" title="Work planner" onClick={onPlanner} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M7 13h3M7 17h3M14 13h3"/></svg></div>
-          {timesheets.status === "on" && <div className="navitem" title="Timesheets" onClick={onTimesheets} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>}
+          <RailItem active name="Dashboard" short="Dashboard" icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>} />
+          <RailItem name="All drawings" short="Drawings" onClick={showAllDrawings} icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>} />
+          <RailItem name="Symbol library" short="Symbols" onClick={onSymbols} icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="7" cy="7" r="3.2"/><rect x="14" y="4" width="6" height="6" rx="1.4"/><path d="M4 15h6v6H4zM14 18h6"/><circle cx="17" cy="18" r="3.2"/></svg>} />
+          <RailItem name="Work planner" short="Planner" onClick={onPlanner} icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M7 13h3M7 17h3M14 13h3"/></svg>} />
+          {timesheets.status === "on" && <RailItem name="Timesheets" short="Timesheets" onClick={onTimesheets} icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>} />}
+          <RailItem name="Presets" short="Presets" onClick={onPresets} icon={PRICE_TAG_ICON} />
           <div className="rail-spacer"></div>
           <HelpMenu />
-          <div className="navitem" title="Edit business information" onClick={onBusiness} style={{ cursor: "pointer" }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 13a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 0 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9 2 2 0 0 1 0-4 1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 2.9-1.2 2 2 0 0 1 4 0 1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9 2 2 0 0 1 0 4 1.7 1.7 0 0 0-1.5 1z"/></svg></div>
+          <RailItem name="Business information" short="Business" onClick={onBusiness} icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 13a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 0 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9 2 2 0 0 1 0-4 1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 2.9-1.2 2 2 0 0 1 4 0 1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9 2 2 0 0 1 0 4 1.7 1.7 0 0 0-1.5 1z"/></svg>} />
           <div className="rail-avatar">{(displayName(user) || user?.email || "?").slice(0, 2).toUpperCase()}</div>
         </aside>
 
@@ -767,11 +792,40 @@ const CSS = `
 .pw-home .rail::after{content:""; position:absolute; inset:0 0 0 auto; width:1px; background:rgba(255,255,255,.05)}
 .pw-home .brandmark{width:42px; height:42px; border-radius:12px; background:linear-gradient(150deg,var(--teal),var(--teal-700)); display:grid; place-items:center; margin-bottom:18px; box-shadow:0 6px 16px -4px rgba(63,183,201,.5)}
 .pw-home .brandmark svg{width:22px; height:22px}
-.pw-home .navitem{width:46px; height:46px; border-radius:12px; display:grid; place-items:center; color:#8190a0; cursor:pointer; transition:all .18s ease; position:relative}
-.pw-home .navitem svg{width:21px; height:21px}
-.pw-home .navitem:hover{color:var(--navy); background:var(--teal-600)}
-.pw-home .navitem.active{color:#fff; background:rgba(63,183,201,.16)}
-.pw-home .navitem.active::before{content:""; position:absolute; left:-18px; top:11px; bottom:11px; width:3px; border-radius:0 3px 3px 0; background:var(--teal)}
+/* Left rail (Joe, 17 Nov). Mouse: teal icons; hovering anywhere on an item
+   slides out a teal pill with its name, over the page (it never pushes the
+   page sideways), in about 150 ms, and back when the mouse leaves. Touch (no
+   hover): the teal icon with its short name underneath, always shown. The
+   page you're on stays highlighted. */
+.pw-home .rail{z-index:30}
+.pw-home .navitem{position:relative; width:52px; height:48px; flex-shrink:0; cursor:pointer; color:var(--teal); outline:none; border-radius:12px}
+.pw-home .navpill{position:absolute; left:0; top:0; height:48px; max-width:52px; display:flex; align-items:center; gap:12px; padding-left:16px; overflow:hidden; white-space:nowrap; border-radius:12px; transition:max-width .15s ease, background-color .15s ease, color .15s ease, box-shadow .15s ease}
+.pw-home .navpill svg{width:20px; height:20px; flex-shrink:0}
+.pw-home .navname{font-family:var(--font-inter),system-ui,sans-serif; font-size:14px; font-weight:600; padding-right:18px; opacity:0; transition:opacity .15s ease}
+.pw-home .navshort{display:none}
+.pw-home .navitem.active .navpill{background:rgba(63,183,201,.18); color:#5FD0E0; box-shadow:inset 0 0 0 1.5px rgba(63,183,201,.55)}
+.pw-home .navitem.active::before{content:""; position:absolute; left:-11px; top:12px; bottom:12px; width:3px; border-radius:0 3px 3px 0; background:var(--teal)}
+@media (hover:hover) and (pointer:fine){
+  .pw-home .navitem:hover .navpill, .pw-home .navitem:focus-visible .navpill{max-width:260px; background:var(--action); color:#fff; box-shadow:0 10px 24px -10px rgba(0,0,0,.55); z-index:5}
+  .pw-home .navitem.is-open .navpill{background:var(--action); color:#fff}
+  .pw-home .navitem:hover .navname, .pw-home .navitem:focus-visible .navname{opacity:1}
+}
+@media (hover:none), (pointer:coarse){
+  .pw-home .navitem{width:64px; height:auto; min-height:52px; padding:6px 0 5px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px}
+  .pw-home .navpill{position:static; height:auto; max-width:none; padding:0; overflow:visible; background:none; box-shadow:none}
+  .pw-home .navname{display:none}
+  .pw-home .navshort{display:block; font-size:10px; font-weight:600; line-height:1.1; color:#9fd8e2; text-align:center; white-space:nowrap}
+  .pw-home .navitem.active{background:rgba(63,183,201,.18); box-shadow:inset 0 0 0 1.5px rgba(63,183,201,.55)}
+  .pw-home .navitem.active .navpill{background:none; box-shadow:none}
+  .pw-home .navitem.active::before{left:-5px}
+  .pw-home .navitem.is-open{background:var(--action)}
+  .pw-home .navitem.is-open, .pw-home .navitem.is-open .navshort{color:#fff}
+}
+@media (max-width:720px) and (hover:none), (max-width:720px) and (pointer:coarse){
+  .pw-home .navitem{width:56px}
+  .pw-home .navshort{font-size:9px; letter-spacing:-.01em}
+  .pw-home .navitem.active::before{left:-2px}
+}
 .pw-home .rail-spacer{flex:1}
 .pw-home .rail-avatar{width:40px; height:40px; border-radius:50%; background:var(--navy-2); border:1.5px solid var(--navy-line); color:#cdd6e0; display:grid; place-items:center; font-weight:600; font-size:13px; cursor:pointer; font-family:var(--font-space-grotesk),sans-serif; margin-top:6px}
 .pw-home .main{flex:1; display:flex; flex-direction:column; min-width:0}
@@ -945,7 +999,6 @@ html.dark .pw-home .offline-strip[data-tone=red]{background:#2E1A1A; border-colo
 @media (max-width:560px){.pw-home .offline-details dl{grid-template-columns:1fr}.pw-home .offline-details dd{margin-bottom:6px}}
 /* Help in the side menu (components/OfflinePanel.jsx HelpMenu) */
 .pw-home .help-wrap{position:relative}
-.pw-home .navitem.is-open{color:var(--navy); background:var(--teal-600)}
 .pw-home .help-menu{position:absolute; left:calc(100% + 24px); bottom:0; z-index:40; width:260px; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:6px; box-shadow:0 18px 40px -12px rgba(11,17,23,.4)}
 .pw-home .help-head{font-family:var(--font-jetbrains-mono),monospace; font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); padding:8px 10px 6px}
 .pw-home .help-item{display:flex; align-items:center; gap:10px; width:100%; text-align:left; padding:10px; border:0; border-radius:8px; background:transparent; color:var(--ink); font:500 13.5px var(--font-inter),system-ui,sans-serif; cursor:pointer}
