@@ -1,20 +1,32 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronLeft, ChevronRight, Download, FileSpreadsheet, Lock, RotateCcw, Users } from "lucide-react";
+import {
+  ChevronDown, ChevronLeft, ChevronRight, Download, FileSpreadsheet, Lock, RotateCcw, Users, UserPlus, UserMinus, Send, X,
+} from "lucide-react";
 import { StatusIcon } from "@/components/StatusMark";
 import { listEntries, listWeeks, listTeam, reopenWeek, entryErrorMessage } from "@/lib/timesheets/entries";
 import {
-  weekDays, addDays, weekLabel, DAY_SHORT, hhmm, formatHours, totals, parseDay,
+  weekDays, addDays, mondayOf, weekLabel, DAY_SHORT, hhmm, formatHours, totals, parseDay,
 } from "@/lib/timesheets/week";
 import { entriesCsv, csvFileName } from "@/lib/timesheets/csv";
 import { timesheetWorkbook, xlsxFileName, XLSX_TYPE } from "@/lib/timesheets/workbook";
-import { Alert, CardHead, EmptyState, JobName } from "@/components/timesheets/parts";
+import { cleanInvite, INVITE_DAYS } from "@/lib/timesheets/invites";
+import { inviteWorker, resendInvite, cancelInvite, removeWorker } from "@/lib/timesheets/team";
+import { Alert, CardHead, Dialog, EmptyState, JobName } from "@/components/timesheets/parts";
 
 // The boss's view of the team's weeks: each worker's week with totals per day
 // and per job, whether it's submitted, a way to reopen a submitted week, and
-// the export. Hours only. The database only ever gives this account its own
-// team (supabase/timesheets.sql, timesheets-week.sql).
+// the export. Hours only. Any week can be looked at (arrows, or a date); a
+// week is read-only here, and a worker can change it again once it's
+// reopened. Also: inviting workers, invites waiting (Resend, Cancel) and
+// removing a worker (their hours stay). The database only ever gives this
+// account its own team (supabase/timesheets.sql, timesheets-week.sql,
+// timesheets-invites.sql).
+
+const isWaiting = (o) => o.status === "invited" && !o.has_login;
+const ranOut = (o) => o.invited_at && Date.now() - new Date(o.invited_at).getTime() > INVITE_DAYS * 86400000;
+const firstName = (name) => String(name || "").split(" ")[0];
 
 const stamp = (ts) => {
   try {
@@ -23,7 +35,7 @@ const stamp = (ts) => {
 };
 const shortDate = (iso) => parseDay(iso).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
 
-export default function WorkersPanel({ thisMonday }) {
+export default function WorkersPanel({ thisMonday, onTeamChange }) {
   const [monday, setMonday] = useState(thisMonday);
   const [team, setTeam] = useState(null);
   const [entries, setEntries] = useState(null);
@@ -33,7 +45,15 @@ export default function WorkersPanel({ thisMonday }) {
   const [asking, setAsking] = useState(null);    // operative id waiting for "Reopen?" yes
   const [busy, setBusy] = useState(null);
   const [rowError, setRowError] = useState("");
+  const [done, setDone] = useState("");          // "Invite sent to …" and the like
+  const [inviting, setInviting] = useState(null); // the Invite form: { name, email } while open
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [inviteError, setInviteError] = useState("");
+  const [confirm, setConfirm] = useState(null);  // { kind: "cancel" | "remove", id } waiting for a yes
   const seq = useRef(0);
+
+  // Any week: Monday of the date picked, never past this week.
+  const goTo = (iso) => { if (iso) setMonday((m) => { const mon = mondayOf(iso); return mon > thisMonday ? thisMonday : mon; }); };
 
   const days = weekDays(monday);
   const sunday = days[6];
@@ -52,13 +72,59 @@ export default function WorkersPanel({ thisMonday }) {
   useEffect(() => { load(); }, [load]);
 
   // Everyone on the team, plus anyone removed since who has hours this week.
+  // Invites nobody has accepted yet are listed on their own.
   const people = useMemo(() => {
     if (!team || !entries) return [];
     const withHours = new Set(entries.map((e) => e.operative_id));
     return team
-      .filter((o) => o.status !== "removed" || withHours.has(o.id))
+      .filter((o) => !isWaiting(o) && (o.status !== "removed" || withHours.has(o.id)))
       .sort((a, b) => a.name.localeCompare(b.name, "en"));
   }, [team, entries]);
+  const waiting = useMemo(() => (team || []).filter(isWaiting)
+    .sort((a, b) => String(a.invited_at).localeCompare(String(b.invited_at))), [team]);
+
+  const refreshTeam = async () => {
+    try { setTeam(await listTeam()); } catch { /* the next load shows it */ }
+    onTeamChange?.();
+  };
+
+  // Team actions go through Plotwire's server (lib/timesheets/team.js).
+  const sendInvite = async (ev) => {
+    ev.preventDefault();
+    const clean = cleanInvite(inviting);
+    if (clean.error) { setInviteError(clean.error); return; }
+    setInviteBusy(true);
+    setInviteError("");
+    try {
+      const res = await inviteWorker(clean.value.name, clean.value.email);
+      setInviting(null);
+      setDone(`${res.outcome === "resent" ? "Invite sent again to" : "Invite sent to"} ${clean.value.email}.`);
+      await refreshTeam();
+    } catch (err) {
+      if (err.body?.saved) { setInviting(null); setRowError(err.message); await refreshTeam(); }
+      else setInviteError(err.message);
+    } finally {
+      setInviteBusy(false);
+    }
+  };
+
+  const act = async (person, kind) => {
+    setBusy(person.id);
+    setRowError("");
+    setDone("");
+    try {
+      if (kind === "resend") { await resendInvite(person.id); setDone(`Invite sent again to ${person.email}.`); }
+      if (kind === "cancel") { await cancelInvite(person.id); setDone(`Invite to ${person.name} cancelled.`); }
+      if (kind === "remove") { await removeWorker(person.id); setDone(`${person.name} is off your team. Their hours stay in your records.`); }
+      setConfirm(null);
+      await refreshTeam();
+    } catch (err) {
+      setRowError(err.message);
+      if (err.body?.saved) await refreshTeam();
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const reopen = async (person) => {
     setBusy(person.id);
@@ -94,9 +160,59 @@ export default function WorkersPanel({ thisMonday }) {
               <ChevronRight strokeWidth={2.2} />
             </button>
           </div>
+          <div className="ts-jump">
+            <label className="ts-jump-date">
+              <span>Go to date</span>
+              <input type="date" value={monday} max={addDays(thisMonday, 6)} onChange={(e) => goTo(e.target.value)} />
+            </label>
+            {monday !== thisMonday && (
+              <button type="button" className="ts-btn" onClick={() => setMonday(thisMonday)}>This week</button>
+            )}
+          </div>
+          <button type="button" className="ts-btn is-primary" onClick={() => { setInviting({ name: "", email: "" }); setInviteError(""); }}>
+            <UserPlus strokeWidth={2.1} /><span>Invite worker</span>
+          </button>
         </CardHead>
 
+        {done && <p className="ts-card-done" role="status"><StatusIcon tone="green" size={16} />{done}</p>}
         {rowError && <div className="ts-card-alert"><Alert>{rowError}</Alert></div>}
+
+        {ready && waiting.length > 0 && (
+          <div className="ts-waiting" aria-label="Invites waiting">
+            <h3>Invites waiting <i>{waiting.length}</i></h3>
+            {waiting.map((o) => (
+              <div key={o.id} className="ts-waiting-row">
+                <div className="ts-waiting-who">
+                  <b>{o.name}</b>
+                  <span>{o.email}</span>
+                </div>
+                <span className="ts-pill is-amber">
+                  <StatusIcon tone="amber" size={15} />{ranOut(o) ? "Link has run out" : `Sent ${stamp(o.invited_at)}`}
+                </span>
+                <div className="ts-waiting-actions">
+                  {confirm?.kind === "cancel" && confirm.id === o.id ? (
+                    <span className="ts-ask">
+                      <span>Cancel {firstName(o.name)}&rsquo;s invite?</span>
+                      <button type="button" className="ts-btn" onClick={() => act(o, "cancel")} disabled={busy === o.id}>
+                        <X strokeWidth={2.2} /><span>{busy === o.id ? "Cancelling…" : "Cancel invite"}</span>
+                      </button>
+                      <button type="button" className="ts-btn is-quiet" onClick={() => setConfirm(null)} disabled={busy === o.id}>Keep</button>
+                    </span>
+                  ) : (
+                    <>
+                      <button type="button" className="ts-btn" onClick={() => act(o, "resend")} disabled={busy === o.id}>
+                        <Send strokeWidth={2} /><span>{busy === o.id ? "Sending…" : "Resend"}</span>
+                      </button>
+                      <button type="button" className="ts-btn" onClick={() => setConfirm({ kind: "cancel", id: o.id })} disabled={busy === o.id}>
+                        <X strokeWidth={2.2} /><span>Cancel</span>
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {failed ? (
           <div className="ts-card-alert">
@@ -110,8 +226,9 @@ export default function WorkersPanel({ thisMonday }) {
             ))}
           </div>
         ) : people.length === 0 ? (
-          <EmptyState icon={<Users strokeWidth={1.8} />} title="No workers yet"
-            text="Once workers are on your team, their weeks show here." />
+          <EmptyState icon={<Users strokeWidth={1.8} />} title={waiting.length ? "No one has joined yet" : "No workers yet"}
+            text={waiting.length ? "Once a worker accepts their invite, their week shows here."
+              : "Invite your workers by email. Each one gets a link to set a password and record their hours."} />
         ) : (
           <div className="ts-workers">
             {people.map((person) => {
@@ -127,7 +244,9 @@ export default function WorkersPanel({ thisMonday }) {
                   <header className="ts-worker-head">
                     <div className="ts-worker-name">
                       <h3>{person.name}{person.status === "removed" && <span className="ts-badge">Removed</span>}</h3>
-                      {status === "submitted" ? (
+                      {person.status === "invited" ? (
+                        <span className="ts-pill is-amber"><StatusIcon tone="amber" size={15} />Joined, setting up</span>
+                      ) : status === "submitted" ? (
                         <span className="ts-pill is-green"><Lock strokeWidth={2.4} />Submitted {stamp(week.submitted_at)}</span>
                       ) : status === "reopened" ? (
                         <span className="ts-pill is-amber"><StatusIcon tone="amber" size={15} />Reopened {stamp(week.reopened_at)}</span>
@@ -180,6 +299,19 @@ export default function WorkersPanel({ thisMonday }) {
                         <RotateCcw strokeWidth={2} /><span>Reopen week</span>
                       </button>
                     ))}
+                    {person.status !== "removed" && (confirm?.kind === "remove" && confirm.id === person.id ? (
+                      <span className="ts-ask is-remove">
+                        <span>Remove {firstName(person.name)} from your team? They won&rsquo;t be able to sign in. Their hours stay in your records.</span>
+                        <button type="button" className="ts-btn" onClick={() => act(person, "remove")} disabled={busy === person.id}>
+                          <UserMinus strokeWidth={2} /><span>{busy === person.id ? "Removing…" : "Remove"}</span>
+                        </button>
+                        <button type="button" className="ts-btn is-quiet" onClick={() => setConfirm(null)} disabled={busy === person.id}>Keep</button>
+                      </span>
+                    ) : (
+                      <button type="button" className="ts-btn ts-remove" onClick={() => setConfirm({ kind: "remove", id: person.id })}>
+                        <UserMinus strokeWidth={2} /><span>Remove</span>
+                      </button>
+                    ))}
                   </div>
 
                   {showing && (
@@ -209,6 +341,28 @@ export default function WorkersPanel({ thisMonday }) {
       </section>
 
       <ExportCard monday={monday} team={team} />
+
+      {inviting && (
+        <Dialog title="Invite a worker" icon={<UserPlus size={19} strokeWidth={1.8} />} busy={inviteBusy} error={inviteError}
+                saveLabel="Send invite" onCancel={() => setInviting(null)} onSubmit={sendInvite}>
+          <div className="ts-fields">
+            <label className="ts-field is-wide">
+              <span className="ts-label">Name</span>
+              <input type="text" value={inviting.name} maxLength={80} autoFocus disabled={inviteBusy} placeholder="e.g. Dave Smith"
+                     onChange={(e) => { setInviting((f) => ({ ...f, name: e.target.value })); setInviteError(""); }} />
+            </label>
+            <label className="ts-field is-wide">
+              <span className="ts-label">Email</span>
+              <input type="email" value={inviting.email} maxLength={254} disabled={inviteBusy} placeholder="their own email address"
+                     autoComplete="off" onChange={(e) => { setInviting((f) => ({ ...f, email: e.target.value })); setInviteError(""); }} />
+            </label>
+          </div>
+          <p className="ts-dialog-note">
+            They&rsquo;ll get an email with a link to set a password ({INVITE_DAYS} days to use it). Their login only ever opens their own
+            timesheet. An email that already has its own Plotwire account can&rsquo;t be used.
+          </p>
+        </Dialog>
+      )}
     </>
   );
 }
