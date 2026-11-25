@@ -306,6 +306,15 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
     drawingsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
+  // "All drawings" in another screen's rail (components/AppRailLinks.jsx)
+  // opens the dashboard at /#drawings: scroll there, and tidy the address.
+  useEffect(() => {
+    if (typeof window === "undefined" || window.location.hash !== "#drawings") return undefined;
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    const t = setTimeout(showAllDrawings, 150);
+    return () => clearTimeout(t);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     load();
     setPending(localProjectsPending());

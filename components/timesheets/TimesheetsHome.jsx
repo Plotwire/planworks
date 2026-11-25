@@ -74,13 +74,8 @@ export default function TimesheetsHome({ onClose }) {
           <button type="button" className="ts-brandmark" onClick={onClose} title="Plotwire dashboard" aria-label="Plotwire dashboard">
             <svg viewBox="0 0 24 24" fill="none"><path d="M13 2 4 13h6l-1 9 9-11h-6l1-9z" fill="#08313a"/></svg>
           </button>
-          <button type="button" className="ts-nav" onClick={onClose} title="Dashboard" aria-label="Dashboard">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
-          </button>
-          <AppRailLinks className="ts-nav" />
-          <div className="ts-nav is-active" title="Timesheets" aria-current="page">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
-          </div>
+          {/* The same rail as the dashboard's (components/AppRailLinks.jsx). */}
+          <AppRailLinks current="timesheets" />
           <div className="ts-rail-spacer" />
           <div className="ts-rail-avatar" aria-hidden="true">{initials}</div>
         </aside>
@@ -231,10 +226,40 @@ html.dark .pw-ts{--ink:#E7EDF3; --ink-2:#B6C2CE; --muted:#8595A3; --muted-2:#6B7
 .pw-ts .ts-rail::after{content:""; position:absolute; inset:0 0 0 auto; width:1px; background:rgba(255,255,255,.05)}
 .pw-ts .ts-brandmark{width:42px; height:42px; border:0; border-radius:12px; background:linear-gradient(150deg,var(--teal),var(--teal-700)); display:grid; place-items:center; margin-bottom:18px; box-shadow:0 6px 16px -4px rgba(63,183,201,.5); cursor:pointer}
 .pw-ts .ts-brandmark svg{width:22px; height:22px}
-.pw-ts .ts-nav{width:46px; height:46px; border:0; border-radius:12px; background:transparent; display:grid; place-items:center; color:#8190a0; cursor:pointer; transition:all .18s ease; position:relative; text-decoration:none}
-.pw-ts .ts-nav svg{width:21px; height:21px}
-.pw-ts .ts-nav:hover{color:var(--navy); background:var(--teal-600)}
-.pw-ts .ts-nav.is-active,.pw-ts .ts-nav.is-active:hover{color:#fff; background:rgba(63,183,201,.16); cursor:default}
+/* Left rail (Joe, 17 Nov). Mouse: teal icons; hovering anywhere on an item
+   slides out a teal pill with its name, over the page (it never pushes the
+   page sideways), in about 150 ms, and back when the mouse leaves. Touch (no
+   hover): the teal icon with its short name underneath, always shown. The
+   page you're on stays highlighted. */
+.pw-ts .ts-rail{z-index:30}
+.pw-ts .navitem{position:relative; width:52px; height:48px; flex-shrink:0; cursor:pointer; color:var(--teal); outline:none; border-radius:12px}
+.pw-ts .navpill{position:absolute; left:0; top:0; height:48px; max-width:52px; display:flex; align-items:center; gap:12px; padding-left:16px; overflow:hidden; white-space:nowrap; border-radius:12px; transition:max-width .15s ease, background-color .15s ease, color .15s ease, box-shadow .15s ease}
+.pw-ts .navpill svg{width:20px; height:20px; flex-shrink:0}
+.pw-ts .navname{font-family:var(--font-inter),system-ui,sans-serif; font-size:14px; font-weight:600; padding-right:18px; opacity:0; transition:opacity .15s ease}
+.pw-ts .navshort{display:none}
+.pw-ts .navitem.active .navpill{background:rgba(63,183,201,.18); color:#5FD0E0; box-shadow:inset 0 0 0 1.5px rgba(63,183,201,.55)}
+.pw-ts .navitem.active::before{content:""; position:absolute; left:-11px; top:12px; bottom:12px; width:3px; border-radius:0 3px 3px 0; background:var(--teal)}
+@media (hover:hover) and (pointer:fine){
+  .pw-ts .navitem:hover .navpill, .pw-ts .navitem:focus-visible .navpill{max-width:260px; background:var(--action); color:#fff; box-shadow:0 10px 24px -10px rgba(0,0,0,.55); z-index:5}
+  .pw-ts .navitem.is-open .navpill{background:var(--action); color:#fff}
+  .pw-ts .navitem:hover .navname, .pw-ts .navitem:focus-visible .navname{opacity:1}
+}
+@media (hover:none), (pointer:coarse){
+  .pw-ts .navitem{width:64px; height:auto; min-height:52px; padding:6px 0 5px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px}
+  .pw-ts .navpill{position:static; height:auto; max-width:none; padding:0; overflow:visible; background:none; box-shadow:none}
+  .pw-ts .navname{display:none}
+  .pw-ts .navshort{display:block; font-size:10px; font-weight:600; line-height:1.1; color:#9fd8e2; text-align:center; white-space:nowrap}
+  .pw-ts .navitem.active{background:rgba(63,183,201,.18); box-shadow:inset 0 0 0 1.5px rgba(63,183,201,.55)}
+  .pw-ts .navitem.active .navpill{background:none; box-shadow:none}
+  .pw-ts .navitem.active::before{left:-5px}
+  .pw-ts .navitem.is-open{background:var(--action)}
+  .pw-ts .navitem.is-open, .pw-ts .navitem.is-open .navshort{color:#fff}
+}
+@media (max-width:720px) and (hover:none), (max-width:720px) and (pointer:coarse){
+  .pw-ts .navitem{width:56px}
+  .pw-ts .navshort{font-size:9px; letter-spacing:-.01em}
+  .pw-ts .navitem.active::before{left:-2px}
+}
 .pw-ts .ts-rail-spacer{flex:1}
 .pw-ts .ts-rail-avatar{width:40px; height:40px; border-radius:50%; background:var(--navy-2); border:1.5px solid var(--navy-line); color:#cdd6e0; display:grid; place-items:center; font-weight:600; font-size:13px; font-family:var(--font-space-grotesk),sans-serif; margin-top:6px}
 
