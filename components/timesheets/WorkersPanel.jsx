@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ChevronDown, ChevronLeft, ChevronRight, Download, FileSpreadsheet, Lock, RotateCcw, Users, UserPlus, UserMinus, Send, X,
+  ChevronDown, ChevronLeft, ChevronRight, Download, FileSpreadsheet, Lock, RotateCcw, Users, UserPlus, UserMinus, Send, X, Trash2,
 } from "lucide-react";
 import { StatusIcon } from "@/components/StatusMark";
 import { listEntries, listWeeks, listTeam, reopenWeek, entryErrorMessage } from "@/lib/timesheets/entries";
@@ -14,6 +14,7 @@ import { timesheetWorkbook, xlsxFileName, XLSX_TYPE } from "@/lib/timesheets/wor
 import { cleanInvite, INVITE_DAYS } from "@/lib/timesheets/invites";
 import { inviteWorker, resendInvite, cancelInvite, removeWorker } from "@/lib/timesheets/team";
 import { Alert, CardHead, Dialog, EmptyState, JobName } from "@/components/timesheets/parts";
+import DeleteDialog from "@/components/timesheets/DeleteDialog";
 
 // The boss's view of the team's weeks: each worker's week with totals per day
 // and per job, whether it's submitted, a way to reopen a submitted week, and
@@ -50,6 +51,7 @@ export default function WorkersPanel({ thisMonday, onTeamChange }) {
   const [inviteBusy, setInviteBusy] = useState(false);
   const [inviteError, setInviteError] = useState("");
   const [confirm, setConfirm] = useState(null);  // { kind: "cancel" | "remove", id } waiting for a yes
+  const [deleting, setDeleting] = useState(null); // { kind: "entry" | "worker", id, … } for the Delete dialog
   const seq = useRef(0);
 
   // Any week: Monday of the date picked, never past this week.
@@ -243,8 +245,10 @@ export default function WorkersPanel({ thisMonday, onTeamChange }) {
                   {/* Navy strip: name, submitted or not, the week's total. */}
                   <header className="ts-worker-head">
                     <div className="ts-worker-name">
-                      <h3>{person.name}{person.status === "removed" && <span className="ts-badge">Removed</span>}</h3>
-                      {person.status === "invited" ? (
+                      <h3>{person.name}</h3>
+                      {person.status === "removed" ? (
+                        <span className="ts-pill is-grey"><UserMinus strokeWidth={2.2} />Removed</span>
+                      ) : person.status === "invited" ? (
                         <span className="ts-pill is-amber"><StatusIcon tone="amber" size={15} />Joined, setting up</span>
                       ) : status === "submitted" ? (
                         <span className="ts-pill is-green"><Lock strokeWidth={2.4} />Submitted {stamp(week.submitted_at)}</span>
@@ -312,6 +316,11 @@ export default function WorkersPanel({ thisMonday, onTeamChange }) {
                         <UserMinus strokeWidth={2} /><span>Remove</span>
                       </button>
                     ))}
+                    {person.status === "removed" && (
+                      <button type="button" className="ts-btn ts-remove" onClick={() => setDeleting({ kind: "worker", id: person.id, label: person.name, name: person.name })}>
+                        <Trash2 strokeWidth={2} /><span>Delete record</span>
+                      </button>
+                    )}
                   </div>
 
                   {showing && (
@@ -328,6 +337,13 @@ export default function WorkersPanel({ thisMonday, onTeamChange }) {
                           <span role="cell" className="ts-mono">{hhmm(e.start_time)}–{hhmm(e.finish_time)}</span>
                           <span role="cell" className="ts-mono"><b>{formatHours(e.minutes)}</b></span>
                           <span role="cell" className="ts-entry-note">{e.description || ""}</span>
+                          <span role="cell" className="ts-entry-del">
+                            <button type="button" className="ts-btn ts-btn-icon is-small"
+                                    onClick={() => setDeleting({ kind: "entry", id: e.id, name: person.name, date: e.work_date })}
+                                    aria-label={`Delete ${person.name}'s entry on ${shortDate(e.work_date)}`} title="Delete this entry">
+                              <Trash2 strokeWidth={2} />
+                            </button>
+                          </span>
                         </div>
                       ))}
                     </div>
@@ -341,6 +357,17 @@ export default function WorkersPanel({ thisMonday, onTeamChange }) {
       </section>
 
       <ExportCard monday={monday} team={team} />
+
+      {deleting && (
+        <DeleteDialog kind={deleting.kind} id={deleting.id} label={deleting.label} name={deleting.name} date={deleting.date}
+                      onCancel={() => setDeleting(null)}
+                      onDeleted={() => {
+                        setDone(deleting.kind === "worker" ? `${deleting.name}'s record and hours are deleted.` : "Entry deleted.");
+                        setDeleting(null);
+                        load();
+                        onTeamChange?.();
+                      }} />
+      )}
 
       {inviting && (
         <Dialog title="Invite a worker" icon={<UserPlus size={19} strokeWidth={1.8} />} busy={inviteBusy} error={inviteError}

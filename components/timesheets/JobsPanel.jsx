@@ -1,15 +1,16 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { Archive, Briefcase, MapPin, Pencil, Plus, RotateCcw } from "lucide-react";
+import { Archive, Briefcase, ChevronDown, MapPin, Pencil, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { addJob, changeJob } from "@/lib/timesheets/lists";
 import { byJobNumber, byWorkTypeOrder, cleanJob, saveErrorMessage, LIMITS } from "@/lib/timesheets/rules";
-import { Alert, CardHead, Dialog, EmptyState, ShowArchived } from "@/components/timesheets/parts";
+import { Alert, CardHead, Dialog, EmptyState } from "@/components/timesheets/parts";
+import DeleteDialog from "@/components/timesheets/DeleteDialog";
 
 const BLANK = { job_number: "", job_name: "", site_address: "", default_work_type_id: "" };
 const DUPLICATE = "That job number is already in use, on this list or on an archived job.";
 
-export default function JobsPanel({ ownerId, jobs, types, onSaved }) {
+export default function JobsPanel({ ownerId, jobs, types, onSaved, onRemoved }) {
   const [form, setForm] = useState(null); // null: closed. With an id: editing.
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -17,9 +18,11 @@ export default function JobsPanel({ ownerId, jobs, types, onSaved }) {
   const [rowBusy, setRowBusy] = useState(null);
   const [rowError, setRowError] = useState("");
 
+  const [deleting, setDeleting] = useState(null); // the job the Delete dialog is for
+
   const typeName = useMemo(() => new Map(types.map((t) => [t.id, t])), [types]);
-  const archivedCount = jobs.filter((j) => j.status === "archived").length;
-  const shown = jobs.filter((j) => showArchived || j.status === "active").sort(byJobNumber);
+  const active = jobs.filter((j) => j.status === "active").sort(byJobNumber);
+  const archived = jobs.filter((j) => j.status === "archived").sort(byJobNumber);
 
   // Active work types, plus the one this job already has if it's been archived.
   const choices = types
@@ -64,59 +67,87 @@ export default function JobsPanel({ ownerId, jobs, types, onSaved }) {
     </button>
   );
 
+  // One job: number, name and site, default work type, then Edit,
+  // Archive / Restore and Delete.
+  const row = (j) => {
+    const type = typeName.get(j.default_work_type_id);
+    const isArchived = j.status === "archived";
+    return (
+      <div key={j.id} className={"ts-tr is-job" + (isArchived ? " is-archived" : "")} role="row">
+        <div role="cell"><span className="ts-code">{j.job_number}</span></div>
+        <div role="cell">
+          <div className="ts-name">{j.job_name}{isArchived && <span className="ts-badge">Archived</span>}</div>
+          {j.site_address && <div className="ts-sub"><MapPin strokeWidth={1.9} /><span>{j.site_address}</span></div>}
+        </div>
+        <div role="cell" className={type ? "ts-type" : "ts-type is-none"}>
+          {type ? <span className="ts-tag">{type.name}{type.active ? "" : " (archived)"}</span> : "No default"}
+        </div>
+        <div role="cell" className="ts-actions">
+          <button type="button" className="ts-btn" disabled={rowBusy === j.id} onClick={() => open({ ...j })}>
+            <Pencil strokeWidth={2} /><span>Edit</span>
+          </button>
+          <button type="button" className="ts-btn" disabled={rowBusy === j.id} onClick={() => setStatus(j, isArchived ? "active" : "archived")}>
+            {isArchived ? <RotateCcw strokeWidth={2} /> : <Archive strokeWidth={2} />}
+            <span>{isArchived ? "Restore" : "Archive"}</span>
+          </button>
+          <button type="button" className="ts-btn ts-btn-icon" disabled={rowBusy === j.id} onClick={() => setDeleting(j)}
+                  aria-label={`Delete job ${j.job_number}`} title="Delete">
+            <Trash2 strokeWidth={2} />
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <section className="ts-card">
       <CardHead title="Jobs" sub="What your team records their hours against.">
-        <ShowArchived count={archivedCount} checked={showArchived} onChange={setShowArchived} />
         {addButton}
       </CardHead>
 
       {rowError && <div className="ts-card-alert"><Alert>{rowError}</Alert></div>}
 
-      {shown.length === 0 ? (
-        jobs.length === 0 ? (
-          <EmptyState icon={<Briefcase strokeWidth={1.8} />} title="No jobs yet"
-            text="Add your first job so your team can record their hours against it.">
-            {addButton}
-          </EmptyState>
-        ) : (
-          <EmptyState icon={<Archive strokeWidth={1.8} />} title="All your jobs are archived"
-            text="Tick Show archived to see them, or add a new job." />
-        )
+      {jobs.length === 0 ? (
+        <EmptyState icon={<Briefcase strokeWidth={1.8} />} title="No jobs yet"
+          text="Add your first job so your team can record their hours against it.">
+          {addButton}
+        </EmptyState>
       ) : (
-        <div className="ts-table" role="table" aria-label="Jobs">
-          <div className="ts-tr is-head is-job" role="row">
-            <span role="columnheader">Job no.</span>
-            <span role="columnheader">Job and site</span>
-            <span role="columnheader">Default work type</span>
-            <span role="columnheader" className="ts-sr">Actions</span>
-          </div>
-          {shown.map((j) => {
-            const type = typeName.get(j.default_work_type_id);
-            const archived = j.status === "archived";
-            return (
-              <div key={j.id} className={"ts-tr is-job" + (archived ? " is-archived" : "")} role="row">
-                <div role="cell"><span className="ts-code">{j.job_number}</span></div>
-                <div role="cell">
-                  <div className="ts-name">{j.job_name}{archived && <span className="ts-badge">Archived</span>}</div>
-                  {j.site_address && <div className="ts-sub"><MapPin strokeWidth={1.9} /><span>{j.site_address}</span></div>}
-                </div>
-                <div role="cell" className={type ? "ts-type" : "ts-type is-none"}>
-                  {type ? <span className="ts-tag">{type.name}{type.active ? "" : " (archived)"}</span> : "No default"}
-                </div>
-                <div role="cell" className="ts-actions">
-                  <button type="button" className="ts-btn" disabled={rowBusy === j.id} onClick={() => open({ ...j })}>
-                    <Pencil strokeWidth={2} /><span>Edit</span>
-                  </button>
-                  <button type="button" className="ts-btn" disabled={rowBusy === j.id} onClick={() => setStatus(j, archived ? "active" : "archived")}>
-                    {archived ? <RotateCcw strokeWidth={2} /> : <Archive strokeWidth={2} />}
-                    <span>{archived ? "Restore" : "Archive"}</span>
-                  </button>
-                </div>
+        <>
+          {active.length > 0 ? (
+            <div className="ts-table" role="table" aria-label="Jobs">
+              <div className="ts-tr is-head is-job" role="row">
+                <span role="columnheader">Job no.</span>
+                <span role="columnheader">Job and site</span>
+                <span role="columnheader">Default work type</span>
+                <span role="columnheader" className="ts-sr">Actions</span>
               </div>
-            );
-          })}
-        </div>
+              {active.map(row)}
+            </div>
+          ) : (
+            <p className="ts-none-active">No active jobs. Add one, or restore one from the archived jobs below.</p>
+          )}
+
+          {/* Archived jobs: out of the way until opened. */}
+          {archived.length > 0 && (
+            <div className="ts-archived">
+              <button type="button" className="ts-archived-toggle" aria-expanded={showArchived}
+                      onClick={() => setShowArchived((s) => !s)}>
+                <ChevronDown strokeWidth={2.2} className={showArchived ? "is-up" : ""} />
+                <span>Archived jobs</span><i>{archived.length}</i>
+              </button>
+              {showArchived && (
+                <div className="ts-table" role="table" aria-label="Archived jobs">{archived.map(row)}</div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {deleting && (
+        <DeleteDialog kind="job" id={deleting.id} label={`${deleting.job_number} – ${deleting.job_name}`}
+                      onCancel={() => setDeleting(null)}
+                      onDeleted={() => { onRemoved?.(deleting.id); setDeleting(null); }} />
       )}
 
       <p className="ts-card-foot">Your team can only pick active jobs. Archived jobs stay on the timesheets they were used on, and renaming a job doesn&rsquo;t change hours already recorded.</p>
