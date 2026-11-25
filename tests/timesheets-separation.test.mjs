@@ -16,6 +16,15 @@ const INSTALL = "supabase/timesheets.sql";
 // Later batches put their Timesheets code in these folders.
 const WATCHED = [
   INSTALL,
+  "supabase/timesheets-week.sql",
+  "supabase/timesheets-week-test-workers.sql",
+  "supabase/timesheets-addon-test.sql",
+  "supabase/timesheets-invites.sql",
+  "supabase/timesheets-invites-undo.sql",
+  "supabase/timesheets-invites-test.sql",
+  "supabase/timesheets-delete.sql",
+  "supabase/timesheets-delete-undo.sql",
+  "supabase/timesheets-delete-test.sql",
   "app/time",
   "app/timesheets",
   "app/api/timesheets",
@@ -48,4 +57,22 @@ test("no Timesheets file mentions the planner", () => {
     mentionsPlanner(readFileSync(path.join(root, file), "utf8")),
   );
   assert.deepEqual(offenders, []);
+});
+
+// The Timesheets left rail links to the other sections through this one file,
+// which sits outside the folders above. It may only ever be links.
+const RAIL_LINKS = "components/AppRailLinks.jsx";
+
+test("the rail's shared links file holds links and nothing else", () => {
+  const source = readFileSync(path.join(root, RAIL_LINKS), "utf8");
+  const imports = [...source.matchAll(/^import\b.*?from\s+"([^"]+)"/gm)].map((m) => m[1]).sort();
+  assert.deepEqual(imports, ["next/link", "react"]);
+  assert.equal(/\brequire\s*\(|\bimport\s*\(/.test(source), false, "no loading code at run time");
+  assert.equal(/supabase|fetch\s*\(|localStorage/i.test(source), false, "no data access");
+});
+
+test("the Timesheets rail gets those links from the shared file", () => {
+  const source = readFileSync(path.join(root, "components/timesheets/TimesheetsHome.jsx"), "utf8");
+  assert.match(source, /import AppRailLinks from "@\/components\/AppRailLinks";/);
+  assert.match(source, /<AppRailLinks current="timesheets" \/>/);
 });
