@@ -86,9 +86,18 @@ test("the rail item only shows for accounts with the add-on", () => {
   assert.match(read("components/HomeScreen.jsx"), /timesheets\.status === "on" && <div className="navitem" title="Timesheets"/);
 });
 
-test("accounts without the add-on are sent back to the dashboard", () => {
+test("accounts without the add-on get a short add-on page and none of Timesheets", () => {
   const home = read("components/timesheets/TimesheetsHome.jsx");
-  assert.match(home, /access\.status === "off"\) onNotAllowed/);
+  // Nothing of Timesheets shows until the database says the add-on is on,
+  // and its data only loads then.
+  assert.match(home, /if \(access\.status !== "on"\) return <AddonOnly /);
+  assert.match(home, /useEffect\(\(\) => \{ if \(access\.status === "on"\) load\(\); \}/);
+  assert.match(home, /<h1>Timesheets is an add-on\.<\/h1>/);
+  assert.match(home, /Contact <a href="mailto:admin@plotwire\.uk">admin@plotwire\.uk<\/a> to find out more\./);
+  // The add-on page asks for no data at all.
+  const page = home.slice(home.indexOf("function AddonOnly"), home.indexOf("const CSS"));
+  assert.ok(page.length > 0);
+  assert.doesNotMatch(page, /\blist[A-Z]\w*\(|getContext|supabase|\.rpc\(/);
 });
 
 test("jobs and work types are never deleted from the app", () => {

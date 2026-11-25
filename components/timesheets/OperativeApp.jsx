@@ -1,13 +1,16 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
+import { LogOut } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { StatusIcon } from "@/components/StatusMark";
+import { getContext, getPickLists } from "@/lib/timesheets/entries";
+import WorkerWeek, { WORKER_CSS } from "@/components/timesheets/WorkerWeek";
 
-const ACTION_BTN = "bg-[var(--action)] hover:bg-[var(--action-hover)] text-[color:var(--action-ink)]";
-
-// What a signed-in operative sees, at every address (components/AppShell.jsx).
-// The timesheet form comes in a later batch.
+// What a signed-in worker sees, at every address (components/AppShell.jsx):
+// their own week, and nothing else in Plotwire. The database decides what
+// they can read and change (supabase/timesheets.sql, timesheets-week.sql).
 //
 // Sign-out here ends the Supabase session and nothing else, on purpose. The
 // owner's sign-out also clears what is kept on the device, and an owner may
@@ -15,41 +18,85 @@ const ACTION_BTN = "bg-[var(--action)] hover:bg-[var(--action-hover)] text-[colo
 export default function OperativeApp({ user }) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
+  const [ctx, setCtx] = useState(null);
+  const [lists, setLists] = useState(null);
+  const [failed, setFailed] = useState(false);
 
   // Set after each move to this address, which otherwise leaves the tab blank.
   const pathname = usePathname();
   useEffect(() => { document.title = "Timesheets — Plotwire"; }, [pathname]);
 
+  const load = useCallback(async () => {
+    setFailed(false);
+    try {
+      const c = await getContext();
+      setCtx(c);
+      if (c?.role === "operative" && c.addon && c.status === "active") setLists(await getPickLists());
+    } catch {
+      setFailed(true);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
   const signOut = async () => {
-    const failed = "Couldn't sign out. Check your connection and try again.";
+    const failedText = "Couldn't sign out. Check your connection and try again.";
     setBusy(true);
     setNote("");
     try {
       const { error } = (await supabase?.auth.signOut()) || {};
-      if (error) setNote(failed);
+      if (error) setNote(failedText);
     } catch {
-      setNote(failed);
+      setNote(failedText);
     } finally {
       setBusy(false);
     }
   };
 
+  const ready = ctx?.role === "operative" && ctx.addon && ctx.status === "active" && lists;
+  // Not ready to record hours, and why, in plain words.
+  const blocked = failed ? null
+    : !ctx ? null
+    : ctx.role !== "operative" ? "Your login isn't on a team yet. Ask your boss to add you."
+    : !ctx.addon ? `Timesheets is switched off${ctx.company ? ` for ${ctx.company}` : ""}. Ask your boss.`
+    : ctx.status !== "active" ? "Your account isn't set up yet. Ask your boss to finish setting you up."
+    : null;
+
   return (
-    <div className="w-full min-h-screen flex items-center justify-center px-4 text-white"
-      style={{ background: "linear-gradient(150deg,#1A2530 0%,#233241 55%,#2C4150 100%)" }}>
-      <main className="max-w-[420px] w-full text-center">
-        <h1 className="text-[22px] leading-tight font-semibold tracking-[-0.01em]">Timesheets</h1>
-        <p className="mt-3 text-[14px] leading-relaxed text-[#aab8c6]">
-          You&rsquo;re signed in as an operative. Your timesheet will appear here soon.
-        </p>
-        {user?.email && <p className="mt-2 text-[13px] text-[#aab8c6] break-words">{user.email}</p>}
-        <div className="mt-6 flex justify-center">
-          <button type="button" onClick={signOut} disabled={busy}
-            className={`h-11 px-5 rounded-[11px] text-[14px] font-semibold transition-colors disabled:opacity-60 ${ACTION_BTN}`}>
-            {busy ? "Signing out…" : "Sign out"}
-          </button>
+    <div className="pw-tsw">
+      <style>{WORKER_CSS}</style>
+      <header className="tsw-top">
+        <span className="tsw-brandmark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M13 2 4 13h6l-1 9 9-11h-6l1-9z" fill="#08313a"/></svg>
+        </span>
+        <div className="tsw-who">
+          <div className="tsw-name">{ctx?.name || "Timesheets"}</div>
+          <div className="tsw-company">{ctx?.company || user?.email || ""}</div>
         </div>
-        {note && <p role="alert" className="mt-3 text-[13px] text-[#aab8c6]">{note}</p>}
+        <button type="button" className="tsw-icon-btn" onClick={signOut} disabled={busy} aria-label="Sign out" title="Sign out">
+          <LogOut strokeWidth={2} />
+        </button>
+      </header>
+      {note && <p role="alert" className="tsw-signout-note">{note}</p>}
+
+      <main className="tsw-main">
+        {failed ? (
+          <div className="tsw-card tsw-message" role="alert">
+            <StatusIcon tone="red" size={28} />
+            <h2>Couldn&rsquo;t load your timesheet</h2>
+            <p>Check your signal and try again.</p>
+            <button type="button" className="tsw-btn is-wide" onClick={load}>Try again</button>
+          </div>
+        ) : blocked ? (
+          <div className="tsw-card tsw-message">
+            <StatusIcon tone="amber" size={28} />
+            <h2>Not ready yet</h2>
+            <p>{blocked}</p>
+          </div>
+        ) : ready ? (
+          <WorkerWeek ctx={ctx} lists={lists} />
+        ) : (
+          <div className="tsw-card tsw-loading" aria-label="Loading">Loading your week…</div>
+        )}
       </main>
     </div>
   );
