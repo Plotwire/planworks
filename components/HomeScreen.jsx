@@ -10,7 +10,6 @@ import { pendingSaves, subscribeOutbox, forgetSaves, syncNow } from "@/lib/devic
 import { forgetSymbolCount } from "@/lib/device/symbolCounts";
 import { warmUpOffline } from "@/lib/device/warmUp";
 import OfflinePanel, { HelpMenu } from "@/components/OfflinePanel";
-import ConfirmEmailBanner from "@/components/ConfirmEmailBanner";
 import { useApp } from "@/components/AppShell";
 import { LEGAL_LINKS } from "@/lib/legal";
 import { TryPill } from "@/components/TryMode";
@@ -127,7 +126,7 @@ function PlanThumb({ project }) {
 }
 
 export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSketch, onPlanner, onBusiness, onSymbols, onPresets, onTimesheets, theme, onToggleTheme, user, onSignOut }) {
-  const { manageBilling, subscription, access = {}, emailConfirm } = useApp();
+  const { manageBilling, subscription, access = {} } = useApp();
   // The Timesheets rail item shows only for accounts with the add-on.
   const timesheets = useTimesheetsAddon(user?.id);
   // Try: 25 symbols across all saved drawings. Lapsed: read-only, so nothing
@@ -464,10 +463,6 @@ export default function HomeScreen({ onOpenProject, onNewProject, onImport, onSk
           </header>
 
           <div className="scroll">
-            {/* Email not confirmed yet (branch signup-straight-in): a calm
-                note, with Resend and Change email; hidden for the session
-                with its cross. */}
-            <ConfirmEmailBanner confirm={emailConfirm} />
             {readOnly && !paymentPending && paymentOverdue && (
               <div className="access-banner is-lapsed" role="status">
                 <div>

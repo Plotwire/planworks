@@ -89,13 +89,8 @@ test("the link page says what happened, and never whose address it was", () => {
 
 // ---- the app and server, checked in their source (they need a browser / Supabase)
 
-test("checkout refuses an unconfirmed address before any Stripe call", () => {
-  const route = read("app/api/billing/checkout/route.js");
-  const check = route.indexOf("isEmailConfirmed(getSupabaseAdmin(), user)");
-  assert.ok(check > 0, "the checkout route checks the email");
-  assert.ok(check < route.indexOf("beginCheckout(user"), "before checkout starts");
-  assert.match(route, /confirmEmail: true \}, \{ status: 403 \}/);
-});
+// The check before paying, the dashboard note and the sending were taken out
+// by remove-email-check: tests/remove-email-check.test.mjs.
 
 test("the confirmation link works signed out, in any browser", () => {
   assert.match(read("components/AppShell.jsx"), /"\/confirm-email",/);
@@ -111,20 +106,6 @@ test("sign-up keeps its security check, and goes straight in when Supabase gives
   const signUp = login.slice(login.indexOf("const signUp = async"), login.indexOf("const sendReset = async"));
   assert.match(signUp, /\.\.\.captcha,/);
   assert.match(signUp, /if \(data\?\.user && !data\?\.session\)/);
-});
-
-test("the dashboard note and the Subscribe screen use the server's answer", () => {
-  assert.match(read("components/HomeScreen.jsx"), /<ConfirmEmailBanner confirm=\{emailConfirm\} \/>/);
-  const shell = read("components/AppShell.jsx");
-  assert.match(shell, /const emailConfirm = useEmailConfirm\(ownerSession\);/);
-  assert.match(shell, /emailConfirm=\{emailConfirm\}/);
-  const pay = read("components/Paywall.jsx");
-  assert.match(pay, /needsConfirm && !overdue \?/);
-  assert.match(pay, /e\?\.payload\?\.confirmEmail/);
-  // The note can be hidden for the session, and isn't a pop-up.
-  const note = read("components/ConfirmEmailBanner.jsx");
-  assert.match(note, /className="access-banner cb-note"/);
-  assert.match(read("lib/useEmailConfirm.js"), /sessionStorage\.setItem/);
 });
 
 test("the database files: server only, a self-check, an undo, no real addresses", () => {
