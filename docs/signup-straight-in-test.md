@@ -1,5 +1,11 @@
 # Test plan: Sign-up straight in, email confirmed before paying
 
+> **Update, 27 Nov 2026 (branch remove-email-check):** the confirm-before-
+> paying part has been taken out. Subscribe now goes straight to Stripe,
+> there's no dashboard note, and Plotwire sends no confirmation emails. The
+> tables and the confirm page stay in place, unused. Steps:
+> `docs/remove-email-check-test.md`. The switch-over below still stands.
+
 Branch **signup-straight-in**, on the **stripe-plotwire-test** link. Use
 **test accounts only**. About 30 minutes for Part A (laptop and phone).
 Part B is after the merge and the switch-over.
